@@ -203,10 +203,13 @@ const mousePresets = {
   'select-left': {buttons:{left:'select', right:'rotate', middle:'pan'}, wheel:'zoom'},
   default: {passThrough:true}
 };
+function defaultSelectionOptions(){
+  return {color:'#fdd835', opacity:0.45, radius:0.1, scale:0.22, thickness:0.32, linewidth:0.85};
+}
 const state = {
   baseProtein:'cartoon', ligand:'stick',
   styleRules:[], hiddenRules:[], interactionRules:[],
-  selectionSel:null, selectionRepresentation:'stick', selectionOptions:{color:'#fdd835'}, selectionMode:'residue', rangeAnchor:null,
+  selectionSel:null, selectionRepresentation:'stick', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
   mousePreset:'select-left',
   regions:{}, locked:false
 };
@@ -624,7 +627,7 @@ function setSelection(selector, options){
 function clearSelection(){
   state.selectionSel = null;
   state.rangeAnchor = null;
-  state.selectionOptions = {color:'#fdd835'};
+  state.selectionOptions = defaultSelectionOptions();
   applyStylesFull(true);
   setStatus('선택 표시를 지웠습니다.');
 }
@@ -873,7 +876,7 @@ function resetDynamicState(options){
   state.interactionRules = [];
   state.selectionSel = null;
   state.rangeAnchor = null;
-  state.selectionOptions = {color:'#fdd835'};
+  state.selectionOptions = defaultSelectionOptions();
   uiInteractionIds = {hbond:null, salt:null, pi:null};
   syncInteractionButtons();
   if(!opts.preserveRegions) state.regions = {};
