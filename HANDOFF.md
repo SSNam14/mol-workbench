@@ -101,13 +101,15 @@ curl -sI http://127.0.0.1:8704/ | head
 - Command-line/natural-language UI was removed.
 - Main control surface is now the structured browser API `window.molAgent`.
 - Named regions are never auto-created. CDR is not inferred. Regions only exist after explicit `molAgent.setRegions(...)`.
-- Mouse controls are selectable with the topbar `mouse` preset control or `molAgent.setMousePreset(...)`.
+- Mouse controls are selectable from the topbar `Settings` panel or `molAgent.setMousePreset(...)` / `molAgent.setMouseActions(...)`.
 - Current app default preset is `select-left`:
   - left click: selection only
   - left drag: screen-space range box selection
   - Shift + click / Shift + drag: add to current selection
   - right drag: rotate
+  - wheel-button drag: move/pan
   - right-drag zoom is disabled
+- Custom mouse button actions support `select`, `rotate`, `pan`, `zoom`, and `none`; wheel supports `zoom` and `none`.
 - In `select-left`, drag range selection respects selection mode:
   - `atom`: atoms inside the box
   - `residue`/`range`: whole residues touched by the box

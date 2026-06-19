@@ -33,6 +33,7 @@ molAgent.clearSelection();
 // Mouse presets can be changed immediately.
 molAgent.setMousePreset('select-left');
 molAgent.setMousePreset('default');
+molAgent.setMouseActions({buttons:{left:'select', right:'rotate', middle:'pan'}, wheel:'zoom'});
 ```
 
 `molAgent.run({...})` remains available for structured compatibility objects only. String commands are disabled by design.
@@ -54,9 +55,9 @@ Supported representation names are `cartoon`, `line`, `stick`, `sphere`, `tube`,
 
 ## Mouse and keyboard behavior
 
-Mouse behavior is selectable from the `mouse` preset control or `molAgent.setMousePreset(...)`.
+Mouse behavior is selectable from the topbar `Settings` panel or through `molAgent.setMousePreset(...)` and `molAgent.setMouseActions(...)`.
 
-`select-left` is the default for this app: left click selects according to the selection mode, left drag creates a screen-space range box, right drag rotates the camera, and wheel up zooms in. Hold Shift while clicking or drag-selecting to add the new selection to the current selection. Drag range selection respects the selection mode: `atom` selects atoms in the box, `residue`/`range` selects whole residues touched by the box, `chain` selects whole chains touched by the box, and `model` selects all atoms. `default` passes mouse and wheel events through to 3Dmol.js default controls. Empty clicks do not clear the selection. Press `z` to focus the current selection and `Esc` to clear it.
+`select-left` is the default for this app: left click selects according to the selection mode, left drag creates a screen-space range box, right drag rotates the camera, wheel-button drag moves the model, and wheel up zooms in. Hold Shift while clicking or drag-selecting to add the new selection to the current selection. Drag range selection respects the selection mode: `atom` selects atoms in the box, `residue`/`range` selects whole residues touched by the box, `chain` selects whole chains touched by the box, and `model` selects all atoms. `default` passes mouse and wheel events through to 3Dmol.js default controls. Custom button actions support `select`, `rotate`, `pan`, `zoom`, and `none`; wheel supports `zoom` and `none`. Empty clicks do not clear the selection. Press `z` to focus the current selection and `Esc` to clear it.
 
 ## Notes
 

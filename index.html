@@ -32,6 +32,18 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
 .panel h2{font-size:13px;line-height:1;margin:0 0 10px;color:#bfdbfe;letter-spacing:.02em}.panel h2 .hint{font-weight:400;color:var(--muted)}
 .kv{display:grid;grid-template-columns:92px 1fr;gap:6px 8px;font-size:12.5px;line-height:1.35}.kv div:nth-child(odd){color:var(--muted)}.kv div:nth-child(even){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kv.fixed{min-height:148px;align-content:start}
 .controls{display:grid;gap:8px}.row{display:flex;gap:8px;align-items:center;justify-content:space-between}.row label{font-size:12px;color:var(--muted);white-space:nowrap}.row .fill{flex:1}.small{font-size:12px;color:var(--muted);line-height:1.45}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.badge{display:inline-flex;align-items:center;min-height:20px;padding:2px 7px;border:1px solid var(--line2);border-radius:999px;background:#08111f;color:#bfdbfe;font-size:11px}.legend{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.sw{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px}.apiStatus{min-height:22px;white-space:normal;color:#a7f3d0}
+.settingsOverlay{position:fixed;inset:0;z-index:40;display:grid;place-items:start end;padding:64px 14px 14px;background:rgba(0,0,0,.42)}
+.settingsOverlay[hidden]{display:none}
+.settingsPanel{width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 78px);overflow:auto;border:1px solid var(--line2);border-radius:12px;background:#0a0f17;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.settingsHeader{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:1;background:#0a0f17;border-bottom:1px solid var(--line);padding:12px}
+.settingsHeader h2{margin:0;font-size:15px;line-height:1;color:#bfdbfe}
+.settingsBody{display:grid;gap:12px;padding:12px}
+.settingsSection{display:grid;gap:10px}
+.settingsSection h3{margin:0;color:#bfdbfe;font-size:13px;line-height:1}
+.settingsGrid{display:grid;gap:8px}
+.settingRow{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center}
+.settingRow label{font-size:12px;color:var(--muted)}
+.settingRow select{width:100%;min-width:0}
 @media(max-width:980px){body{overflow:auto}.topbar{flex-wrap:wrap}.shell{grid-template-columns:1fr;grid-template-rows:64vh auto}.side{border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
@@ -55,13 +67,9 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
     <button id="focusSelection" class="smallbtn">초점(z)</button>
     <button id="clearSelection" class="smallbtn">clear</button>
   </div>
-  <div class="group">
-    <span class="label">mouse</span>
-    <select id="mousePreset"><option value="select-left">select/range L · rotate R</option><option value="default">3Dmol default</option></select>
-  </div>
   <div class="group"><button id="toggleHBond">H-bond</button><button id="toggleSalt">Salt</button><button id="togglePi">π</button></div>
   <div class="spacer"></div>
-  <div class="group"><button id="zoomBtn">맞춤</button><button id="saveView">시점 저장</button><button id="restoreView">복원</button><button id="lockView">고정</button></div>
+  <div class="group"><button id="settingsBtn">Settings</button><button id="zoomBtn">맞춤</button><button id="saveView">시점 저장</button><button id="restoreView">복원</button><button id="lockView">고정</button></div>
 </div>
 <div class="shell">
   <main id="viewer"><div id="fpsOverlay" class="fpsOverlay">FPS --</div><div id="dragSelectBox" class="dragSelectBox"></div><div id="status" class="status">초기화 중</div></main>
@@ -104,6 +112,26 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
     </div>
   </aside>
 </div>
+<div id="settingsOverlay" class="settingsOverlay" hidden>
+  <section class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="settingsHeader">
+      <h2 id="settingsTitle">Settings</h2>
+      <button id="settingsClose" class="smallbtn">Close</button>
+    </div>
+    <div class="settingsBody">
+      <section class="settingsSection" data-settings-section="mouse">
+        <h3>Mouse actions</h3>
+        <div class="settingsGrid">
+          <div class="settingRow"><label for="mouseProfile">Preset</label><select id="mouseProfile"><option value="select-left">Selection</option><option value="default">3Dmol default</option><option value="custom">Custom</option></select></div>
+          <div class="settingRow"><label for="mouseLeftAction">Left</label><select id="mouseLeftAction"></select></div>
+          <div class="settingRow"><label for="mouseRightAction">Right</label><select id="mouseRightAction"></select></div>
+          <div class="settingRow"><label for="mouseMiddleAction">Wheel button</label><select id="mouseMiddleAction"></select></div>
+          <div class="settingRow"><label for="mouseWheelAction">Wheel</label><select id="mouseWheelAction"></select></div>
+        </div>
+      </section>
+    </div>
+  </section>
+</div>
 <script>
 /*
 Agent API examples. Named regions are never auto-created; register them explicitly.
@@ -131,10 +159,11 @@ const ui = {
   proteinStyle:$('proteinStyle'), ligandStyle:$('ligandStyle'),
   selectionMode:$('selectionMode'), selectionRepresentation:$('selectionRepresentation'),
   applySelection:$('applySelection'), focusSelection:$('focusSelection'), clearSelection:$('clearSelection'),
-  mousePreset:$('mousePreset'),
   toggleHBond:$('toggleHBond'), toggleSalt:$('toggleSalt'), togglePi:$('togglePi'),
-  zoomBtn:$('zoomBtn'), saveView:$('saveView'), restoreView:$('restoreView'), lockView:$('lockView'),
-  clipNear:$('clipNear'), clipFar:$('clipFar'), nearVal:$('nearVal'), farVal:$('farVal'), resetClip:$('resetClip')
+  settingsBtn:$('settingsBtn'), zoomBtn:$('zoomBtn'), saveView:$('saveView'), restoreView:$('restoreView'), lockView:$('lockView'),
+  clipNear:$('clipNear'), clipFar:$('clipFar'), nearVal:$('nearVal'), farVal:$('farVal'), resetClip:$('resetClip'),
+  settingsOverlay:$('settingsOverlay'), settingsClose:$('settingsClose'), mouseProfile:$('mouseProfile'),
+  mouseLeftAction:$('mouseLeftAction'), mouseRightAction:$('mouseRightAction'), mouseMiddleAction:$('mouseMiddleAction'), mouseWheelAction:$('mouseWheelAction')
 };
 const hoverFields = {};
 document.querySelectorAll('[data-hover]').forEach(el => { hoverFields[el.dataset.hover] = el; });
@@ -167,6 +196,13 @@ const elemColors = {
   H:'#FFFFFF', C:'#B0BEC5', N:'#64B5F6', O:'#EF5350', S:'#FDD835', P:'#FFB74D', F:'#81C784', CL:'#81C784', BR:'#A1887F', I:'#9575CD',
   FE:'#FF8A65', ZN:'#90A4AE', MG:'#A5D6A7', CA:'#B0BEC5', NA:'#90CAF9', K:'#CE93D8', MN:'#CE93D8', CU:'#4DD0E1', CO:'#F48FB1', NI:'#80CBC4'
 };
+const mouseActionLabels = {select:'Select', rotate:'Rotate', pan:'Move', zoom:'Zoom', none:'None'};
+const wheelActionLabels = {zoom:'Zoom', none:'None'};
+const mouseActionSelects = {left:ui.mouseLeftAction, right:ui.mouseRightAction, middle:ui.mouseMiddleAction};
+const mousePresets = {
+  'select-left': {buttons:{left:'select', right:'rotate', middle:'pan'}, wheel:'zoom'},
+  default: {passThrough:true}
+};
 const state = {
   baseProtein:'cartoon', ligand:'stick',
   styleRules:[], hiddenRules:[], interactionRules:[],
@@ -174,25 +210,92 @@ const state = {
   mousePreset:'select-left',
   regions:{}, locked:false
 };
+const settings = {
+  mouse:{buttons:Object.assign({}, mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}
+};
 let resetMouseDrag = function(){};
 function setStatus(text){ statusEl.textContent = text || ''; }
 function setApiStatus(text, isError){ apiStatusEl.textContent = text || 'window.molAgent ready'; apiStatusEl.style.color = isError ? '#fecaca' : '#a7f3d0'; }
 function nextId(prefix){ return `${prefix}-${idSeq++}`; }
 function normText(v){ return String(v == null ? '' : v).trim(); }
 function normUpper(v){ return normText(v).toUpperCase(); }
+function cloneMouseSettings(){
+  return {buttons:Object.assign({}, settings.mouse.buttons), wheel:settings.mouse.wheel};
+}
+function normalizeMouseAction(action){
+  const key = normText(action).toLowerCase();
+  return mouseActionLabels[key] ? key : 'none';
+}
+function normalizeWheelAction(action){
+  const key = normText(action).toLowerCase();
+  return wheelActionLabels[key] ? key : 'none';
+}
 function mousePresetLabel(preset){
-  return preset === 'default' ? '3Dmol default mouse' : 'left click selects · left drag range-selects · right drag rotates';
+  if(preset === 'default') return '3Dmol default mouse';
+  const b = settings.mouse.buttons;
+  return `left ${mouseActionLabels[b.left]} · right ${mouseActionLabels[b.right]} · wheel button ${mouseActionLabels[b.middle]} · wheel ${wheelActionLabels[settings.mouse.wheel]}`;
+}
+function isMousePassThrough(){
+  return !!(mousePresets[state.mousePreset] && mousePresets[state.mousePreset].passThrough);
 }
 function isCustomMousePreset(){
-  return state.mousePreset === 'select-left';
+  return !isMousePassThrough();
 }
 function setMousePreset(preset){
-  const next = preset === 'default' ? 'default' : 'select-left';
+  const next = preset === 'default' ? 'default' : (preset === 'custom' ? 'custom' : 'select-left');
   state.mousePreset = next;
+  if(next === 'select-left'){
+    settings.mouse.buttons = Object.assign({}, mousePresets['select-left'].buttons);
+    settings.mouse.wheel = mousePresets['select-left'].wheel;
+  }
   resetMouseDrag();
-  ui.mousePreset.value = next;
+  syncSettingsUi();
   setStatus(`mouse preset: ${mousePresetLabel(next)}`);
   return next;
+}
+function setMouseActions(actions){
+  const next = actions || {};
+  const buttons = next.buttons || next;
+  ['left','right','middle'].forEach(button => {
+    if(buttons[button] != null) settings.mouse.buttons[button] = normalizeMouseAction(buttons[button]);
+  });
+  if(next.wheel != null || next.wheelAction != null) settings.mouse.wheel = normalizeWheelAction(next.wheel != null ? next.wheel : next.wheelAction);
+  state.mousePreset = 'custom';
+  resetMouseDrag();
+  syncSettingsUi();
+  setStatus(`mouse actions: ${mousePresetLabel('custom')}`);
+  return cloneMouseSettings();
+}
+function fillActionSelect(select, labels){
+  select.innerHTML = Object.keys(labels).map(key => `<option value="${key}">${labels[key]}</option>`).join('');
+}
+function initSettingsUi(){
+  Object.keys(mouseActionSelects).forEach(button => fillActionSelect(mouseActionSelects[button], mouseActionLabels));
+  fillActionSelect(ui.mouseWheelAction, wheelActionLabels);
+  syncSettingsUi();
+}
+function syncSettingsUi(){
+  const profile = state.mousePreset === 'default' || state.mousePreset === 'select-left' ? state.mousePreset : 'custom';
+  ui.mouseProfile.value = profile;
+  Object.keys(mouseActionSelects).forEach(button => {
+    mouseActionSelects[button].value = settings.mouse.buttons[button];
+    mouseActionSelects[button].disabled = isMousePassThrough();
+  });
+  ui.mouseWheelAction.value = settings.mouse.wheel;
+  ui.mouseWheelAction.disabled = isMousePassThrough();
+}
+function openSettings(){
+  syncSettingsUi();
+  ui.settingsOverlay.hidden = false;
+  ui.settingsBtn.classList.add('active');
+}
+function closeSettings(){
+  ui.settingsOverlay.hidden = true;
+  ui.settingsBtn.classList.remove('active');
+}
+function toggleSettings(){
+  if(ui.settingsOverlay.hidden) openSettings();
+  else closeSettings();
 }
 function atomElem(atom){ return normUpper(atom.elem || atom.element || atom.atom || '').replace(/[^A-Z]/g,''); }
 function chainColor(chain){
@@ -890,46 +993,83 @@ function selectAtPoint(point, sourceEvent){
   viewer.mouseButton = 1;
   viewer.handleClickSelection(xy.x, xy.y, sourceEvent);
 }
+function mouseButtonKey(e){
+  if(e.button === 0) return 'left';
+  if(e.button === 1) return 'middle';
+  if(e.button === 2) return 'right';
+  return null;
+}
+function dragRatios(point, drag){
+  const xRatio = viewer && viewer.renderer && viewer.renderer.getXRatio ? viewer.renderer.getXRatio() : 1;
+  const yRatio = viewer && viewer.renderer && viewer.renderer.getYRatio ? viewer.renderer.getYRatio() : 1;
+  return {
+    x:(point.x - drag.startX) / viewer.WIDTH * xRatio,
+    y:(point.y - drag.startY) / viewer.HEIGHT * yRatio,
+    xRatio,
+    yRatio
+  };
+}
 function bindCustomMouseActions(){
-  const drag = {mode:null, startX:0, startY:0, moved:false, startQuaternion:null};
+  const drag = {mode:null, button:null, startX:0, startY:0, moved:false, startQuaternion:null, startModelPos:null, startZoom:0};
   const clickTolerance = 3;
   function resetDrag(){
     drag.mode = null;
+    drag.button = null;
     drag.moved = false;
     drag.startQuaternion = null;
+    drag.startModelPos = null;
+    drag.startZoom = 0;
     hideDragSelectBox();
   }
   resetMouseDrag = resetDrag;
   function beginDrag(e){
-    if(e.button !== 0 && e.button !== 2) return;
+    const button = mouseButtonKey(e);
+    if(!button) return;
     if(!isCustomMousePreset()) return;
+    const action = settings.mouse.buttons[button] || 'none';
     stopMouseEvent(e);
     if(state.locked || !viewer) return;
     const point = eventPagePoint(e);
     if(!point) return;
-    drag.mode = e.button === 2 ? 'rotate' : 'select';
+    drag.mode = action;
+    drag.button = button;
     drag.startX = point.x;
     drag.startY = point.y;
     drag.moved = false;
     drag.startQuaternion = viewer.rotationGroup && viewer.rotationGroup.quaternion ? viewer.rotationGroup.quaternion.clone() : null;
+    drag.startModelPos = viewer.modelGroup && viewer.modelGroup.position ? viewer.modelGroup.position.clone() : null;
+    drag.startZoom = viewer.rotationGroup && viewer.rotationGroup.position ? viewer.rotationGroup.position.z : 0;
     hideDragSelectBox();
   }
   function rotateFromDrag(point){
     if(!viewer || !drag.startQuaternion || !viewer.rotationGroup || !viewer.dq) return;
-    const xRatio = viewer.renderer && viewer.renderer.getXRatio ? viewer.renderer.getXRatio() : 1;
-    const yRatio = viewer.renderer && viewer.renderer.getYRatio ? viewer.renderer.getYRatio() : 1;
-    const dx = (point.x - drag.startX) / viewer.WIDTH * xRatio;
-    const dy = (point.y - drag.startY) / viewer.HEIGHT * yRatio;
-    const distance = Math.hypot(dx, dy);
+    const delta = dragRatios(point, drag);
+    const distance = Math.hypot(delta.x, delta.y);
     if(!distance) return;
     const factor = Math.sin(distance * Math.PI) / distance;
     viewer.dq.x = Math.cos(distance * Math.PI);
     viewer.dq.y = 0;
-    viewer.dq.z = factor * dx;
-    viewer.dq.w = -factor * dy;
+    viewer.dq.z = factor * delta.x;
+    viewer.dq.w = -factor * delta.y;
     viewer.rotationGroup.quaternion.set(1, 0, 0, 0);
     viewer.rotationGroup.quaternion.multiply(viewer.dq);
     viewer.rotationGroup.quaternion.multiply(drag.startQuaternion);
+    showViewer();
+  }
+  function panFromDrag(point){
+    if(!viewer || !drag.startModelPos || !viewer.modelGroup || !viewer.screenOffsetToModel) return;
+    const delta = dragRatios(point, drag);
+    const offset = viewer.screenOffsetToModel(delta.xRatio * (point.x - drag.startX), delta.yRatio * (point.y - drag.startY));
+    viewer.modelGroup.position.addVectors(drag.startModelPos, offset);
+    showViewer();
+  }
+  function zoomFromDrag(point){
+    if(!viewer || !viewer.rotationGroup) return;
+    const delta = dragRatios(point, drag);
+    let scale = 0.85 * (viewer.CAMERA_Z - viewer.rotationGroup.position.z);
+    if(scale < 80) scale = 80;
+    viewer.rotationGroup.position.z = drag.startZoom + delta.y * scale;
+    if(viewer.adjustZoomToLimits) viewer.rotationGroup.position.z = viewer.adjustZoomToLimits(viewer.rotationGroup.position.z);
     showViewer();
   }
   function continueDrag(e){
@@ -941,11 +1081,14 @@ function bindCustomMouseActions(){
     if(!point) return;
     const moved = Math.hypot(point.x - drag.startX, point.y - drag.startY) > clickTolerance;
     drag.moved = drag.moved || moved;
+    if(drag.mode === 'none') return;
     if(drag.mode === 'select' && drag.moved){
       updateDragSelectBox({x:drag.startX, y:drag.startY}, point);
       return;
     }
     if(drag.mode === 'rotate') rotateFromDrag(point);
+    else if(drag.mode === 'pan') panFromDrag(point);
+    else if(drag.mode === 'zoom') zoomFromDrag(point);
   }
   function endDrag(e){
     if(!drag.mode) return;
@@ -974,9 +1117,9 @@ function bindInvertedWheelZoom(){
   viewerEl.addEventListener('wheel', function(e){
     if(!viewer || state.locked) return;
     if(!isCustomMousePreset()) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
+    if(settings.mouse.wheel === 'none'){ stopMouseEvent(e); return; }
+    if(settings.mouse.wheel !== 'zoom') return;
+    stopMouseEvent(e);
     const delta = e.deltaY || -e.wheelDelta || 1;
     const amount = Math.max(1, Math.min(4, Math.abs(delta) / 100));
     const step = Math.pow(1.12, amount);
@@ -1035,13 +1178,15 @@ window.molAgent = {
   clearInteractions,
   setMousePreset,
   getMousePreset:function(){ return state.mousePreset; },
+  setMouseActions,
+  getMouseActions:cloneMouseSettings,
   setSelection,
   clearSelection,
   focus,
   setRegions,
   getRegions:function(){ return cloneSelector(state.regions); },
   selectAtoms:function(selector){ return filterAtoms(selector).map(a => Object.assign({}, a)); },
-  getState:function(){ return {file:currentName, atoms:atoms.length, mousePreset:state.mousePreset, selection:cloneSelector(state.selectionSel), styleRules:cloneSelector(state.styleRules), hiddenRules:cloneSelector(state.hiddenRules), interactionRules:cloneSelector(state.interactionRules), regions:cloneSelector(state.regions)}; },
+  getState:function(){ return {file:currentName, atoms:atoms.length, mousePreset:state.mousePreset, mouseActions:cloneMouseSettings(), selection:cloneSelector(state.selectionSel), styleRules:cloneSelector(state.styleRules), hiddenRules:cloneSelector(state.hiddenRules), interactionRules:cloneSelector(state.interactionRules), regions:cloneSelector(state.regions)}; },
   loadUrl,
   loadData,
   run:runCompat,
@@ -1055,7 +1200,18 @@ ui.proteinStyle.onchange = function(){ state.baseProtein = ui.proteinStyle.value
 ui.ligandStyle.onchange = function(){ state.ligand = ui.ligandStyle.value; applyStylesFull(true); };
 ui.selectionMode.onchange = function(){ state.selectionMode = ui.selectionMode.value; state.rangeAnchor = null; updateSelectionSummary(); setStatus(`selection mode: ${state.selectionMode}`); };
 ui.selectionRepresentation.onchange = function(){ state.selectionRepresentation = ui.selectionRepresentation.value; applyStylesFull(true); };
-ui.mousePreset.onchange = function(){ setMousePreset(ui.mousePreset.value); };
+ui.settingsBtn.onclick = toggleSettings;
+ui.settingsClose.onclick = closeSettings;
+ui.settingsOverlay.addEventListener('mousedown', function(e){ if(e.target === ui.settingsOverlay) closeSettings(); });
+ui.mouseProfile.onchange = function(){ setMousePreset(ui.mouseProfile.value); };
+Object.keys(mouseActionSelects).forEach(button => {
+  mouseActionSelects[button].onchange = function(){
+    setMouseActions({buttons:{left:ui.mouseLeftAction.value, right:ui.mouseRightAction.value, middle:ui.mouseMiddleAction.value}, wheel:ui.mouseWheelAction.value});
+  };
+});
+ui.mouseWheelAction.onchange = function(){
+  setMouseActions({buttons:{left:ui.mouseLeftAction.value, right:ui.mouseRightAction.value, middle:ui.mouseMiddleAction.value}, wheel:ui.mouseWheelAction.value});
+};
 ui.applySelection.onclick = function(){ if(state.selectionSel) applyStylesFull(true); else setStatus('적용할 선택이 없습니다.'); };
 ui.focusSelection.onclick = function(){ focus(state.selectionSel); };
 ui.clearSelection.onclick = clearSelection;
@@ -1070,11 +1226,17 @@ ui.clipNear.oninput = applyClip;
 ui.clipFar.oninput = applyClip;
 ui.resetClip.onclick = function(){ ui.clipNear.value = -100; ui.clipFar.value = 100; applyClip(); };
 window.addEventListener('keydown', function(e){
+  if(e.key === 'Escape' && !ui.settingsOverlay.hidden){
+    closeSettings();
+    e.preventDefault();
+    return;
+  }
   const tag = document.activeElement && document.activeElement.tagName;
   if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if(e.key === 'z' || e.key === 'Z') focus(state.selectionSel);
   if(e.key === 'Escape') clearSelection();
 });
+initSettingsUi();
 initViewer();
 startFpsOverlay();
 loadUrl('data/8UCD.pdb', 'pdb', '8UCD').catch(err => { setStatus(`로드 실패: ${err.message}`); setApiStatus(err.message, true); });
