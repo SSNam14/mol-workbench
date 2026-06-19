@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molecular Viewer</title>
+<script src="assets/3Dmol-min.js"></script>
+<style>
+:root{
+  --bg:#05070a;--panel:#0d1117;--panel2:#111827;--line:#263241;--line2:#334155;
+  --text:#dbeafe;--muted:#93a4b8;--blue:#60a5fa;--green:#34d399;--yellow:#fdd835;
+  --danger:#f87171;--shadow:rgba(0,0,0,.36)
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,sans-serif}
+body{display:grid;grid-template-rows:auto 1fr;overflow:hidden}
+button,select,input{font:inherit}
+.topbar{display:flex;align-items:center;gap:8px;min-height:52px;padding:8px 10px;background:linear-gradient(180deg,#111827,#0b111a);border-bottom:1px solid var(--line);box-shadow:0 8px 24px var(--shadow);z-index:20}
+.group{display:flex;align-items:center;gap:6px;padding-right:8px;border-right:1px solid var(--line)}
+.group:last-child{border-right:0}.spacer{flex:1;min-width:10px}.label{font-size:12px;color:var(--muted);white-space:nowrap}
+button,.filelabel,select{height:32px;border:1px solid var(--line2);background:#0a0f17;color:var(--text);border-radius:8px;padding:0 10px;display:inline-flex;align-items:center;gap:6px}
+button,.filelabel{cursor:pointer;user-select:none}button:hover,.filelabel:hover,select:hover{border-color:var(--blue);color:#fff}button.active{border-color:var(--blue);background:#0b2b4d;color:#fff}button.danger.active{border-color:var(--danger);background:#3b0d12}button.smallbtn{height:28px;padding:0 8px;font-size:12px}
+select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input[type=range]{width:128px;accent-color:var(--blue)}
+.shell{display:grid;grid-template-columns:minmax(0,1fr) 332px;min-height:0;background:var(--bg)}
+#viewer{position:relative;min-width:0;min-height:0;background:#000;overflow:hidden}
+#viewer.locked::after{content:"";position:absolute;inset:0;z-index:10;background:rgba(0,0,0,.02);cursor:not-allowed}
+.fpsOverlay{position:absolute;left:12px;top:12px;z-index:11;min-width:74px;border:1px solid rgba(96,165,250,.35);background:rgba(5,7,10,.78);backdrop-filter:blur(6px);border-radius:8px;padding:5px 8px;color:#dbeafe;font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;pointer-events:none}
+.status{position:absolute;left:12px;right:12px;bottom:12px;z-index:9;min-height:34px;border:1px solid rgba(96,165,250,.35);background:rgba(5,7,10,.88);backdrop-filter:blur(6px);border-radius:10px;padding:8px 10px;color:#dbeafe;font-size:12px;line-height:1.35;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side{min-width:0;background:var(--panel);border-left:1px solid var(--line);padding:12px;overflow:auto}
+.panel{border:1px solid var(--line);border-radius:12px;background:#0a0f17;padding:10px;margin-bottom:12px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
+.panel h2{font-size:13px;line-height:1;margin:0 0 10px;color:#bfdbfe;letter-spacing:.02em}.panel h2 .hint{font-weight:400;color:var(--muted)}
+.kv{display:grid;grid-template-columns:92px 1fr;gap:6px 8px;font-size:12.5px;line-height:1.35}.kv div:nth-child(odd){color:var(--muted)}.kv div:nth-child(even){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kv.fixed{min-height:148px;align-content:start}
+.controls{display:grid;gap:8px}.row{display:flex;gap:8px;align-items:center;justify-content:space-between}.row label{font-size:12px;color:var(--muted);white-space:nowrap}.row .fill{flex:1}.small{font-size:12px;color:var(--muted);line-height:1.45}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.badge{display:inline-flex;align-items:center;min-height:20px;padding:2px 7px;border:1px solid var(--line2);border-radius:999px;background:#08111f;color:#bfdbfe;font-size:11px}.legend{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.sw{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px}.apiStatus{min-height:22px;white-space:normal;color:#a7f3d0}
+@media(max-width:980px){body{overflow:auto}.topbar{flex-wrap:wrap}.shell{grid-template-columns:1fr;grid-template-rows:64vh auto}.side{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="group">
+    <button id="loadRef">8UCD</button>
+    <button id="loadPred">예측</button>
+    <label class="filelabel">열기<input id="fileInput" type="file" accept=".pdb,.ent,.sdf,.mol,.mol2,.xyz,.cif"></label>
+  </div>
+  <div class="group">
+    <span class="label">base</span>
+    <select id="proteinStyle" class="narrow"><option value="cartoon">cartoon</option><option value="line">line</option><option value="stick">stick</option><option value="sphere">sphere</option><option value="tube">tube</option></select>
+    <select id="ligandStyle" class="narrow"><option value="stick">ligand stick</option><option value="line">ligand line</option><option value="sphere">ligand sphere</option></select>
+  </div>
+  <div class="group">
+    <span class="label">select</span>
+    <select id="selectionMode"><option value="residue">residue</option><option value="atom">atom</option><option value="range">range</option><option value="chain">chain</option><option value="model">model</option><option value="off">off</option></select>
+    <select id="selectionRepresentation"><option value="stick">stick</option><option value="line">line</option><option value="tube">tube+line</option><option value="sphere">sphere</option><option value="off">style off</option></select>
+    <button id="applySelection" class="smallbtn">선택 적용</button>
+    <button id="focusSelection" class="smallbtn">초점(z)</button>
+    <button id="clearSelection" class="smallbtn">clear</button>
+  </div>
+  <div class="group"><button id="toggleHBond">H-bond</button><button id="toggleSalt">Salt</button><button id="togglePi">π</button></div>
+  <div class="spacer"></div>
+  <div class="group"><button id="zoomBtn">맞춤</button><button id="saveView">시점 저장</button><button id="restoreView">복원</button><button id="lockView">고정</button></div>
+</div>
+<div class="shell">
+  <main id="viewer"><div id="fpsOverlay" class="fpsOverlay">FPS --</div><div id="status" class="status">초기화 중</div></main>
+  <aside class="side">
+    <div class="panel">
+      <h2>Hover <span class="hint">fixed panel</span></h2>
+      <div class="kv fixed" id="hoverInfo">
+        <div>상태</div><div data-hover="state">대기</div>
+        <div>분류</div><div data-hover="kind">-</div>
+        <div>체인</div><div data-hover="chain">-</div>
+        <div>잔기</div><div data-hover="residue">-</div>
+        <div>원자</div><div data-hover="atom">-</div>
+        <div>serial</div><div data-hover="serial">-</div>
+        <div>좌표</div><div data-hover="coord">-</div>
+      </div>
+    </div>
+    <div class="panel controls">
+      <h2>Selection display</h2>
+      <div class="row"><span class="small">현재 선택</span><span class="badge mono" id="selectionSummary">none</span></div>
+      <div class="small">빈 곳 클릭은 선택을 지우지 않습니다. 명시적으로 clear를 눌러야 선택 표시가 사라집니다.</div>
+    </div>
+    <div class="panel controls">
+      <h2>Clip plane</h2>
+      <div class="row"><label>near</label><input id="clipNear" class="fill" type="range" min="-200" max="200" step="1" value="-100"><span id="nearVal" class="small mono">-100</span></div>
+      <div class="row"><label>far</label><input id="clipFar" class="fill" type="range" min="-200" max="200" step="1" value="100"><span id="farVal" class="small mono">100</span></div>
+      <button id="resetClip">clip 초기화</button>
+    </div>
+    <div class="panel">
+      <h2>Interactions</h2>
+      <div class="legend"><span><span class="sw" style="background:#00bcd4"></span>H-bond</span><span><span class="sw" style="background:#ffb000"></span>salt</span><span><span class="sw" style="background:#9b59ff"></span>π</span></div>
+      <div class="small" id="interactionStats">표시 없음</div>
+    </div>
+    <div class="panel">
+      <h2>Structure</h2>
+      <div class="kv" id="modelStats"><div>파일</div><div>-</div><div>원자</div><div>-</div><div>잔기</div><div>-</div><div>체인</div><div>-</div><div>리간드</div><div>-</div></div>
+    </div>
+    <div class="panel">
+      <h2>Agent API</h2>
+      <div class="small apiStatus" id="apiStatus">window.molAgent 준비 중</div>
+    </div>
+  </aside>
+</div>
+<script>
+/*
+Agent API examples. Named regions are never auto-created; register them explicitly.
+
+molAgent.style({chain:'H', resi:'30-35'}, 'tube', {color:'#fdd835', persist:true});
+molAgent.style({chain:'A'}, 'hide');
+molAgent.showInteractions({kind:'hbond', between:[{chain:'A'}, {not:{chain:'A'}}], limit:2000});
+molAgent.setSelection({chain:'H', resi:'30-35'}, {representation:'stick', color:'#fdd835'});
+molAgent.clearSelection();
+molAgent.focus({chain:'H', resi:'30-35'});
+molAgent.setRegions({REGION_NAME:[{chain:'H', resi:'30-35'}]});
+molAgent.style({region:'REGION_NAME'}, 'tube', {color:'#fdd835'});
+*/
+(function(){
+'use strict';
+const $ = id => document.getElementById(id);
+const viewerEl = $('viewer');
+const fpsEl = $('fpsOverlay');
+const statusEl = $('status');
+const apiStatusEl = $('apiStatus');
+const selectionSummaryEl = $('selectionSummary');
+const ui = {
+  loadRef:$('loadRef'), loadPred:$('loadPred'), fileInput:$('fileInput'),
+  proteinStyle:$('proteinStyle'), ligandStyle:$('ligandStyle'),
+  selectionMode:$('selectionMode'), selectionRepresentation:$('selectionRepresentation'),
+  applySelection:$('applySelection'), focusSelection:$('focusSelection'), clearSelection:$('clearSelection'),
+  toggleHBond:$('toggleHBond'), toggleSalt:$('toggleSalt'), togglePi:$('togglePi'),
+  zoomBtn:$('zoomBtn'), saveView:$('saveView'), restoreView:$('restoreView'), lockView:$('lockView'),
+  clipNear:$('clipNear'), clipFar:$('clipFar'), nearVal:$('nearVal'), farVal:$('farVal'), resetClip:$('resetClip')
+};
+const hoverFields = {};
+document.querySelectorAll('[data-hover]').forEach(el => { hoverFields[el.dataset.hover] = el; });
+let viewer = null;
+let model = null;
+let atoms = [];
+let currentName = '';
+let savedView = null;
+let idSeq = 1;
+let hoverClearTimer = null;
+let uiInteractionIds = {hbond:null, salt:null, pi:null};
+const waterNames = new Set(['HOH','WAT','DOD','H2O']);
+const ionNames = new Set(['NA','CL','K','MG','CA','ZN','MN','FE','CU','CO','NI','CD','HG','SR','BA','CS','RB','LI','AL']);
+const backboneAtoms = new Set(['N','CA','C','O','OXT']);
+const aromaticDefs = {
+  PHE:['CG','CD1','CD2','CE1','CE2','CZ'],
+  TYR:['CG','CD1','CD2','CE1','CE2','CZ'],
+  TRP:['CD2','CE2','CE3','CZ2','CZ3','CH2'],
+  HIS:['CG','ND1','CD2','CE1','NE2'],
+  HIE:['CG','ND1','CD2','CE1','NE2'],
+  HID:['CG','ND1','CD2','CE1','NE2'],
+  HIP:['CG','ND1','CD2','CE1','NE2']
+};
+const chainPalette = [
+  '#4FC3F7','#FFB74D','#81C784','#BA68C8','#E57373','#4DB6AC','#FFD54F','#7986CB','#F06292','#A1887F','#90A4AE','#AED581','#9575CD','#4DD0E1','#FF8A65','#64B5F6','#DCE775','#F48FB1','#80CBC4','#B0BEC5','#CE93D8','#FFF176','#A5D6A7','#EF9A9A','#9FA8DA','#FFCC80'
+];
+const chainColors = {};
+'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
+const elemColors = {
+  H:'#FFFFFF', C:'#B0BEC5', N:'#64B5F6', O:'#EF5350', S:'#FDD835', P:'#FFB74D', F:'#81C784', CL:'#81C784', BR:'#A1887F', I:'#9575CD',
+  FE:'#FF8A65', ZN:'#90A4AE', MG:'#A5D6A7', CA:'#B0BEC5', NA:'#90CAF9', K:'#CE93D8', MN:'#CE93D8', CU:'#4DD0E1', CO:'#F48FB1', NI:'#80CBC4'
+};
+const state = {
+  baseProtein:'cartoon', ligand:'stick',
+  styleRules:[], hiddenRules:[], interactionRules:[],
+  selectionSel:null, selectionRepresentation:'stick', selectionOptions:{color:'#fdd835'}, selectionMode:'residue', rangeAnchor:null,
+  regions:{}, locked:false
+};
+function setStatus(text){ statusEl.textContent = text || ''; }
+function setApiStatus(text, isError){ apiStatusEl.textContent = text || 'window.molAgent ready'; apiStatusEl.style.color = isError ? '#fecaca' : '#a7f3d0'; }
+function nextId(prefix){ return `${prefix}-${idSeq++}`; }
+function normText(v){ return String(v == null ? '' : v).trim(); }
+function normUpper(v){ return normText(v).toUpperCase(); }
+function atomElem(atom){ return normUpper(atom.elem || atom.element || atom.atom || '').replace(/[^A-Z]/g,''); }
+function chainColor(chain){
+  const c = normText(chain || '?');
+  const up = c.toUpperCase();
+  if(chainColors[up]) return chainColors[up];
+  let hash = 0;
+  for(let i=0;i<c.length;i++) hash = ((hash * 31) + c.charCodeAt(i)) >>> 0;
+  return `hsl(${hash % 360},72%,64%)`;
+}
+function elementColor(atom){ return elemColors[atomElem(atom)] || '#D1D5DB'; }
+function isProtein(atom){ return !atom.hetflag && !waterNames.has(normUpper(atom.resn)); }
+function isLigand(atom){ return !!atom.hetflag && !waterNames.has(normUpper(atom.resn)) && !ionNames.has(normUpper(atom.resn)); }
+function isPolar(atom){ return ['N','O','S'].includes(atomElem(atom)); }
+function isPositive(atom){ return atomElem(atom) === 'N' && /^(NZ|NH1|NH2|NE|NE2|ND1)$/i.test(atom.atom || ''); }
+function isNegative(atom){ return atomElem(atom) === 'O' && /^(OD1|OD2|OE1|OE2|OXT|O1|O2|O3|O4)$/i.test(atom.atom || ''); }
+function point(atom){ return {x:atom.x, y:atom.y, z:atom.z}; }
+function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z; return dx*dx + dy*dy + dz*dz; }
+function distance(a,b){ return Math.sqrt(dist2(a,b)); }
+function chainAwareAtomColor(atom){
+  if(!atom) return '#D1D5DB';
+  const elem = atomElem(atom);
+  if(isProtein(atom) && (!elem || elem === 'C')) return chainColor(atom.chain);
+  return elementColor(atom);
+}
+function chainRibbonColor(atom){ return chainColor(atom && atom.chain); }
+function colorFnFromOptions(options, ribbon){
+  const forced = options && options.color;
+  if(forced) return function(){ return forced; };
+  return ribbon ? chainRibbonColor : chainAwareAtomColor;
+}
+function styleSpec(representation, options){
+  const rep = normText(representation || 'cartoon').toLowerCase();
+  const opts = options || {};
+  const atomColor = colorFnFromOptions(opts, false);
+  const ribbonColor = colorFnFromOptions(opts, true);
+  const opacity = opts.opacity == null ? 1 : Number(opts.opacity);
+  if(rep === 'hide' || rep === 'hidden' || rep === 'off') return {};
+  if(rep === 'line') return {line:{linewidth:opts.linewidth || 1.15, colorfunc:atomColor, opacity}};
+  if(rep === 'stick') return {stick:{radius:opts.radius || 0.17, colorfunc:atomColor, opacity}};
+  if(rep === 'sphere') return {sphere:{scale:opts.scale || 0.3, colorfunc:atomColor, opacity}};
+  if(rep === 'tube') return {
+    cartoon:{style:'trace', ribbon:true, thickness:opts.thickness || 0.45, colorfunc:ribbonColor, opacity},
+    line:{linewidth:opts.linewidth || 0.65, colorfunc:atomColor, opacity}
+  };
+  return {cartoon:{colorfunc:ribbonColor, opacity}};
+}
+function ligandStyleSpec(){
+  const rep = state.ligand;
+  if(rep === 'line') return {line:{linewidth:1.25, colorfunc:elementColor}};
+  if(rep === 'sphere') return {sphere:{scale:0.36, colorfunc:elementColor}};
+  return {stick:{radius:0.18, colorfunc:elementColor}};
+}
+function cloneSelector(sel){
+  if(sel == null) return {};
+  if(typeof sel !== 'object') return sel;
+  if(Array.isArray(sel)) return sel.map(cloneSelector);
+  const out = {};
+  Object.keys(sel).forEach(k => { out[k] = typeof sel[k] === 'function' ? sel[k] : cloneSelector(sel[k]); });
+  return out;
+}
+function normalizeSelectorInput(selector){
+  if(selector == null) return {};
+  if(typeof selector === 'string') return {region:selector};
+  return cloneSelector(selector);
+}
+function resolveSelector(selector){
+  const sel = normalizeSelectorInput(selector);
+  if(sel == null || typeof sel !== 'object' || Array.isArray(sel)) return {};
+  if(sel.region){
+    const name = normUpper(sel.region);
+    const defs = state.regions[name];
+    if(!defs || !defs.length) throw new Error(`Unknown named region: ${name}`);
+    return defs.length === 1 ? resolveSelector(defs[0]) : {or:defs.map(resolveSelector)};
+  }
+  const out = {};
+  Object.keys(sel).forEach(k => {
+    const v = sel[k];
+    if(v === undefined || v === null || k === 'region') return;
+    if(k === 'not') out.not = resolveSelector(v);
+    else if(k === 'or') out.or = (Array.isArray(v) ? v : [v]).map(resolveSelector);
+    else if(k === 'and') out.and = (Array.isArray(v) ? v : [v]).map(resolveSelector);
+    else out[k] = cloneSelector(v);
+  });
+  return out;
+}
+function isComplexSelector(sel){
+  if(!sel || typeof sel !== 'object') return false;
+  if(sel.region || sel.not || sel.or || sel.and || sel.predicate) return true;
+  return false;
+}
+function asArray(v){ return Array.isArray(v) ? v : [v]; }
+function matchScalar(atomVal, want, key){
+  if(want == null) return true;
+  if(Array.isArray(want)) return want.some(x => matchScalar(atomVal, x, key));
+  if(key === 'resi' && typeof want === 'string' && /^-?\d+\s*-\s*-?\d+$/.test(want.trim())){
+    const parts = want.split('-').map(x => Number(x.trim()));
+    const lo = Math.min(parts[0], parts[1]);
+    const hi = Math.max(parts[0], parts[1]);
+    const val = Number(atomVal);
+    return Number.isFinite(val) && val >= lo && val <= hi;
+  }
+  if(key === 'serial' && typeof want === 'string' && /^\d+\s*-\s*\d+$/.test(want.trim())){
+    const parts = want.split('-').map(x => Number(x.trim()));
+    const lo = Math.min(parts[0], parts[1]);
+    const hi = Math.max(parts[0], parts[1]);
+    const val = Number(atomVal);
+    return Number.isFinite(val) && val >= lo && val <= hi;
+  }
+  if(typeof want === 'boolean') return Boolean(atomVal) === want;
+  if(typeof atomVal === 'number' || typeof want === 'number') return Number(atomVal) === Number(want);
+  return normUpper(atomVal) === normUpper(want);
+}
+function matchesResolvedSelector(atom, resolved){
+  const sel = resolved || {};
+  if(sel.not && matchesResolvedSelector(atom, sel.not)) return false;
+  if(sel.or && !sel.or.some(part => matchesResolvedSelector(atom, part))) return false;
+  if(sel.and && !sel.and.every(part => matchesResolvedSelector(atom, part))) return false;
+  if(sel.predicate && typeof sel.predicate === 'function' && !sel.predicate(atom)) return false;
+  const special = new Set(['not','or','and','predicate']);
+  for(const key of Object.keys(sel)){
+    if(special.has(key)) continue;
+    let atomVal = atom[key];
+    if(key === 'elem') atomVal = atomElem(atom);
+    if(!matchScalar(atomVal, sel[key], key)) return false;
+  }
+  return true;
+}
+function serialsForSelector(selector, options){
+  const resolved = resolveSelector(selector);
+  const sidechainOnly = options && options.sidechainOnly;
+  const serials = [];
+  for(const atom of atoms){
+    if(!matchesResolvedSelector(atom, resolved)) continue;
+    if(sidechainOnly && (!isProtein(atom) || backboneAtoms.has(atom.atom))) continue;
+    if(atom.serial != null) serials.push(atom.serial);
+  }
+  return serials;
+}
+function styleSelection(selector, options){
+  const resolved = resolveSelector(selector);
+  if((options && options.sidechainOnly) || isComplexSelector(resolved)) return {serial:serialsForSelector(selector, options)};
+  return resolved;
+}
+function countAtoms(selector){
+  try{
+    const resolved = resolveSelector(selector);
+    let n = 0;
+    for(const atom of atoms) if(matchesResolvedSelector(atom, resolved)) n++;
+    return n;
+  }catch(err){ return 0; }
+}
+function selectorLabel(selector){
+  if(!selector) return 'none';
+  try{
+    const resolved = resolveSelector(selector);
+    const label = JSON.stringify(resolved);
+    return label.length > 70 ? label.slice(0,67) + '...' : label;
+  }catch(err){ return 'invalid selector'; }
+}
+function applyStylesFull(render){
+  if(!viewer || !model) return;
+  viewer.setStyle({}, {});
+  viewer.setStyle({hetflag:false}, styleSpec(state.baseProtein, {}));
+  viewer.setStyle({hetflag:true}, ligandStyleSpec());
+  viewer.setStyle({resn:Array.from(waterNames)}, {});
+  for(const rule of state.styleRules){
+    if(rule.disabled) continue;
+    try{ viewer.addStyle(styleSelection(rule.selector, rule.options), styleSpec(rule.representation, rule.options)); }
+    catch(err){ console.warn('style rule skipped', rule, err); }
+  }
+  for(const rule of state.hiddenRules){
+    if(rule.disabled) continue;
+    try{ viewer.setStyle(styleSelection(rule.selector, rule.options), {}); }
+    catch(err){ console.warn('hide rule skipped', rule, err); }
+  }
+  if(state.selectionSel && state.selectionRepresentation !== 'off'){
+    try{ viewer.addStyle(styleSelection(state.selectionSel, state.selectionOptions), styleSpec(state.selectionRepresentation, state.selectionOptions)); }
+    catch(err){ console.warn('selection style skipped', err); }
+  }
+  redrawInteractions(false);
+  updateSelectionSummary();
+  if(render !== false) viewer.render();
+}
+function updateHoverInfo(atom){
+  if(!hoverFields.state) return;
+  if(!atom){
+    hoverFields.state.textContent = '대기';
+    hoverFields.kind.textContent = '-';
+    hoverFields.chain.textContent = '-';
+    hoverFields.residue.textContent = '-';
+    hoverFields.atom.textContent = '-';
+    hoverFields.serial.textContent = '-';
+    hoverFields.coord.textContent = '-';
+    return;
+  }
+  hoverFields.state.textContent = 'hover';
+  hoverFields.kind.textContent = isLigand(atom) ? 'small molecule' : (atom.hetflag ? 'hetero' : 'protein');
+  hoverFields.chain.textContent = atom.chain || '-';
+  hoverFields.residue.textContent = `${atom.resn || '-'} ${atom.resi == null ? '-' : atom.resi}`;
+  hoverFields.atom.textContent = `${atom.atom || '-'} (${atomElem(atom) || '-'})`;
+  hoverFields.serial.textContent = atom.serial == null ? '-' : String(atom.serial);
+  hoverFields.coord.textContent = `${Number(atom.x).toFixed(2)}, ${Number(atom.y).toFixed(2)}, ${Number(atom.z).toFixed(2)}`;
+}
+function setupAtomEvents(){
+  if(!viewer) return;
+  viewer.setClickable({}, true, function(atom){ handleAtomClick(atom); });
+  viewer.setHoverable({}, true, function(atom){
+    if(hoverClearTimer){ clearTimeout(hoverClearTimer); hoverClearTimer = null; }
+    updateHoverInfo(atom);
+  }, function(){
+    if(hoverClearTimer) clearTimeout(hoverClearTimer);
+    hoverClearTimer = setTimeout(function(){ updateHoverInfo(null); hoverClearTimer = null; }, 60);
+  });
+}
+function handleAtomClick(atom){
+  if(!atom || state.selectionMode === 'off') return;
+  if(state.selectionMode === 'range'){
+    handleRangeSelection(atom);
+    return;
+  }
+  const sel = selectionFromAtom(atom, state.selectionMode);
+  setSelection(sel, {source:'click'});
+}
+function selectionFromAtom(atom, mode){
+  if(mode === 'atom') return {serial:atom.serial};
+  if(mode === 'chain') return {chain:atom.chain};
+  if(mode === 'model') return {};
+  return {chain:atom.chain, resi:atom.resi, resn:atom.resn};
+}
+function handleRangeSelection(atom){
+  const resi = Number(atom.resi);
+  const chain = atom.chain || '';
+  if(!Number.isFinite(resi)){
+    setSelection({chain:atom.chain, resi:atom.resi, resn:atom.resn}, {source:'click'});
+    setStatus('숫자 residue 번호가 아니라 단일 residue를 선택했습니다.');
+    return;
+  }
+  if(!state.rangeAnchor || state.rangeAnchor.chain !== chain){
+    state.rangeAnchor = {chain, resi, resn:atom.resn};
+    setStatus(`범위 시작: chain ${chain || '-'} residue ${resi}. 같은 chain의 끝 residue를 클릭하세요.`);
+    updateSelectionSummary();
+    return;
+  }
+  const a = state.rangeAnchor.resi;
+  const lo = Math.min(a, resi);
+  const hi = Math.max(a, resi);
+  state.rangeAnchor = null;
+  setSelection({chain, resi:`${lo}-${hi}`}, {source:'range'});
+}
+function updateSelectionSummary(){
+  if(!state.selectionSel){
+    const anchor = state.rangeAnchor ? `range start ${state.rangeAnchor.chain || '-'}:${state.rangeAnchor.resi}` : 'none';
+    selectionSummaryEl.textContent = anchor;
+    return;
+  }
+  const n = countAtoms(state.selectionSel);
+  selectionSummaryEl.textContent = `${n.toLocaleString()} atoms · ${state.selectionRepresentation} · ${selectorLabel(state.selectionSel)}`;
+}
+function setSelection(selector, options){
+  const opts = options || {};
+  state.selectionSel = normalizeSelectorInput(selector);
+  state.rangeAnchor = null;
+  if(opts.representation) state.selectionRepresentation = normText(opts.representation).toLowerCase();
+  if(opts.color) state.selectionOptions.color = opts.color;
+  if(opts.options && typeof opts.options === 'object') state.selectionOptions = Object.assign({}, state.selectionOptions, opts.options);
+  ui.selectionRepresentation.value = state.selectionRepresentation;
+  applyStylesFull(true);
+  if(opts.focus) focus(state.selectionSel);
+  setStatus(`선택 표시: ${countAtoms(state.selectionSel).toLocaleString()} atoms`);
+  return cloneSelector(state.selectionSel);
+}
+function clearSelection(){
+  state.selectionSel = null;
+  state.rangeAnchor = null;
+  state.selectionOptions = {color:'#fdd835'};
+  applyStylesFull(true);
+  setStatus('선택 표시를 지웠습니다.');
+}
+function focus(selector){
+  if(!viewer || !model) return false;
+  const sel = selector ? styleSelection(selector, {}) : (state.selectionSel ? styleSelection(state.selectionSel, {}) : null);
+  if(!sel){ setStatus('초점 대상 선택이 없습니다.'); return false; }
+  viewer.zoomTo(sel, 450);
+  viewer.render();
+  return true;
+}
+function addStyleRule(selector, representation, options){
+  if(!model) throw new Error('No model loaded');
+  const opts = Object.assign({persist:true}, options || {});
+  const rep = normText(representation || 'cartoon').toLowerCase();
+  const id = opts.id || nextId(rep === 'hide' ? 'hide' : 'style');
+  if(opts.replace === true){ state.styleRules = []; state.hiddenRules = []; }
+  if(rep === 'hide' || rep === 'hidden'){
+    const rule = {id, selector:normalizeSelectorInput(selector), representation:'hide', options:opts};
+    if(opts.persist !== false) state.hiddenRules.push(rule);
+    else viewer.setStyle(styleSelection(selector, opts), {});
+  }else{
+    const rule = {id, selector:normalizeSelectorInput(selector), representation:rep, options:opts};
+    if(opts.persist !== false) state.styleRules.push(rule);
+    else viewer.addStyle(styleSelection(selector, opts), styleSpec(rep, opts));
+  }
+  if(opts.persist === false) viewer.render();
+  else applyStylesFull(true);
+  setApiStatus(`${rep} applied: ${id}`);
+  return id;
+}
+function clearStyle(id){
+  if(!id){ state.styleRules = []; state.hiddenRules = []; }
+  else{
+    state.styleRules = state.styleRules.filter(r => r.id !== id);
+    state.hiddenRules = state.hiddenRules.filter(r => r.id !== id);
+  }
+  applyStylesFull(true);
+}
+function setRegions(regions){
+  const out = {};
+  Object.keys(regions || {}).forEach(name => {
+    const key = normUpper(name);
+    const defs = Array.isArray(regions[name]) ? regions[name] : [regions[name]];
+    out[key] = defs.map(normalizeSelectorInput);
+  });
+  state.regions = out;
+  setApiStatus(`regions registered: ${Object.keys(out).join(', ') || 'none'}`);
+  return Object.keys(out);
+}
+function filterAtoms(selector){
+  const resolved = resolveSelector(selector || {});
+  return atoms.filter(atom => matchesResolvedSelector(atom, resolved));
+}
+function gridKey(atom, cell){ return `${Math.floor(atom.x/cell)},${Math.floor(atom.y/cell)},${Math.floor(atom.z/cell)}`; }
+function nearbyPairs(listA, listB, minD, maxD, limit, predicate){
+  const cell = maxD;
+  const grid = new Map();
+  for(const b of listB){
+    const key = gridKey(b, cell);
+    if(!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(b);
+  }
+  const out = [];
+  const seen = new Set();
+  const min2 = minD * minD;
+  const max2 = maxD * maxD;
+  for(const a of listA){
+    const ix = Math.floor(a.x/cell), iy = Math.floor(a.y/cell), iz = Math.floor(a.z/cell);
+    for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) for(let dz=-1; dz<=1; dz++){
+      const bucket = grid.get(`${ix+dx},${iy+dy},${iz+dz}`);
+      if(!bucket) continue;
+      for(const b of bucket){
+        if(a === b || a.serial === b.serial) continue;
+        const s1 = Number(a.serial) || 0, s2 = Number(b.serial) || 0;
+        const pairKey = s1 < s2 ? `${s1}:${s2}` : `${s2}:${s1}`;
+        if(seen.has(pairKey)) continue;
+        if(predicate && !predicate(a,b)) continue;
+        const d2 = dist2(a,b);
+        if(d2 < min2 || d2 > max2) continue;
+        seen.add(pairKey);
+        out.push([a,b,Math.sqrt(d2)]);
+        if(out.length >= limit) return out;
+      }
+    }
+  }
+  return out;
+}
+function pairPredicate(rule){
+  return function(a,b){
+    if(rule.interchain !== false && (a.chain || '') === (b.chain || '')) return false;
+    return true;
+  };
+}
+function detectHBonds(rule){
+  const between = rule.between || [{},{}];
+  const aSel = between[0] || {};
+  const bSel = between[1] || {};
+  const listA = filterAtoms(aSel).filter(a => isPolar(a) && !waterNames.has(normUpper(a.resn)));
+  const listB = filterAtoms(bSel).filter(a => isPolar(a) && !waterNames.has(normUpper(a.resn)));
+  return nearbyPairs(listA, listB, 2.4, 3.6, rule.limit || 1000, pairPredicate(rule));
+}
+function detectSalt(rule){
+  const between = rule.between || [{},{}];
+  const aAtoms = filterAtoms(between[0] || {});
+  const bAtoms = filterAtoms(between[1] || {});
+  const posA = aAtoms.filter(isPositive), negA = aAtoms.filter(isNegative);
+  const posB = bAtoms.filter(isPositive), negB = bAtoms.filter(isNegative);
+  const limit = rule.limit || 600;
+  const out1 = nearbyPairs(posA, negB, 1.6, 4.2, limit, pairPredicate(rule));
+  if(out1.length >= limit) return out1;
+  const out2 = nearbyPairs(posB, negA, 1.6, 4.2, limit - out1.length, pairPredicate(rule));
+  return out1.concat(out2);
+}
+function aromaticRings(){
+  const byResidue = new Map();
+  for(const atom of atoms){
+    const resn = normUpper(atom.resn);
+    if(!aromaticDefs[resn]) continue;
+    const key = `${atom.chain || ''}:${atom.resi}:${resn}`;
+    if(!byResidue.has(key)) byResidue.set(key, []);
+    byResidue.get(key).push(atom);
+  }
+  const rings = [];
+  for(const list of byResidue.values()){
+    const resn = normUpper(list[0].resn);
+    const ringAtoms = list.filter(atom => aromaticDefs[resn].includes(atom.atom));
+    if(ringAtoms.length < 5) continue;
+    const center = ringAtoms.reduce((p,a) => ({x:p.x+a.x, y:p.y+a.y, z:p.z+a.z}), {x:0,y:0,z:0});
+    center.x /= ringAtoms.length; center.y /= ringAtoms.length; center.z /= ringAtoms.length;
+    rings.push({atom:ringAtoms[0], atoms:ringAtoms, center});
+  }
+  return rings;
+}
+function detectPi(rule){
+  const between = rule.between || [{},{}];
+  const selA = resolveSelector(between[0] || {});
+  const selB = resolveSelector(between[1] || {});
+  const ringsA = aromaticRings().filter(r => matchesResolvedSelector(r.atom, selA));
+  const ringsB = aromaticRings().filter(r => matchesResolvedSelector(r.atom, selB));
+  const out = [];
+  const seen = new Set();
+  const limit = rule.limit || 200;
+  for(const a of ringsA){
+    for(const b of ringsB){
+      if(a === b) continue;
+      if(rule.interchain !== false && (a.atom.chain || '') === (b.atom.chain || '')) continue;
+      const key = [a.atom.serial, b.atom.serial].sort((x,y) => x-y).join(':');
+      if(seen.has(key)) continue;
+      const d = distance(a.center, b.center);
+      if(d >= 3.5 && d <= 6.2){
+        seen.add(key);
+        out.push([a,b,d]);
+        if(out.length >= limit) return out;
+      }
+    }
+  }
+  return out;
+}
+function drawInteractionLine(a,b,color,radius,dashed){
+  if(dashed && viewer.addLine) viewer.addLine({start:point(a), end:point(b), color, dashed:true, linewidth:2});
+  else viewer.addCylinder({start:point(a), end:point(b), radius:radius || 0.05, color, fromCap:1, toCap:1});
+}
+function redrawInteractions(render){
+  if(!viewer) return;
+  viewer.removeAllShapes();
+  if(!model || !atoms.length){ $('interactionStats').textContent = '표시 없음'; return; }
+  const totals = {hbond:0, salt:0, pi:0};
+  for(const rule of state.interactionRules){
+    if(rule.disabled) continue;
+    try{
+      if(rule.kind === 'hbond'){
+        const hits = detectHBonds(rule); totals.hbond += hits.length;
+        hits.forEach(pair => drawInteractionLine(pair[0], pair[1], rule.color || '#00bcd4', 0.045, true));
+      }else if(rule.kind === 'salt'){
+        const hits = detectSalt(rule); totals.salt += hits.length;
+        hits.forEach(pair => drawInteractionLine(pair[0], pair[1], rule.color || '#ffb000', 0.06, false));
+      }else if(rule.kind === 'pi'){
+        const hits = detectPi(rule); totals.pi += hits.length;
+        hits.forEach(pair => viewer.addLine({start:pair[0].center, end:pair[1].center, color:rule.color || '#9b59ff', dashed:true, linewidth:2}));
+      }
+    }catch(err){ console.warn('interaction rule skipped', rule, err); }
+  }
+  const total = totals.hbond + totals.salt + totals.pi;
+  $('interactionStats').textContent = total ? `H-bond ${totals.hbond} · salt ${totals.salt} · π ${totals.pi}` : '표시 없음';
+  if(render !== false) viewer.render();
+}
+function showInteractions(options){
+  if(!model) throw new Error('No model loaded');
+  const opts = options || {};
+  const kind = normText(opts.kind || 'hbond').toLowerCase();
+  if(!['hbond','salt','pi'].includes(kind)) throw new Error(`Unsupported interaction kind: ${kind}`);
+  const id = opts.id || nextId(kind);
+  const rule = {
+    id, kind,
+    between: opts.between ? opts.between.map(normalizeSelectorInput) : [{},{}],
+    limit: opts.limit || (kind === 'hbond' ? 1000 : 400),
+    color: opts.color,
+    interchain: opts.interchain !== false
+  };
+  state.interactionRules.push(rule);
+  redrawInteractions(true);
+  setApiStatus(`${kind} interactions shown: ${id}`);
+  return id;
+}
+function clearInteractions(id){
+  if(!id) state.interactionRules = [];
+  else state.interactionRules = state.interactionRules.filter(rule => rule.id !== id);
+  Object.keys(uiInteractionIds).forEach(k => { if(!id || uiInteractionIds[k] === id) uiInteractionIds[k] = null; });
+  syncInteractionButtons();
+  redrawInteractions(true);
+}
+function syncInteractionButtons(){
+  ui.toggleHBond.classList.toggle('active', !!uiInteractionIds.hbond);
+  ui.toggleSalt.classList.toggle('active', !!uiInteractionIds.salt);
+  ui.togglePi.classList.toggle('active', !!uiInteractionIds.pi);
+}
+function toggleUiInteraction(kind){
+  if(uiInteractionIds[kind]){ clearInteractions(uiInteractionIds[kind]); return; }
+  const id = showInteractions({kind, between:[{},{}], interchain:true, limit:kind === 'hbond' ? 1000 : 300});
+  uiInteractionIds[kind] = id;
+  syncInteractionButtons();
+}
+function updateStats(){
+  const residues = new Set();
+  const chains = new Set();
+  const ligands = new Set();
+  atoms.forEach(atom => {
+    residues.add(`${atom.chain || ''}:${atom.resi}:${atom.resn || ''}`);
+    chains.add(atom.chain || '?');
+    if(isLigand(atom)) ligands.add(`${atom.chain || ''}:${atom.resn || ''}:${atom.resi}`);
+  });
+  const ligandText = ligands.size ? Array.from(ligands).slice(0,8).join(', ') + (ligands.size > 8 ? ` +${ligands.size - 8}` : '') : '-';
+  $('modelStats').innerHTML = [
+    ['파일', currentName || '-'], ['원자', atoms.length.toLocaleString()], ['잔기', residues.size.toLocaleString()],
+    ['체인', Array.from(chains).sort().join(', ') || '-'], ['리간드', ligandText]
+  ].map(([k,v]) => `<div>${k}</div><div title="${String(v).replace(/"/g,'&quot;')}">${v}</div>`).join('');
+}
+function resetDynamicState(options){
+  const opts = options || {};
+  state.styleRules = [];
+  state.hiddenRules = [];
+  state.interactionRules = [];
+  state.selectionSel = null;
+  state.rangeAnchor = null;
+  state.selectionOptions = {color:'#fdd835'};
+  uiInteractionIds = {hbond:null, salt:null, pi:null};
+  syncInteractionButtons();
+  if(!opts.preserveRegions) state.regions = {};
+}
+async function loadUrl(url, fmt, name, options){
+  setStatus(`로딩: ${name || url}`);
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.text();
+  loadData(data, fmt || inferFormat(url), name || url, options);
+}
+function inferFormat(name){
+  const n = normText(name).toLowerCase();
+  if(n.endsWith('.sdf') || n.endsWith('.mol')) return 'sdf';
+  if(n.endsWith('.mol2')) return 'mol2';
+  if(n.endsWith('.xyz')) return 'xyz';
+  if(n.endsWith('.cif') || n.endsWith('.mmcif')) return 'cif';
+  return 'pdb';
+}
+function loadData(data, fmt, name, options){
+  if(!viewer) initViewer();
+  viewer.clear();
+  model = viewer.addModel(data, fmt || 'pdb');
+  atoms = model.selectedAtoms({});
+  currentName = name || 'model';
+  resetDynamicState(options || {});
+  updateHoverInfo(null);
+  setupAtomEvents();
+  applyStylesFull(false);
+  viewer.zoomTo();
+  viewer.render();
+  updateStats();
+  updateSelectionSummary();
+  setStatus(`${currentName} · ${atoms.length.toLocaleString()} atoms · 기본 3Dmol mouse controls`);
+  setApiStatus('window.molAgent ready');
+}
+function applyClip(){
+  if(!viewer) return;
+  const near = Number(ui.clipNear.value);
+  const far = Number(ui.clipFar.value);
+  ui.nearVal.textContent = String(near);
+  ui.farVal.textContent = String(far);
+  try{
+    if(viewer.setSlab) viewer.setSlab(near, far);
+    else{
+      if(viewer.setSlabNear) viewer.setSlabNear(near);
+      if(viewer.setSlabFar) viewer.setSlabFar(far);
+    }
+    viewer.render();
+  }catch(err){ setStatus('이 3Dmol build에서 slab clip API를 사용할 수 없습니다.'); }
+}
+function bindInvertedWheelZoom(){
+  viewerEl.addEventListener('wheel', function(e){
+    if(!viewer || state.locked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    const delta = e.deltaY || -e.wheelDelta || 1;
+    const amount = Math.max(1, Math.min(4, Math.abs(delta) / 100));
+    const step = Math.pow(1.12, amount);
+    viewer.zoom(delta < 0 ? step : 1 / step);
+  }, {capture:true, passive:false});
+}
+function startFpsOverlay(){
+  let frames = 0;
+  let last = performance.now();
+  function tick(now){
+    frames += 1;
+    requestAnimationFrame(tick);
+  }
+  function update(){
+    if(document.hidden){
+      fpsEl.textContent = 'FPS --';
+      frames = 0;
+      last = performance.now();
+      return;
+    }
+    const now = performance.now();
+    const elapsed = now - last;
+    fpsEl.textContent = `FPS ${Math.round(frames * 1000 / elapsed)}`;
+    frames = 0;
+    last = now;
+  }
+  setInterval(update, 500);
+  document.addEventListener('visibilitychange', update);
+  requestAnimationFrame(tick);
+}
+function initViewer(){
+  viewer = $3Dmol.createViewer(viewerEl, {backgroundColor:'#000000', hoverDuration:0});
+  if(viewer.setBackgroundColor) viewer.setBackgroundColor('#000000');
+  bindInvertedWheelZoom();
+  window.addEventListener('resize', function(){ if(viewer) viewer.resize(); });
+}
+function runCompat(command){
+  if(!command || typeof command !== 'object' || Array.isArray(command)) throw new Error('String commands are disabled. Use structured molAgent API calls.');
+  const type = normText(command.type || command.action).toLowerCase();
+  if(type === 'style') return addStyleRule(command.selector || command.target || {}, command.representation || command.style || 'cartoon', command.options || command);
+  if(type === 'hide') return addStyleRule(command.selector || command.target || {}, 'hide', command.options || command);
+  if(type === 'interaction') return showInteractions(command);
+  if(type === 'selection' || type === 'setselection') return setSelection(command.selector || command.target || {}, command.options || command);
+  if(type === 'clearselection') return clearSelection();
+  if(type === 'focus') return focus(command.selector || command.target || state.selectionSel);
+  throw new Error(`Unsupported run() command type: ${type || '-'}`);
+}
+window.molAgent = {
+  style:addStyleRule,
+  clearStyle,
+  clearStyles:function(){ clearStyle(); },
+  setBaseStyle:function(representation){ state.baseProtein = normText(representation || 'cartoon').toLowerCase(); ui.proteinStyle.value = state.baseProtein; applyStylesFull(true); },
+  setLigandStyle:function(representation){ state.ligand = normText(representation || 'stick').toLowerCase(); ui.ligandStyle.value = state.ligand; applyStylesFull(true); },
+  showInteractions,
+  clearInteractions,
+  setSelection,
+  clearSelection,
+  focus,
+  setRegions,
+  getRegions:function(){ return cloneSelector(state.regions); },
+  selectAtoms:function(selector){ return filterAtoms(selector).map(a => Object.assign({}, a)); },
+  getState:function(){ return {file:currentName, atoms:atoms.length, selection:cloneSelector(state.selectionSel), styleRules:cloneSelector(state.styleRules), hiddenRules:cloneSelector(state.hiddenRules), interactionRules:cloneSelector(state.interactionRules), regions:cloneSelector(state.regions)}; },
+  loadUrl,
+  loadData,
+  run:runCompat,
+  viewer:function(){ return viewer; },
+  model:function(){ return model; }
+};
+ui.loadRef.onclick = function(){ loadUrl('data/8UCD.pdb', 'pdb', '8UCD').catch(err => setStatus(`로드 실패: ${err.message}`)); };
+ui.loadPred.onclick = function(){ loadUrl('data/steap1_complex_seed2.pdb', 'pdb', 'steap1_complex_seed2').catch(err => setStatus(`로드 실패: ${err.message}`)); };
+ui.fileInput.onchange = async function(e){ const f = e.target.files && e.target.files[0]; if(f) loadData(await f.text(), inferFormat(f.name), f.name); };
+ui.proteinStyle.onchange = function(){ state.baseProtein = ui.proteinStyle.value; applyStylesFull(true); };
+ui.ligandStyle.onchange = function(){ state.ligand = ui.ligandStyle.value; applyStylesFull(true); };
+ui.selectionMode.onchange = function(){ state.selectionMode = ui.selectionMode.value; state.rangeAnchor = null; updateSelectionSummary(); setStatus(`selection mode: ${state.selectionMode}`); };
+ui.selectionRepresentation.onchange = function(){ state.selectionRepresentation = ui.selectionRepresentation.value; applyStylesFull(true); };
+ui.applySelection.onclick = function(){ if(state.selectionSel) applyStylesFull(true); else setStatus('적용할 선택이 없습니다.'); };
+ui.focusSelection.onclick = function(){ focus(state.selectionSel); };
+ui.clearSelection.onclick = clearSelection;
+ui.toggleHBond.onclick = function(){ toggleUiInteraction('hbond'); };
+ui.toggleSalt.onclick = function(){ toggleUiInteraction('salt'); };
+ui.togglePi.onclick = function(){ toggleUiInteraction('pi'); };
+ui.zoomBtn.onclick = function(){ if(viewer){ viewer.zoomTo(); viewer.render(); } };
+ui.saveView.onclick = function(){ if(viewer){ savedView = viewer.getView(); setStatus('시점 저장됨'); } };
+ui.restoreView.onclick = function(){ if(viewer && savedView){ viewer.setView(savedView); viewer.render(); setStatus('시점 복원됨'); } };
+ui.lockView.onclick = function(e){ state.locked = !state.locked; viewerEl.classList.toggle('locked', state.locked); e.currentTarget.classList.toggle('active', state.locked); };
+ui.clipNear.oninput = applyClip;
+ui.clipFar.oninput = applyClip;
+ui.resetClip.onclick = function(){ ui.clipNear.value = -100; ui.clipFar.value = 100; applyClip(); };
+window.addEventListener('keydown', function(e){
+  const tag = document.activeElement && document.activeElement.tagName;
+  if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if(e.key === 'z' || e.key === 'Z') focus(state.selectionSel);
+  if(e.key === 'Escape') clearSelection();
+});
+initViewer();
+startFpsOverlay();
+loadUrl('data/8UCD.pdb', 'pdb', '8UCD').catch(err => { setStatus(`로드 실패: ${err.message}`); setApiStatus(err.message, true); });
+})();
+</script>
+</body>
+</html>

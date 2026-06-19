@@ -1,0 +1,10 @@
+server_*.log
+server_*.pid
+*.backup
+*.bak
+*.tmp
+*.zip
+index.before_*.html
+index.pro_*.html
+.DS_Store
+__pycache__/
