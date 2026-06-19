@@ -62,7 +62,7 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
   <div class="group">
     <span class="label">select</span>
     <select id="selectionMode"><option value="residue">residue</option><option value="atom">atom</option><option value="range">range</option><option value="chain">chain</option><option value="model">model</option><option value="off">off</option></select>
-    <select id="selectionRepresentation"><option value="stick">stick</option><option value="line">line</option><option value="tube">tube+line</option><option value="sphere">sphere</option><option value="off">style off</option></select>
+    <select id="selectionRepresentation"><option value="stick">stick</option><option value="line" selected>line</option><option value="tube">tube+line</option><option value="sphere">sphere</option><option value="off">style off</option></select>
     <button id="applySelection" class="smallbtn">선택 적용</button>
     <button id="focusSelection" class="smallbtn">초점(z)</button>
     <button id="clearSelection" class="smallbtn">clear</button>
@@ -204,12 +204,12 @@ const mousePresets = {
   default: {passThrough:true}
 };
 function defaultSelectionOptions(){
-  return {color:'#fdd835', opacity:0.45, radius:0.1, scale:0.22, thickness:0.32, linewidth:0.85};
+  return {color:'#fdd835', opacity:0.35, radius:0.1, scale:0.22, thickness:0.32, linewidth:0.7};
 }
 const state = {
   baseProtein:'cartoon', ligand:'stick',
   styleRules:[], hiddenRules:[], interactionRules:[],
-  selectionSel:null, selectionRepresentation:'stick', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
+  selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
   mousePreset:'select-left',
   regions:{}, locked:false
 };
