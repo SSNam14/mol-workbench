@@ -210,6 +210,7 @@ const state = {
   baseProtein:'cartoon', ligand:'stick',
   styleRules:[], hiddenRules:[], interactionRules:[],
   selectionSel:null, selectionRepresentation:'stick', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
+  focusTarget:null,
   mousePreset:'select-left',
   regions:{}, locked:false
 };
@@ -510,6 +511,10 @@ function selectorLabel(selector){
     return label.length > 70 ? label.slice(0,67) + '...' : label;
   }catch(err){ return 'invalid selector'; }
 }
+function selectorFocusKey(selector){
+  try{ return JSON.stringify(resolveSelector(selector || {})); }
+  catch(err){ return null; }
+}
 function applyStylesFull(render){
   if(!viewer || !model) return;
   viewer.setStyle({}, {});
@@ -615,6 +620,7 @@ function setSelection(selector, options){
   const additive = !!(opts.additive || opts.add || opts.extend || opts.shiftKey);
   state.selectionSel = additive && state.selectionSel ? combineSelectors(state.selectionSel, nextSel) : nextSel;
   state.rangeAnchor = null;
+  state.focusTarget = null;
   if(opts.representation) state.selectionRepresentation = normText(opts.representation).toLowerCase();
   if(opts.color) state.selectionOptions.color = opts.color;
   if(opts.options && typeof opts.options === 'object') state.selectionOptions = Object.assign({}, state.selectionOptions, opts.options);
@@ -627,20 +633,35 @@ function setSelection(selector, options){
 function clearSelection(){
   state.selectionSel = null;
   state.rangeAnchor = null;
+  state.focusTarget = null;
   state.selectionOptions = defaultSelectionOptions();
   applyStylesFull(true);
   setStatus('선택 표시를 지웠습니다.');
 }
+function focusOverview(){
+  if(!viewer || !model) return false;
+  viewer.zoomTo({}, 450);
+  state.focusTarget = {mode:'overview', key:null};
+  return true;
+}
 function focus(selector){
   if(!viewer || !model) return false;
-  let sel = selector ? styleSelection(selector, {}) : (state.selectionSel ? styleSelection(state.selectionSel, {}) : null);
+  const target = selector || state.selectionSel;
+  let sel = target ? styleSelection(target, {}) : null;
   if(!sel){ setStatus('초점 대상 선택이 없습니다.'); return false; }
   if(sel.serial && Array.isArray(sel.serial) && atoms.length && sel.serial.length >= atoms.length){
     const selected = new Set(sel.serial.map(serial => Number(serial)));
     if(atoms.every(atom => selected.has(Number(atom.serial)))) sel = {};
   }
   viewer.zoomTo(sel, 450);
+  state.focusTarget = {mode:'selection', key:selectorFocusKey(target)};
   return true;
+}
+function toggleFocus(){
+  if(!state.selectionSel) return focusOverview();
+  const key = selectorFocusKey(state.selectionSel);
+  if(state.focusTarget && state.focusTarget.mode === 'selection' && state.focusTarget.key === key) return focusOverview();
+  return focus(state.selectionSel);
 }
 function addStyleRule(selector, representation, options){
   if(!model) throw new Error('No model loaded');
@@ -876,6 +897,7 @@ function resetDynamicState(options){
   state.interactionRules = [];
   state.selectionSel = null;
   state.rangeAnchor = null;
+  state.focusTarget = null;
   state.selectionOptions = defaultSelectionOptions();
   uiInteractionIds = {hbond:null, salt:null, pi:null};
   syncInteractionButtons();
@@ -1350,7 +1372,7 @@ window.addEventListener('keydown', function(e){
   const tag = document.activeElement && document.activeElement.tagName;
   if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if(e.key === 'z' || e.key === 'Z'){
-    if(!e.repeat) focus(state.selectionSel);
+    if(!e.repeat) toggleFocus();
   }
   if(e.key === 'Escape') clearSelection();
 });
