@@ -637,7 +637,6 @@ function focus(selector){
     if(atoms.every(atom => selected.has(Number(atom.serial)))) sel = {};
   }
   viewer.zoomTo(sel, 450);
-  viewer.render();
   return true;
 }
 function addStyleRule(selector, representation, options){
@@ -1030,6 +1029,75 @@ function showViewer(){
   if(viewer.show) viewer.show();
   else viewer.render();
 }
+function tweenVector(from, to, amount){
+  return to.clone().sub(from).multiplyScalar(amount).add(from);
+}
+function slerpQuaternion(from, to, amount){
+  const out = from.clone();
+  let tx = to.x, ty = to.y, tz = to.z, tw = to.w;
+  let cosHalfTheta = from.x * tx + from.y * ty + from.z * tz + from.w * tw;
+  if(cosHalfTheta < 0){
+    tx = -tx; ty = -ty; tz = -tz; tw = -tw;
+    cosHalfTheta = -cosHalfTheta;
+  }
+  if(cosHalfTheta >= 1){
+    return out.copy(from);
+  }
+  if(cosHalfTheta > 0.9995){
+    out.set(
+      from.x + amount * (tx - from.x),
+      from.y + amount * (ty - from.y),
+      from.z + amount * (tz - from.z),
+      from.w + amount * (tw - from.w)
+    );
+    return out.normalize();
+  }
+  const halfTheta = Math.acos(Math.max(-1, Math.min(1, cosHalfTheta)));
+  const sinHalfTheta = Math.sqrt(1 - cosHalfTheta * cosHalfTheta);
+  const ratioA = Math.sin((1 - amount) * halfTheta) / sinHalfTheta;
+  const ratioB = Math.sin(amount * halfTheta) / sinHalfTheta;
+  out.set(
+    from.x * ratioA + tx * ratioB,
+    from.y * ratioA + ty * ratioB,
+    from.z * ratioA + tz * ratioB,
+    from.w * ratioA + tw * ratioB
+  );
+  return out;
+}
+function installFrameSyncedMotion(targetViewer){
+  if(!targetViewer || targetViewer._frameSyncedMotionInstalled || !targetViewer.animateMotion) return;
+  const nativeAnimateMotion = targetViewer.animateMotion.bind(targetViewer);
+  targetViewer.animateMotion = function(duration, fixedPath, targetPosition, targetZoom, targetRotation, targetCamera){
+    const totalMs = Number(duration) || 0;
+    if(totalMs <= 0 || typeof requestAnimationFrame !== 'function' || document.hidden){
+      return nativeAnimateMotion(duration, fixedPath, targetPosition, targetZoom, targetRotation, targetCamera);
+    }
+    const activeViewer = this;
+    activeViewer.incAnim();
+    const startTime = performance.now();
+    const startPosition = activeViewer.modelGroup.position.clone();
+    const startZoom = activeViewer.rotationGroup.position.z;
+    const startRotation = activeViewer.rotationGroup.quaternion.clone();
+    const startCamera = activeViewer.lookingAt.clone();
+    function step(now){
+      const amount = Math.min(1, Math.max(0, (now - startTime) / totalMs));
+      if(targetPosition) activeViewer.modelGroup.position.copy(tweenVector(startPosition, targetPosition, amount));
+      if(targetZoom !== undefined && targetZoom !== null) activeViewer.rotationGroup.position.z = startZoom + amount * (targetZoom - startZoom);
+      if(targetRotation) activeViewer.rotationGroup.quaternion.copy(slerpQuaternion(startRotation, targetRotation, amount));
+      if(targetCamera){
+        const cameraTarget = tweenVector(startCamera, targetCamera, amount);
+        if(!fixedPath) activeViewer.lookingAt.copy(cameraTarget);
+        activeViewer.camera.lookAt(cameraTarget);
+      }
+      activeViewer.show();
+      if(amount < 1) requestAnimationFrame(step);
+      else activeViewer.decAnim();
+    }
+    requestAnimationFrame(step);
+    return activeViewer;
+  };
+  targetViewer._frameSyncedMotionInstalled = true;
+}
 function selectAtPoint(point, sourceEvent){
   if(!viewer || !model || !viewer.mouseXY || !viewer.handleClickSelection) return;
   if(viewer.updateClickables) viewer.updateClickables();
@@ -1197,6 +1265,7 @@ function startFpsOverlay(){
 function initViewer(){
   viewer = $3Dmol.createViewer(viewerEl, {backgroundColor:'#000000', hoverDuration:0});
   if(viewer.setBackgroundColor) viewer.setBackgroundColor('#000000');
+  installFrameSyncedMotion(viewer);
   bindCustomMouseActions();
   bindInvertedWheelZoom();
   window.addEventListener('resize', function(){ if(viewer) viewer.resize(); });
