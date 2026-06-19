@@ -357,17 +357,6 @@ function cloneSelector(sel){
   Object.keys(sel).forEach(k => { out[k] = typeof sel[k] === 'function' ? sel[k] : cloneSelector(sel[k]); });
   return out;
 }
-function flattenOrSelector(selector, out){
-  const sel = normalizeSelectorInput(selector);
-  if(sel && typeof sel === 'object' && !Array.isArray(sel) && sel.or) (Array.isArray(sel.or) ? sel.or : [sel.or]).forEach(part => flattenOrSelector(part, out));
-  else out.push(sel);
-}
-function combineSelectors(a, b){
-  const parts = [];
-  flattenOrSelector(a, parts);
-  flattenOrSelector(b, parts);
-  return {or:parts};
-}
 function normalizeSelectorInput(selector){
   if(selector == null) return {};
   if(typeof selector === 'string') return {region:selector};
@@ -399,9 +388,40 @@ function isComplexSelector(sel){
   return false;
 }
 function asArray(v){ return Array.isArray(v) ? v : [v]; }
+const numericArrayMatchCache = new WeakMap();
+function numericArraySet(want, key){
+  if(key !== 'serial' && key !== 'resi') return null;
+  let cached = numericArrayMatchCache.get(want);
+  if(cached && Object.prototype.hasOwnProperty.call(cached, key)) return cached[key];
+  if(!cached){ cached = {}; numericArrayMatchCache.set(want, cached); }
+  const rangeRe = key === 'resi' ? /^-?\d+\s*-\s*-?\d+$/ : /^\d+\s*-\s*\d+$/;
+  const values = new Set();
+  for(const item of want){
+    if(item == null || Array.isArray(item) || typeof item === 'boolean' || typeof item === 'function'){
+      cached[key] = null;
+      return null;
+    }
+    if(typeof item === 'string' && rangeRe.test(item.trim())){
+      cached[key] = null;
+      return null;
+    }
+    const n = Number(item);
+    if(!Number.isFinite(n)){
+      cached[key] = null;
+      return null;
+    }
+    values.add(n);
+  }
+  cached[key] = values;
+  return values;
+}
 function matchScalar(atomVal, want, key){
   if(want == null) return true;
-  if(Array.isArray(want)) return want.some(x => matchScalar(atomVal, x, key));
+  if(Array.isArray(want)){
+    const numericSet = numericArraySet(want, key);
+    if(numericSet) return numericSet.has(Number(atomVal));
+    return want.some(x => matchScalar(atomVal, x, key));
+  }
   if(key === 'resi' && typeof want === 'string' && /^-?\d+\s*-\s*-?\d+$/.test(want.trim())){
     const parts = want.split('-').map(x => Number(x.trim()));
     const lo = Math.min(parts[0], parts[1]);
@@ -435,8 +455,7 @@ function matchesResolvedSelector(atom, resolved){
   }
   return true;
 }
-function serialsForSelector(selector, options){
-  const resolved = resolveSelector(selector);
+function serialsForResolvedSelector(resolved, options){
   const sidechainOnly = options && options.sidechainOnly;
   const serials = [];
   for(const atom of atoms){
@@ -445,6 +464,27 @@ function serialsForSelector(selector, options){
     if(atom.serial != null) serials.push(atom.serial);
   }
   return serials;
+}
+function serialsForSelector(selector, options){
+  return serialsForResolvedSelector(resolveSelector(selector), options);
+}
+function isWholeModelSelector(selector){
+  const resolved = resolveSelector(selector);
+  return Object.keys(resolved).length === 0;
+}
+function combineSelectors(a, b){
+  if(isWholeModelSelector(a) || isWholeModelSelector(b)) return {};
+  const seen = new Set();
+  const serials = [];
+  [a, b].forEach(selector => {
+    const resolved = resolveSelector(selector);
+    serialsForResolvedSelector(resolved, {}).forEach(serial => {
+      if(seen.has(serial)) return;
+      seen.add(serial);
+      serials.push(serial);
+    });
+  });
+  return {serial:serials};
 }
 function styleSelection(selector, options){
   const resolved = resolveSelector(selector);
@@ -590,8 +630,12 @@ function clearSelection(){
 }
 function focus(selector){
   if(!viewer || !model) return false;
-  const sel = selector ? styleSelection(selector, {}) : (state.selectionSel ? styleSelection(state.selectionSel, {}) : null);
+  let sel = selector ? styleSelection(selector, {}) : (state.selectionSel ? styleSelection(state.selectionSel, {}) : null);
   if(!sel){ setStatus('초점 대상 선택이 없습니다.'); return false; }
+  if(sel.serial && Array.isArray(sel.serial) && atoms.length && sel.serial.length >= atoms.length){
+    const selected = new Set(sel.serial.map(serial => Number(serial)));
+    if(atoms.every(atom => selected.has(Number(atom.serial)))) sel = {};
+  }
   viewer.zoomTo(sel, 450);
   viewer.render();
   return true;
@@ -1233,7 +1277,9 @@ window.addEventListener('keydown', function(e){
   }
   const tag = document.activeElement && document.activeElement.tagName;
   if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-  if(e.key === 'z' || e.key === 'Z') focus(state.selectionSel);
+  if(e.key === 'z' || e.key === 'Z'){
+    if(!e.repeat) focus(state.selectionSel);
+  }
   if(e.key === 'Escape') clearSelection();
 });
 initSettingsUi();
