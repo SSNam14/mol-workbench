@@ -26,6 +26,7 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
 #viewer.locked::after{content:"";position:absolute;inset:0;z-index:10;background:rgba(0,0,0,.02);cursor:not-allowed}
 .fpsOverlay{position:absolute;left:12px;top:12px;z-index:11;min-width:74px;border:1px solid rgba(96,165,250,.35);background:rgba(5,7,10,.78);backdrop-filter:blur(6px);border-radius:8px;padding:5px 8px;color:#dbeafe;font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;pointer-events:none}
 .status{position:absolute;left:12px;right:12px;bottom:12px;z-index:9;min-height:34px;border:1px solid rgba(96,165,250,.35);background:rgba(5,7,10,.88);backdrop-filter:blur(6px);border-radius:10px;padding:8px 10px;color:#dbeafe;font-size:12px;line-height:1.35;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dragSelectBox{position:absolute;display:none;z-index:12;border:1px solid rgba(96,165,250,.95);background:rgba(96,165,250,.18);box-shadow:0 0 0 1px rgba(5,7,10,.45);pointer-events:none}
 .side{min-width:0;background:var(--panel);border-left:1px solid var(--line);padding:12px;overflow:auto}
 .panel{border:1px solid var(--line);border-radius:12px;background:#0a0f17;padding:10px;margin-bottom:12px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
 .panel h2{font-size:13px;line-height:1;margin:0 0 10px;color:#bfdbfe;letter-spacing:.02em}.panel h2 .hint{font-weight:400;color:var(--muted)}
@@ -54,12 +55,16 @@ select{min-width:96px}.narrow{min-width:76px}input[type=file]{display:none}input
     <button id="focusSelection" class="smallbtn">초점(z)</button>
     <button id="clearSelection" class="smallbtn">clear</button>
   </div>
+  <div class="group">
+    <span class="label">mouse</span>
+    <select id="mousePreset"><option value="select-left">select/range L · rotate R</option><option value="default">3Dmol default</option></select>
+  </div>
   <div class="group"><button id="toggleHBond">H-bond</button><button id="toggleSalt">Salt</button><button id="togglePi">π</button></div>
   <div class="spacer"></div>
   <div class="group"><button id="zoomBtn">맞춤</button><button id="saveView">시점 저장</button><button id="restoreView">복원</button><button id="lockView">고정</button></div>
 </div>
 <div class="shell">
-  <main id="viewer"><div id="fpsOverlay" class="fpsOverlay">FPS --</div><div id="status" class="status">초기화 중</div></main>
+  <main id="viewer"><div id="fpsOverlay" class="fpsOverlay">FPS --</div><div id="dragSelectBox" class="dragSelectBox"></div><div id="status" class="status">초기화 중</div></main>
   <aside class="side">
     <div class="panel">
       <h2>Hover <span class="hint">fixed panel</span></h2>
@@ -117,6 +122,7 @@ molAgent.style({region:'REGION_NAME'}, 'tube', {color:'#fdd835'});
 const $ = id => document.getElementById(id);
 const viewerEl = $('viewer');
 const fpsEl = $('fpsOverlay');
+const dragSelectBoxEl = $('dragSelectBox');
 const statusEl = $('status');
 const apiStatusEl = $('apiStatus');
 const selectionSummaryEl = $('selectionSummary');
@@ -125,6 +131,7 @@ const ui = {
   proteinStyle:$('proteinStyle'), ligandStyle:$('ligandStyle'),
   selectionMode:$('selectionMode'), selectionRepresentation:$('selectionRepresentation'),
   applySelection:$('applySelection'), focusSelection:$('focusSelection'), clearSelection:$('clearSelection'),
+  mousePreset:$('mousePreset'),
   toggleHBond:$('toggleHBond'), toggleSalt:$('toggleSalt'), togglePi:$('togglePi'),
   zoomBtn:$('zoomBtn'), saveView:$('saveView'), restoreView:$('restoreView'), lockView:$('lockView'),
   clipNear:$('clipNear'), clipFar:$('clipFar'), nearVal:$('nearVal'), farVal:$('farVal'), resetClip:$('resetClip')
@@ -164,13 +171,29 @@ const state = {
   baseProtein:'cartoon', ligand:'stick',
   styleRules:[], hiddenRules:[], interactionRules:[],
   selectionSel:null, selectionRepresentation:'stick', selectionOptions:{color:'#fdd835'}, selectionMode:'residue', rangeAnchor:null,
+  mousePreset:'select-left',
   regions:{}, locked:false
 };
+let resetMouseDrag = function(){};
 function setStatus(text){ statusEl.textContent = text || ''; }
 function setApiStatus(text, isError){ apiStatusEl.textContent = text || 'window.molAgent ready'; apiStatusEl.style.color = isError ? '#fecaca' : '#a7f3d0'; }
 function nextId(prefix){ return `${prefix}-${idSeq++}`; }
 function normText(v){ return String(v == null ? '' : v).trim(); }
 function normUpper(v){ return normText(v).toUpperCase(); }
+function mousePresetLabel(preset){
+  return preset === 'default' ? '3Dmol default mouse' : 'left click selects · left drag range-selects · right drag rotates';
+}
+function isCustomMousePreset(){
+  return state.mousePreset === 'select-left';
+}
+function setMousePreset(preset){
+  const next = preset === 'default' ? 'default' : 'select-left';
+  state.mousePreset = next;
+  resetMouseDrag();
+  ui.mousePreset.value = next;
+  setStatus(`mouse preset: ${mousePresetLabel(next)}`);
+  return next;
+}
 function atomElem(atom){ return normUpper(atom.elem || atom.element || atom.atom || '').replace(/[^A-Z]/g,''); }
 function chainColor(chain){
   const c = normText(chain || '?');
@@ -230,6 +253,17 @@ function cloneSelector(sel){
   const out = {};
   Object.keys(sel).forEach(k => { out[k] = typeof sel[k] === 'function' ? sel[k] : cloneSelector(sel[k]); });
   return out;
+}
+function flattenOrSelector(selector, out){
+  const sel = normalizeSelectorInput(selector);
+  if(sel && typeof sel === 'object' && !Array.isArray(sel) && sel.or) (Array.isArray(sel.or) ? sel.or : [sel.or]).forEach(part => flattenOrSelector(part, out));
+  else out.push(sel);
+}
+function combineSelectors(a, b){
+  const parts = [];
+  flattenOrSelector(a, parts);
+  flattenOrSelector(b, parts);
+  return {or:parts};
 }
 function normalizeSelectorInput(selector){
   if(selector == null) return {};
@@ -376,7 +410,7 @@ function updateHoverInfo(atom){
 }
 function setupAtomEvents(){
   if(!viewer) return;
-  viewer.setClickable({}, true, function(atom){ handleAtomClick(atom); });
+  viewer.setClickable({}, true, function(atom, activeViewer, event){ handleAtomClick(atom, event); });
   viewer.setHoverable({}, true, function(atom){
     if(hoverClearTimer){ clearTimeout(hoverClearTimer); hoverClearTimer = null; }
     updateHoverInfo(atom);
@@ -385,14 +419,14 @@ function setupAtomEvents(){
     hoverClearTimer = setTimeout(function(){ updateHoverInfo(null); hoverClearTimer = null; }, 60);
   });
 }
-function handleAtomClick(atom){
+function handleAtomClick(atom, event){
   if(!atom || state.selectionMode === 'off') return;
   if(state.selectionMode === 'range'){
-    handleRangeSelection(atom);
+    handleRangeSelection(atom, event);
     return;
   }
   const sel = selectionFromAtom(atom, state.selectionMode);
-  setSelection(sel, {source:'click'});
+  setSelection(sel, {source:'click', additive:event && event.shiftKey});
 }
 function selectionFromAtom(atom, mode){
   if(mode === 'atom') return {serial:atom.serial};
@@ -400,11 +434,11 @@ function selectionFromAtom(atom, mode){
   if(mode === 'model') return {};
   return {chain:atom.chain, resi:atom.resi, resn:atom.resn};
 }
-function handleRangeSelection(atom){
+function handleRangeSelection(atom, event){
   const resi = Number(atom.resi);
   const chain = atom.chain || '';
   if(!Number.isFinite(resi)){
-    setSelection({chain:atom.chain, resi:atom.resi, resn:atom.resn}, {source:'click'});
+    setSelection({chain:atom.chain, resi:atom.resi, resn:atom.resn}, {source:'click', additive:event && event.shiftKey});
     setStatus('숫자 residue 번호가 아니라 단일 residue를 선택했습니다.');
     return;
   }
@@ -418,7 +452,7 @@ function handleRangeSelection(atom){
   const lo = Math.min(a, resi);
   const hi = Math.max(a, resi);
   state.rangeAnchor = null;
-  setSelection({chain, resi:`${lo}-${hi}`}, {source:'range'});
+  setSelection({chain, resi:`${lo}-${hi}`}, {source:'range', additive:event && event.shiftKey});
 }
 function updateSelectionSummary(){
   if(!state.selectionSel){
@@ -431,7 +465,9 @@ function updateSelectionSummary(){
 }
 function setSelection(selector, options){
   const opts = options || {};
-  state.selectionSel = normalizeSelectorInput(selector);
+  const nextSel = normalizeSelectorInput(selector);
+  const additive = !!(opts.additive || opts.add || opts.extend || opts.shiftKey);
+  state.selectionSel = additive && state.selectionSel ? combineSelectors(state.selectionSel, nextSel) : nextSel;
   state.rangeAnchor = null;
   if(opts.representation) state.selectionRepresentation = normText(opts.representation).toLowerCase();
   if(opts.color) state.selectionOptions.color = opts.color;
@@ -439,7 +475,7 @@ function setSelection(selector, options){
   ui.selectionRepresentation.value = state.selectionRepresentation;
   applyStylesFull(true);
   if(opts.focus) focus(state.selectionSel);
-  setStatus(`선택 표시: ${countAtoms(state.selectionSel).toLocaleString()} atoms`);
+  setStatus(`${additive ? '선택 추가' : '선택 표시'}: ${countAtoms(state.selectionSel).toLocaleString()} atoms`);
   return cloneSelector(state.selectionSel);
 }
 function clearSelection(){
@@ -725,7 +761,7 @@ function loadData(data, fmt, name, options){
   viewer.render();
   updateStats();
   updateSelectionSummary();
-  setStatus(`${currentName} · ${atoms.length.toLocaleString()} atoms · 기본 3Dmol mouse controls`);
+  setStatus(`${currentName} · ${atoms.length.toLocaleString()} atoms · ${mousePresetLabel(state.mousePreset)}`);
   setApiStatus('window.molAgent ready');
 }
 function applyClip(){
@@ -743,9 +779,201 @@ function applyClip(){
     viewer.render();
   }catch(err){ setStatus('이 3Dmol build에서 slab clip API를 사용할 수 없습니다.'); }
 }
+function stopMouseEvent(e){
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+}
+function eventPagePoint(e){
+  if(e.pageX != null && e.pageY != null) return {x:e.pageX, y:e.pageY};
+  if(e.clientX != null && e.clientY != null) return {x:e.clientX + window.pageXOffset, y:e.clientY + window.pageYOffset};
+  return null;
+}
+function pointInsideViewer(point){
+  const rect = viewerEl.getBoundingClientRect();
+  const x = point.x - window.pageXOffset;
+  const y = point.y - window.pageYOffset;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+function viewerPageBounds(){
+  const rect = viewerEl.getBoundingClientRect();
+  return {
+    left:rect.left + window.pageXOffset,
+    right:rect.right + window.pageXOffset,
+    top:rect.top + window.pageYOffset,
+    bottom:rect.bottom + window.pageYOffset
+  };
+}
+function normalizedPageRect(a, b){
+  const bounds = viewerPageBounds();
+  return {
+    left:Math.max(bounds.left, Math.min(a.x, b.x)),
+    right:Math.min(bounds.right, Math.max(a.x, b.x)),
+    top:Math.max(bounds.top, Math.min(a.y, b.y)),
+    bottom:Math.min(bounds.bottom, Math.max(a.y, b.y))
+  };
+}
+function hideDragSelectBox(){
+  dragSelectBoxEl.style.display = 'none';
+}
+function updateDragSelectBox(a, b){
+  const rect = normalizedPageRect(a, b);
+  const bounds = viewerPageBounds();
+  dragSelectBoxEl.style.left = `${rect.left - bounds.left}px`;
+  dragSelectBoxEl.style.top = `${rect.top - bounds.top}px`;
+  dragSelectBoxEl.style.width = `${Math.max(0, rect.right - rect.left)}px`;
+  dragSelectBoxEl.style.height = `${Math.max(0, rect.bottom - rect.top)}px`;
+  dragSelectBoxEl.style.display = 'block';
+}
+function atomResidueKey(atom){
+  return `${atom.chain || ''}\u0001${atom.resi == null ? '' : atom.resi}\u0001${atom.resn || ''}`;
+}
+function serialSelectorForAtoms(list){
+  const serials = [];
+  const seen = new Set();
+  for(const atom of list){
+    if(atom.serial == null || seen.has(atom.serial)) continue;
+    seen.add(atom.serial);
+    serials.push(atom.serial);
+  }
+  return serials.length ? {serial:serials} : null;
+}
+function atomsInPageRect(rect){
+  if(!viewer || !model || !atoms.length || !viewer.modelToScreen) return [];
+  let points = [];
+  try{ points = viewer.modelToScreen(atoms); }
+  catch(err){ console.warn('drag selection skipped', err); return []; }
+  const out = [];
+  for(let i=0;i<atoms.length;i++){
+    const p = points[i];
+    if(!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    if(p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) out.push(atoms[i]);
+  }
+  return out;
+}
+function selectorFromDragHits(hitAtoms){
+  if(!hitAtoms.length || state.selectionMode === 'off') return null;
+  if(state.selectionMode === 'model') return {};
+  if(state.selectionMode === 'atom') return serialSelectorForAtoms(hitAtoms);
+  if(state.selectionMode === 'chain'){
+    const chains = new Set(hitAtoms.map(atom => atom.chain || ''));
+    return serialSelectorForAtoms(atoms.filter(atom => chains.has(atom.chain || '')));
+  }
+  const residues = new Set(hitAtoms.map(atomResidueKey));
+  return serialSelectorForAtoms(atoms.filter(atom => residues.has(atomResidueKey(atom))));
+}
+function selectDragRange(start, end, event){
+  if(state.selectionMode === 'off'){
+    setStatus('selection mode: off');
+    return;
+  }
+  const rect = normalizedPageRect(start, end);
+  const hitAtoms = atomsInPageRect(rect);
+  const selector = selectorFromDragHits(hitAtoms);
+  if(!selector){
+    setStatus('범위 선택 대상 없음');
+    return;
+  }
+  const additive = !!(event && event.shiftKey);
+  setSelection(selector, {source:'drag', additive});
+  setStatus(`${additive ? '범위 추가' : '범위 선택'}: ${countAtoms(state.selectionSel).toLocaleString()} atoms · ${hitAtoms.length.toLocaleString()} screen hits`);
+}
+function showViewer(){
+  if(!viewer) return;
+  if(viewer.show) viewer.show();
+  else viewer.render();
+}
+function selectAtPoint(point, sourceEvent){
+  if(!viewer || !model || !viewer.mouseXY || !viewer.handleClickSelection) return;
+  if(viewer.updateClickables) viewer.updateClickables();
+  const xy = viewer.mouseXY(point.x, point.y);
+  viewer.mouseButton = 1;
+  viewer.handleClickSelection(xy.x, xy.y, sourceEvent);
+}
+function bindCustomMouseActions(){
+  const drag = {mode:null, startX:0, startY:0, moved:false, startQuaternion:null};
+  const clickTolerance = 3;
+  function resetDrag(){
+    drag.mode = null;
+    drag.moved = false;
+    drag.startQuaternion = null;
+    hideDragSelectBox();
+  }
+  resetMouseDrag = resetDrag;
+  function beginDrag(e){
+    if(e.button !== 0 && e.button !== 2) return;
+    if(!isCustomMousePreset()) return;
+    stopMouseEvent(e);
+    if(state.locked || !viewer) return;
+    const point = eventPagePoint(e);
+    if(!point) return;
+    drag.mode = e.button === 2 ? 'rotate' : 'select';
+    drag.startX = point.x;
+    drag.startY = point.y;
+    drag.moved = false;
+    drag.startQuaternion = viewer.rotationGroup && viewer.rotationGroup.quaternion ? viewer.rotationGroup.quaternion.clone() : null;
+    hideDragSelectBox();
+  }
+  function rotateFromDrag(point){
+    if(!viewer || !drag.startQuaternion || !viewer.rotationGroup || !viewer.dq) return;
+    const xRatio = viewer.renderer && viewer.renderer.getXRatio ? viewer.renderer.getXRatio() : 1;
+    const yRatio = viewer.renderer && viewer.renderer.getYRatio ? viewer.renderer.getYRatio() : 1;
+    const dx = (point.x - drag.startX) / viewer.WIDTH * xRatio;
+    const dy = (point.y - drag.startY) / viewer.HEIGHT * yRatio;
+    const distance = Math.hypot(dx, dy);
+    if(!distance) return;
+    const factor = Math.sin(distance * Math.PI) / distance;
+    viewer.dq.x = Math.cos(distance * Math.PI);
+    viewer.dq.y = 0;
+    viewer.dq.z = factor * dx;
+    viewer.dq.w = -factor * dy;
+    viewer.rotationGroup.quaternion.set(1, 0, 0, 0);
+    viewer.rotationGroup.quaternion.multiply(viewer.dq);
+    viewer.rotationGroup.quaternion.multiply(drag.startQuaternion);
+    showViewer();
+  }
+  function continueDrag(e){
+    if(!drag.mode) return;
+    if(!isCustomMousePreset()){ resetDrag(); return; }
+    stopMouseEvent(e);
+    if(state.locked) return;
+    const point = eventPagePoint(e);
+    if(!point) return;
+    const moved = Math.hypot(point.x - drag.startX, point.y - drag.startY) > clickTolerance;
+    drag.moved = drag.moved || moved;
+    if(drag.mode === 'select' && drag.moved){
+      updateDragSelectBox({x:drag.startX, y:drag.startY}, point);
+      return;
+    }
+    if(drag.mode === 'rotate') rotateFromDrag(point);
+  }
+  function endDrag(e){
+    if(!drag.mode) return;
+    if(!isCustomMousePreset()){ resetDrag(); return; }
+    const mode = drag.mode;
+    const moved = drag.moved;
+    const start = {x:drag.startX, y:drag.startY};
+    stopMouseEvent(e);
+    const point = eventPagePoint(e);
+    resetDrag();
+    if(state.locked || mode !== 'select' || !point) return;
+    if(moved){
+      selectDragRange(start, point, e);
+      return;
+    }
+    if(!pointInsideViewer(point)) return;
+    selectAtPoint(point, e);
+  }
+  viewerEl.addEventListener('mousedown', beginDrag, {capture:true, passive:false});
+  window.addEventListener('mousemove', continueDrag, {capture:true, passive:false});
+  window.addEventListener('mouseup', endDrag, {capture:true, passive:false});
+  viewerEl.addEventListener('contextmenu', function(e){ if(isCustomMousePreset()) stopMouseEvent(e); }, {capture:true, passive:false});
+  window.addEventListener('blur', resetDrag);
+}
 function bindInvertedWheelZoom(){
   viewerEl.addEventListener('wheel', function(e){
     if(!viewer || state.locked) return;
+    if(!isCustomMousePreset()) return;
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
@@ -782,6 +1010,7 @@ function startFpsOverlay(){
 function initViewer(){
   viewer = $3Dmol.createViewer(viewerEl, {backgroundColor:'#000000', hoverDuration:0});
   if(viewer.setBackgroundColor) viewer.setBackgroundColor('#000000');
+  bindCustomMouseActions();
   bindInvertedWheelZoom();
   window.addEventListener('resize', function(){ if(viewer) viewer.resize(); });
 }
@@ -804,13 +1033,15 @@ window.molAgent = {
   setLigandStyle:function(representation){ state.ligand = normText(representation || 'stick').toLowerCase(); ui.ligandStyle.value = state.ligand; applyStylesFull(true); },
   showInteractions,
   clearInteractions,
+  setMousePreset,
+  getMousePreset:function(){ return state.mousePreset; },
   setSelection,
   clearSelection,
   focus,
   setRegions,
   getRegions:function(){ return cloneSelector(state.regions); },
   selectAtoms:function(selector){ return filterAtoms(selector).map(a => Object.assign({}, a)); },
-  getState:function(){ return {file:currentName, atoms:atoms.length, selection:cloneSelector(state.selectionSel), styleRules:cloneSelector(state.styleRules), hiddenRules:cloneSelector(state.hiddenRules), interactionRules:cloneSelector(state.interactionRules), regions:cloneSelector(state.regions)}; },
+  getState:function(){ return {file:currentName, atoms:atoms.length, mousePreset:state.mousePreset, selection:cloneSelector(state.selectionSel), styleRules:cloneSelector(state.styleRules), hiddenRules:cloneSelector(state.hiddenRules), interactionRules:cloneSelector(state.interactionRules), regions:cloneSelector(state.regions)}; },
   loadUrl,
   loadData,
   run:runCompat,
@@ -824,6 +1055,7 @@ ui.proteinStyle.onchange = function(){ state.baseProtein = ui.proteinStyle.value
 ui.ligandStyle.onchange = function(){ state.ligand = ui.ligandStyle.value; applyStylesFull(true); };
 ui.selectionMode.onchange = function(){ state.selectionMode = ui.selectionMode.value; state.rangeAnchor = null; updateSelectionSummary(); setStatus(`selection mode: ${state.selectionMode}`); };
 ui.selectionRepresentation.onchange = function(){ state.selectionRepresentation = ui.selectionRepresentation.value; applyStylesFull(true); };
+ui.mousePreset.onchange = function(){ setMousePreset(ui.mousePreset.value); };
 ui.applySelection.onclick = function(){ if(state.selectionSel) applyStylesFull(true); else setStatus('적용할 선택이 없습니다.'); };
 ui.focusSelection.onclick = function(){ focus(state.selectionSel); };
 ui.clearSelection.onclick = clearSelection;

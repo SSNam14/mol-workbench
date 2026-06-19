@@ -26,8 +26,13 @@ molAgent.showInteractions({kind:'pi', between:[{chain:'H'}, {not:{chain:'H'}}], 
 
 // Selection and focus.
 molAgent.setSelection({chain:'H', resi:'30-35'}, {representation:'stick', color:'#fdd835'});
+molAgent.setSelection({chain:'L', resi:'90-95'}, {additive:true});
 molAgent.focus({chain:'H', resi:'30-35'});
 molAgent.clearSelection();
+
+// Mouse presets can be changed immediately.
+molAgent.setMousePreset('select-left');
+molAgent.setMousePreset('default');
 ```
 
 `molAgent.run({...})` remains available for structured compatibility objects only. String commands are disabled by design.
@@ -49,7 +54,9 @@ Supported representation names are `cartoon`, `line`, `stick`, `sphere`, `tube`,
 
 ## Mouse and keyboard behavior
 
-3Dmol.js default camera controls are used. No custom translate/rotate/wheel handler is installed. Left click selects according to the selection mode; left drag remains available for normal 3Dmol rotation. Empty clicks do not clear the selection. Press `z` to focus the current selection and `Esc` to clear it.
+Mouse behavior is selectable from the `mouse` preset control or `molAgent.setMousePreset(...)`.
+
+`select-left` is the default for this app: left click selects according to the selection mode, left drag creates a screen-space range box, right drag rotates the camera, and wheel up zooms in. Hold Shift while clicking or drag-selecting to add the new selection to the current selection. Drag range selection respects the selection mode: `atom` selects atoms in the box, `residue`/`range` selects whole residues touched by the box, `chain` selects whole chains touched by the box, and `model` selects all atoms. `default` passes mouse and wheel events through to 3Dmol.js default controls. Empty clicks do not clear the selection. Press `z` to focus the current selection and `Esc` to clear it.
 
 ## Notes
 

@@ -101,10 +101,22 @@ curl -sI http://127.0.0.1:8704/ | head
 - Command-line/natural-language UI was removed.
 - Main control surface is now the structured browser API `window.molAgent`.
 - Named regions are never auto-created. CDR is not inferred. Regions only exist after explicit `molAgent.setRegions(...)`.
-- Mouse camera controls are mostly 3Dmol defaults.
-- Wheel direction was inverted:
+- Mouse controls are selectable with the topbar `mouse` preset control or `molAgent.setMousePreset(...)`.
+- Current app default preset is `select-left`:
+  - left click: selection only
+  - left drag: screen-space range box selection
+  - Shift + click / Shift + drag: add to current selection
+  - right drag: rotate
+  - right-drag zoom is disabled
+- In `select-left`, drag range selection respects selection mode:
+  - `atom`: atoms inside the box
+  - `residue`/`range`: whole residues touched by the box
+  - `chain`: whole chains touched by the box
+  - `model`: all atoms
+- In `select-left`, wheel direction is inverted:
   - wheel up: zoom in
   - wheel down: zoom out
+- `default` passes mouse and wheel events through to 3Dmol.js default controls.
 - Selection display persists until explicit clear.
 - Hover panel is fixed-size to avoid layout flicker.
 - FPS overlay is shown at top-left.
@@ -200,4 +212,3 @@ Current user workstation note:
 ```text
 ssh D2407LP6002
 ```
-
