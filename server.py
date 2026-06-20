@@ -15,7 +15,7 @@ LAST_STRUCTURE_PATH = STATE_DIR / "last_structure.json"
 INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
-INTERACTION_INDEX_SCHEMA = "interaction-index-v3"
+INTERACTION_INDEX_SCHEMA = "interaction-index-v5"
 
 
 def normalize_entry(value):

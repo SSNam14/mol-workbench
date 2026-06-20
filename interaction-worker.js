@@ -169,10 +169,9 @@ function isAnion(a){
 }
 function isHbondAcceptor(a){
   const e=elemOf(a),r=resName(a),n=atomName(a);
-  if(isWater(a)||!['N','O','S'].includes(e))return false;
-  if(r==='LYS'&&n==='NZ')return false;
-  if(r==='ARG'&&['NE','NH1','NH2'].includes(n))return false;
-  return true;
+  if(isWater(a))return false;
+  if(e==='O')return true;
+  return e==='N'&&['HIS','HIE','HID','HIP','HSP'].includes(r)&&['ND1','NE2'].includes(n);
 }
 function hDonorHeavy(h,maps){
   if(elemOf(h)!=='H')return null;
@@ -192,7 +191,7 @@ function detectHBonds(atoms,maps,criteria){
   hAtoms.forEach(h=>hBySerial.set(h.serial,hDonorHeavy(h,maps)));
   gridPairs(hAtoms,acceptors,c.indexMaxDistance||c.maxDistance,0,function(h,a){
     const donor=hBySerial.get(h.serial);
-    if(!donor||donor.serial===a.serial||residueKey(donor)===residueKey(a))return false;
+    if(!donor||donor.serial===a.serial)return false;
     if(covalentWithin(donor,a,maps,3))return false;
     if(angleDeg(donor,h,a)<c.minDonorAngle)return false;
     if(!acceptorAngleOk(h,a,maps,c.minAcceptorAngle,c.maxAcceptorAngle))return false;

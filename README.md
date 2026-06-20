@@ -176,6 +176,7 @@ Rendering rules:
 - All nonbonded interaction guide lines are dashed.
 - A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
 - Protein cartoon alone does not count as atom-level display for interaction endpoints.
+- Hydrogen-bond guide lines connect the hydrogen atom to the acceptor atom. The donor heavy atom remains stored in the index for scope/category checks.
 - H-bond and salt sliders filter the precomputed index; they do not trigger a full reindex.
 
 ## Selection Commands
@@ -432,7 +433,7 @@ molAgent.getState();
 
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
 
-Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing.
+Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
 The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that structure first; the bundled sample structure is only used when no saved structure exists.
 

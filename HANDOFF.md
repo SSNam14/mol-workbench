@@ -42,6 +42,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Initial load restores the last loaded structure from server storage when available; otherwise it opens the bundled sample structure.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side last-structure cache so browser refresh keeps the same molecule.
 - Loading a structure starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching between previously loaded entries does not recompute interactions.
+- Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
 - Default mouse preset is `select-left`:
   - left click selects
@@ -67,6 +68,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to camera-facing mesh quads inside the 3Dmol scene, so they keep pixel-like width while participating in depth testing. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
 - All nonbonded interaction guide lines are dashed.
 - Nonbonded pair interactions are drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`). Cartoon-only protein atoms do not count as visible endpoints for interaction rendering.
+- Hydrogen-bond guide lines must connect `H -> acceptor`; the donor heavy atom is stored for classification/scope but is not the displayed line endpoint.
 - H-bond and salt UI sliders filter the precomputed interaction index; changing those cutoffs must not trigger full reindexing.
 - The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
 - Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules. CPK sphere size uses configured VDW radii times a configured scale, so H/He remain smaller than C/N/O/etc.

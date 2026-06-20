@@ -23,7 +23,7 @@ function boot(){
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
   };
-  const INTERACTION_INDEX_SCHEMA = 'interaction-index-v3';
+  const INTERACTION_INDEX_SCHEMA = 'interaction-index-v5';
   const INTERACTION_INDEX_API = 'api/interaction-index/';
   const INTERACTION_CRITERIA = {
     hbond:{indexMaxDistance:4.0,maxDistance:2.8,minDonorAngle:120,minAcceptorAngle:90,maxAcceptorAngle:360},
@@ -702,7 +702,7 @@ function boot(){
   }
   function interactionIndexCacheUrl(key){ return INTERACTION_INDEX_API+encodeURIComponent(key); }
   function validCachedInteractionIndex(payload,key){
-    return payload&&payload.schema===INTERACTION_INDEX_SCHEMA&&payload.structureKey===key&&payload.interactions&&typeof payload.interactions==='object';
+    return payload&&payload.schema===INTERACTION_INDEX_SCHEMA&&payload.structureKey===key&&Number(payload.atoms)===atoms.length&&payload.interactions&&typeof payload.interactions==='object';
   }
   function useInteractionIndexPayload(payload,jobId,source){
     const counts=countInteractionIndex(payload.interactions);
@@ -776,6 +776,11 @@ function boot(){
     const a=atomForInteractionSerial(item.a),b=atomForInteractionSerial(item.b);
     if(!isInteractionAtomShown(a)||!isInteractionAtomShown(b))return;
     drawDash(a,b,color);
+  }
+  function drawIndexedHbond(item,color){
+    const h=atomForInteractionSerial(item.h),a=atomForInteractionSerial(item.b);
+    if(!isInteractionAtomShown(h)||!isInteractionAtomShown(a))return;
+    drawDash(h,a,color);
   }
   function drawIndexedPiCation(item,color){
     const ring=atomForInteractionSerial(item.ringAtom),cat=atomForInteractionSerial(item.cat);
@@ -867,7 +872,7 @@ function boot(){
     const data=interactionIndex.interactions;
     const T=interState.types,S=interState.scope;
     try{
-      if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.hbond.color); });
+      if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedHbond(item,T.hbond.color); });
       if(T.halogen.on)(data.halogen||[]).forEach(item=>{ if(interactionInScope(item,S.noncov))drawIndexedPair(item,T.halogen.color); });
       if(T.salt.on)(data.salt||[]).forEach(item=>{ if(item.distance<=state.saltCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.salt.color); });
       if(T.aromhb.on)detectAromHB(S.noncov).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
@@ -1099,7 +1104,7 @@ function boot(){
     if(wideLineLayer)wideLineLayer.clear();
     interactionShapes=[]; interactionWideLines=[];
     resetInteractionIndex('empty');
-    model=viewer.addModel(e.data,e.fmt||'pdb');
+    model=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
     atoms=model.selectedAtoms({});
     atomByIndex=new Map();
     atomBySerial=new Map();
@@ -1123,7 +1128,7 @@ function boot(){
     if(saved){
       try{ loadEntry(saved,{persist:false}); return; }catch(err){}
     }
-    return loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD');
+    return loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY');
   }
 
   function applyClip(){
@@ -1459,7 +1464,7 @@ function installFrameSyncedMotion(targetViewer){
   $('findClear').onclick=function(){ $('findInput').value=''; findMatches=[]; findIndex=-1; $('findCount').textContent='0 matches'; $('findSel').textContent=''; clearSelection(); };
   $('findPrev').onclick=function(){ stepFind(-1); };
   $('findNext').onclick=function(){ stepFind(1); };
-  $('addRef').onclick=function(){ loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD').catch(err=>setStatus('Load failed: '+err.message)); };
+  $('addRef').onclick=function(){ loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY').catch(err=>setStatus('Load failed: '+err.message)); };
   $('add6bgt').onclick=function(){ loadUrl('data/steap1_complex_seed2.pdb','pdb','steap1_complex_seed2','Prediction','').catch(err=>setStatus('Load failed: '+err.message)); };
   $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; persistAndLoadEntry(e2).catch(err=>setStatus('Load failed: '+err.message)); e.target.value=''; };
 
