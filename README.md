@@ -8,6 +8,7 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
+- `server.py`: static file server plus persisted last-structure API
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
@@ -16,6 +17,16 @@ Runtime layout:
 This README is a tool-agnostic operation manual for agents. It assumes only that the agent can open the page and execute JavaScript in the page context, for example through a browser console, browser automation framework, extension, or test runner.
 
 Tool-specific debugging commands are intentionally not included here.
+
+## Serving The App
+
+Run the project server from the repository root:
+
+```bash
+python3 server.py --port 8704 --bind 0.0.0.0
+```
+
+Use this server instead of `python3 -m http.server`; the generic static server cannot persist the last loaded structure.
 
 ## Control Surface
 
@@ -390,7 +401,7 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
 
-The viewer stores the last loaded structure in browser storage. A browser refresh restores that structure first; `data/8UCD.pdb` is only used when no saved structure exists.
+The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that structure first; `data/8UCD.pdb` is only used when no saved structure exists.
 
 ## `molAgent.run` Compatibility Commands
 
@@ -473,6 +484,6 @@ molAgent.model();
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- The file server only serves static files.
+- `server.py` serves static files and the `/api/last-structure` persistence endpoint.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

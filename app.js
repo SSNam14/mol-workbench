@@ -23,10 +23,7 @@ function boot(){
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
   };
-  const STRUCTURE_CACHE_DB = 'molecular-viewer-cache';
-  const STRUCTURE_CACHE_STORE = 'entries';
-  const LAST_STRUCTURE_KEY = 'molecular-viewer:last-loaded-entry';
-  const LOCAL_STRUCTURE_CACHE_LIMIT = 3500000;
+  const LAST_STRUCTURE_API = 'api/last-structure';
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
@@ -108,50 +105,16 @@ function boot(){
     const name=normText(e.name||'structure');
     return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
   }
-  function openStructureCache(){
-    return new Promise((resolve,reject)=>{
-      if(!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
-      const req=window.indexedDB.open(STRUCTURE_CACHE_DB,1);
-      req.onupgradeneeded=function(){ const db=req.result; if(!db.objectStoreNames.contains(STRUCTURE_CACHE_STORE))db.createObjectStore(STRUCTURE_CACHE_STORE); };
-      req.onsuccess=function(){ resolve(req.result); };
-      req.onerror=function(){ reject(req.error||new Error('IndexedDB open failed')); };
-    });
-  }
-  function readLocalStructure(){
-    try{return normalizeStructureEntry(JSON.parse(window.localStorage.getItem(LAST_STRUCTURE_KEY)||'null'));}catch(e){return null;}
-  }
-  function writeLocalStructure(e){
-    try{
-      if(e.data&&e.data.length>LOCAL_STRUCTURE_CACHE_LIMIT){ window.localStorage.removeItem(LAST_STRUCTURE_KEY); return false; }
-      window.localStorage.setItem(LAST_STRUCTURE_KEY,JSON.stringify(e));
-      return true;
-    }catch(err){return false;}
-  }
   function saveLastStructure(e){
     const entry=normalizeStructureEntry(e);
     if(!entry)return Promise.resolve(false);
-    const localMirror=writeLocalStructure(entry);
-    return openStructureCache().then(db=>new Promise(resolve=>{
-      let done=false;
-      function finish(ok){ if(done)return; done=true; try{db.close();}catch(e){} resolve(ok); }
-      const tx=db.transaction(STRUCTURE_CACHE_STORE,'readwrite');
-      tx.objectStore(STRUCTURE_CACHE_STORE).put(entry,LAST_STRUCTURE_KEY);
-      tx.oncomplete=function(){ finish(true); };
-      tx.onerror=function(){ finish(false); };
-      tx.onabort=function(){ finish(false); };
-    })).then(ok=>ok||localMirror).catch(()=>localMirror);
+    return fetch(LAST_STRUCTURE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)}).then(res=>res.ok).catch(()=>false);
   }
   function loadLastStructure(){
-    return openStructureCache().then(db=>new Promise(resolve=>{
-      let done=false;
-      function finish(entry){ if(done)return; done=true; try{db.close();}catch(e){} resolve(entry||readLocalStructure()); }
-      const tx=db.transaction(STRUCTURE_CACHE_STORE,'readonly');
-      const req=tx.objectStore(STRUCTURE_CACHE_STORE).get(LAST_STRUCTURE_KEY);
-      req.onsuccess=function(){ finish(normalizeStructureEntry(req.result)); };
-      req.onerror=function(){ finish(null); };
-      tx.onerror=function(){ finish(null); };
-      tx.onabort=function(){ finish(null); };
-    })).catch(()=>readLocalStructure());
+    return fetch(LAST_STRUCTURE_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).then(payload=>normalizeStructureEntry(payload&&payload.entry?payload.entry:payload)).catch(()=>null);
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
@@ -840,7 +803,7 @@ function boot(){
       const chk=document.createElement('input'); chk.type='radio'; chk.checked=active; chk.style.cssText='width:12px;height:12px;accent-color:#3a7bd5;pointer-events:none';
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
       row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl);
-      row.onclick=function(){ if(e.name!==currentName)loadEntry(e); };
+      row.onclick=function(){ if(e.name!==currentName)persistAndLoadEntry(e).catch(err=>setStatus('Load failed: '+err.message)); };
       el.appendChild(row);
     });
   }
@@ -957,9 +920,17 @@ function boot(){
     const res=await fetch(url); if(!res.ok)throw new Error(res.status+' '+res.statusText);
     const data=await res.text();
     const e={name,title:title||name,pdbId:pdbId||'',data,fmt:fmt||'pdb'};
-    return loadEntry(e);
+    return persistAndLoadEntry(e);
   }
-  function loadEntry(e){
+  async function persistAndLoadEntry(e){
+    e=normalizeStructureEntry(e);
+    if(!e)throw new Error('Invalid structure data');
+    setStatus('Saving on server: '+e.name);
+    await saveLastStructure(e);
+    return loadEntry(e,{persist:false});
+  }
+  function loadEntry(e,opts){
+    opts=opts||{};
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
     if(!viewer)initViewer();
@@ -981,14 +952,14 @@ function boot(){
     buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
     showHover(null);
     setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
-    saveLastStructure(e);
+    if(opts.persist!==false)saveLastStructure(e);
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   async function loadInitialStructure(){
     const saved=await loadLastStructure();
     if(saved){
-      try{ loadEntry(saved); return; }catch(err){}
+      try{ loadEntry(saved,{persist:false}); return; }catch(err){}
     }
     return loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD');
   }
@@ -1326,7 +1297,7 @@ function installFrameSyncedMotion(targetViewer){
   $('findNext').onclick=function(){ stepFind(1); };
   $('addRef').onclick=function(){ loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD').catch(err=>setStatus('Load failed: '+err.message)); };
   $('add6bgt').onclick=function(){ loadUrl('data/steap1_complex_seed2.pdb','pdb','steap1_complex_seed2','Prediction','').catch(err=>setStatus('Load failed: '+err.message)); };
-  $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; loadEntry(e2); e.target.value=''; };
+  $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; persistAndLoadEntry(e2).catch(err=>setStatus('Load failed: '+err.message)); e.target.value=''; };
 
   window.addEventListener('keydown',function(e){
     const tag=document.activeElement&&document.activeElement.tagName;

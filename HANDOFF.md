@@ -4,9 +4,9 @@ Last updated: 2026-06-20 KST
 
 ## Purpose
 
-This project is a static, browser-based molecular viewer served from `/home/nam114/test_visualizer` on port 8704.
+This project is a browser-based molecular viewer served from `/home/nam114/test_visualizer` on port 8704.
 
-The Python HTTP server only serves files. Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment, not the file server CPU except for static file delivery.
+Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment. The server only serves files plus a small persisted last-structure API.
 
 ## Runtime Shape
 
@@ -14,6 +14,7 @@ The Python HTTP server only serves files. Rendering happens in the client browse
 - `styles.css`: static UI styling.
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
 - `wide-lines.js`: screen-space-width line renderer implemented as 3Dmol scene meshes with depth testing.
+- `server.py`: static file server plus `/api/last-structure` for server-side last molecule persistence.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/8UCD.pdb` and `data/steap1_complex_seed2.pdb`: built-in local structures.
@@ -21,7 +22,7 @@ The Python HTTP server only serves files. Rendering happens in the client browse
 Serve with:
 
 ```bash
-python3 -m http.server 8704 --bind 0.0.0.0 --directory /home/nam114/test_visualizer
+python3 server.py --port 8704 --bind 0.0.0.0
 ```
 
 Local check URL:
@@ -48,8 +49,8 @@ http://10.36.102.65:8704/
 
 ## Must-Have Behavior
 
-- Initial load restores the last loaded structure from browser storage when available; otherwise it opens local `data/8UCD.pdb`.
-- Loading a structure from the UI or `molAgent.loadUrl(...)` updates that persisted last-structure cache so browser refresh keeps the same molecule.
+- Initial load restores the last loaded structure from server storage when available; otherwise it opens local `data/8UCD.pdb`.
+- Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side last-structure cache so browser refresh keeps the same molecule.
 - `+ Pred` loads local `data/steap1_complex_seed2.pdb`.
 - Default mouse preset is `select-left`:
   - left click selects
@@ -134,10 +135,12 @@ Run focused checks after edits:
 ```bash
 cd /home/nam114/test_visualizer
 node --check app.js
+python3 -m py_compile server.py
 git diff --check
 curl -sI http://127.0.0.1:8704/ | head
 curl -sI http://127.0.0.1:8704/styles.css | head
 curl -sI http://127.0.0.1:8704/app.js | head
+curl -s http://127.0.0.1:8704/api/last-structure | head -c 200
 ```
 
 Optional local browser debugging only, when `agbrowse` is installed:

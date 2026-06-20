@@ -1,15 +1,15 @@
 {
   "cpk": {
     "stickRadius": {
-      "default": 0.105,
-      "protein": 0.09,
-      "ligand": 0.115,
+      "default": 0.145,
+      "protein": 0.145,
+      "ligand": 0.145,
       "selection": 0.145
     },
     "sphereScale": {
-      "default": 0.132,
-      "protein": 0.12,
-      "ligand": 0.156,
+      "default": 0.168,
+      "protein": 0.168,
+      "ligand": 0.168,
       "selection": 0.168
     },
     "vdwRadii": {
