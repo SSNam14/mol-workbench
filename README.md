@@ -454,17 +454,29 @@ molAgent.setChainColor("A", "#4fc3f7");
 molAgent.getChainColors();
 ```
 
-Reset all A-Z chain colors to the tracked defaults:
+Set an editable atom color. Atom keys are the currently exposed 3Dmol-style element keys:
+
+```js
+molAgent.setAtomColor("C", "#b0bec5");
+molAgent.getAtomColors();
+```
+
+Reset color schemes to the tracked defaults:
 
 ```js
 molAgent.resetChainColors();
+molAgent.resetAtomColors();
+molAgent.resetColorSchemes();
 ```
 
 Preference persistence covers:
 
 - mouse preset/action assignment
 - chain colors `A` through `Z`
+- atom colors for `H`, `C`, `N`, `O`, `S`, `P`, `F`, `CL`, `BR`, `I`, `FE`, `ZN`, `MG`, `CA`, `NA`, `K`, `MN`, `CU`, `CO`, and `NI`
 - whether protein carbon atoms use chain colors
+
+The bundled 3Dmol color scheme registry also contains these built-in `colorscheme` names: `default`, `rasmol`, `Jmol`, `greenCarbon`, `cyanCarbon`, `magentaCarbon`, `yellowCarbon`, `whiteCarbon`, `orangeCarbon`, `purpleCarbon`, `blueCarbon`, `ssPyMol`, `ssJmol`, `amino`, `shapely`, `nucleic`, `chain`, and `chainHetatm`. Separately, spectrum coloring uses the gradient registry (`rwb`, `RWB`, `roygb`, `ROYGB`, `sinebow`, `linear`, and `linear_<color>_<color>...` custom gradients).
 
 ## Loading Structures
 

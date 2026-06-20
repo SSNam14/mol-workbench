@@ -21,6 +21,7 @@ function boot(){
   const chainColors = {};
   'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
   const elemColors = {H:'#FFFFFF',C:'#B0BEC5',N:'#64B5F6',O:'#EF5350',S:'#FDD835',P:'#FFB74D',F:'#81C784',CL:'#81C784',BR:'#A1887F',I:'#9575CD',FE:'#FF8A65',ZN:'#90A4AE',MG:'#A5D6A7',CA:'#B0BEC5',NA:'#90CAF9',K:'#CE93D8',MN:'#CE93D8',CU:'#4DD0E1',CO:'#F48FB1',NI:'#80CBC4'};
+  const elementColorKeys = Object.keys(elemColors);
   const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2};
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
@@ -57,6 +58,7 @@ function boot(){
     locked:false
   };
   const defaultChainColors = Object.assign({}, chainColors);
+  const defaultElementColors = Object.assign({}, elemColors);
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
   let visualConfig = clonePlain(DEFAULT_VISUAL_CONFIG);
   let findMatches = [], findIndex = -1;
@@ -137,6 +139,7 @@ function boot(){
       mousePreset:state.mousePreset,
       mouse:cloneMouseSettings(),
       chainColors:Object.assign({},chainColors),
+      atomColors:Object.assign({},elemColors),
       carbonByChain:state.carbonByChain
     };
   }
@@ -162,6 +165,14 @@ function boot(){
       Object.keys(payload.chainColors).forEach(k=>{
         const chain=normText(k).toUpperCase(), color=toHex(payload.chainColors[k]);
         if(/^[A-Z]$/.test(chain))chainColors[chain]=color;
+      });
+    }
+    if(payload.atomColors&&typeof payload.atomColors==='object'){
+      Object.keys(elemColors).forEach(k=>delete elemColors[k]);
+      Object.assign(elemColors,defaultElementColors);
+      Object.keys(payload.atomColors).forEach(k=>{
+        const elem=normText(k).toUpperCase(), color=toHex(payload.atomColors[k]);
+        if(isEditableElementKey(elem))elemColors[elem]=color;
       });
     }
     if(typeof payload.carbonByChain==='boolean')state.carbonByChain=payload.carbonByChain;
@@ -1764,18 +1775,62 @@ function installFrameSyncedMotion(targetViewer){
   function setBackground(c){ state.bgColor=c; if(viewer&&viewer.setBackgroundColor){ viewer.setBackgroundColor(c); viewer.render(); } if($('bgCustom'))$('bgCustom').value=toHex(c); document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.style.borderColor=(b.getAttribute('data-bg').toLowerCase()===String(c).toLowerCase())?'#3a7bd5':'#777'; }); }
   function normalizeEditableColor(color){
     const value=normText(color);
-    if(!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Chain color must be a #RRGGBB value.');
+    if(!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Color must be a #RRGGBB value.');
     return value.toLowerCase();
+  }
+  function colorTextForBackground(color){
+    const hex=toHex(color).slice(1);
+    const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+    return (0.299*r+0.587*g+0.114*b)>150?'#1a1a1a':'#fff';
+  }
+  function updateColorInputTile(input,color){
+    if(!input)return;
+    const hex=normalizeEditableColor(color);
+    input.value=hex;
+    const tile=input.closest('.color-tile');
+    if(tile){
+      tile.style.background=hex;
+      tile.title=(input.dataset.chain?'Chain '+input.dataset.chain:input.dataset.atom)+' '+hex;
+      const label=tile.querySelector('.color-tile-label');
+      if(label)label.style.color=colorTextForBackground(hex);
+    }
+  }
+  function makeColorTile(kind,key,color,onChange){
+    const lab=document.createElement('label');
+    lab.className='color-tile';
+    const inp=document.createElement('input');
+    inp.type='color';
+    if(kind==='chain')inp.dataset.chain=key;
+    else inp.dataset.atom=key;
+    inp.oninput=function(){ onChange(inp.value); };
+    const sp=document.createElement('span');
+    sp.className='color-tile-label';
+    sp.textContent=key;
+    lab.appendChild(inp);
+    lab.appendChild(sp);
+    updateColorInputTile(inp,color);
+    return lab;
   }
   function setChainColor(chain,color,opts){
     const key=normText(chain).toUpperCase();
     if(!/^[A-Z]$/.test(key))throw new Error('Chain color key must be A-Z.');
     chainColors[key]=normalizeEditableColor(color);
     const input=document.querySelector('#chainColorList input[data-chain="'+key+'"]');
-    if(input&&input.value!==chainColors[key])input.value=chainColors[key];
+    updateColorInputTile(input,chainColors[key]);
     applyStylesFull(true); buildHierarchy(); drawNavigator();
     if(!opts||opts.persist!==false)savePreferences();
     return chainColors[key];
+  }
+  function isEditableElementKey(key){ return Object.prototype.hasOwnProperty.call(defaultElementColors,key); }
+  function setAtomColor(element,color,opts){
+    const key=normText(element).toUpperCase();
+    if(!isEditableElementKey(key))throw new Error('Unsupported atom color key: '+key);
+    elemColors[key]=normalizeEditableColor(color);
+    const input=document.querySelector('#atomColorList input[data-atom="'+key+'"]');
+    updateColorInputTile(input,elemColors[key]);
+    applyStylesFull(true); buildHierarchy(); drawNavigator();
+    if(!opts||opts.persist!==false)savePreferences();
+    return elemColors[key];
   }
   function resetChainColors(opts){
     Object.keys(chainColors).forEach(k=>delete chainColors[k]);
@@ -1783,10 +1838,28 @@ function installFrameSyncedMotion(targetViewer){
     applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList();
     if(!opts||opts.persist!==false)savePreferencesNow();
   }
+  function resetAtomColors(opts){
+    Object.keys(elemColors).forEach(k=>delete elemColors[k]);
+    Object.assign(elemColors,defaultElementColors);
+    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildAtomColorList();
+    if(!opts||opts.persist!==false)savePreferencesNow();
+  }
+  function resetColorSchemes(opts){
+    Object.keys(chainColors).forEach(k=>delete chainColors[k]);
+    Object.assign(chainColors,defaultChainColors);
+    Object.keys(elemColors).forEach(k=>delete elemColors[k]);
+    Object.assign(elemColors,defaultElementColors);
+    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); buildAtomColorList();
+    if(!opts||opts.persist!==false)savePreferencesNow();
+  }
   function buildChainColorList(){
     const wrap=$('chainColorList'); if(!wrap)return; wrap.innerHTML='';
     const chains='ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-    chains.forEach(c=>{ const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;font-size:12px;color:#d4d4d4'; const inp=document.createElement('input'); inp.type='color'; inp.value=toHex(chainColor(c)); inp.dataset.chain=c; inp.style.cssText='height:24px;width:34px;border:1px solid #555;border-radius:4px;background:#1f1f1f;padding:1px;cursor:pointer'; inp.oninput=function(){ setChainColor(c,inp.value,{persist:true}); }; const sp=document.createElement('span'); sp.textContent='Chain '+c; lab.appendChild(inp); lab.appendChild(sp); wrap.appendChild(lab); });
+    chains.forEach(c=>{ wrap.appendChild(makeColorTile('chain',c,toHex(chainColor(c)),function(value){ setChainColor(c,value,{persist:true}); })); });
+  }
+  function buildAtomColorList(){
+    const wrap=$('atomColorList'); if(!wrap)return; wrap.innerHTML='';
+    elementColorKeys.forEach(k=>{ wrap.appendChild(makeColorTile('atom',k,toHex(elemColors[k]),function(value){ setAtomColor(k,value,{persist:true}); })); });
   }
   // Each of the 3 buttons holds exactly one action; checking a cell that is taken by another
   // button swaps them, so no action is ever assigned to two buttons. (Wheel is fixed to zoom.)
@@ -1834,7 +1907,7 @@ function installFrameSyncedMotion(targetViewer){
   function openSettings(){
     buildMouseMatrix();
     $('setCarbonByChain').checked=state.carbonByChain;
-    setBackground(state.bgColor); buildChainColorList();
+    setBackground(state.bgColor); buildChainColorList(); buildAtomColorList();
     $('settingsOverlay').style.display='flex'; setBtnActive($('settingsBtn'),true);
   }
   function closeSettings(){ $('settingsOverlay').style.display='none'; setBtnActive($('settingsBtn'),false); }
@@ -1934,6 +2007,7 @@ function installFrameSyncedMotion(targetViewer){
     style:function(selector,representation,options){ const rule={selector:selector||{},representation:representation||'cartoon',options:options||{}}; state.styleRules.push(rule); applyStylesFull(true); return rule; },
     clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle, setSolventStyle, setOtherStyle,
     setChainColor, resetChainColors, getChainColors:function(){ return Object.assign({},chainColors); },
+    setAtomColor, resetAtomColors, resetColorSchemes, getAtomColors:function(){ return Object.assign({},elemColors); },
     getPreferences:preferencesPayload, savePreferences:savePreferencesNow,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
@@ -1971,8 +2045,8 @@ function installFrameSyncedMotion(targetViewer){
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); savePreferencesNow(); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
-  $('resetChainColors').onclick=function(){ resetChainColors(); };
-  $('settingsReset').onclick=function(){ resetChainColors({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); savePreferencesNow(); openSettings(); };
+  $('resetColorSchemes').onclick=function(){ resetColorSchemes(); };
+  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); savePreferencesNow(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };

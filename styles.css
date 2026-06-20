@@ -107,7 +107,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-087{height:30px;width:42px;background:#1f1f1f;border:1px solid #555;border-radius:5px;padding:1px;cursor:pointer}
 .u-088{display:flex;align-items:center;justify-content:space-between}
 .u-089{height:24px;padding:0 10px;border:1px solid #555;border-radius:5px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:11px}
-.u-090{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;max-height:156px;overflow:auto;padding-right:4px}
+.u-090{display:grid}
 .u-091{display:flex;align-items:center;gap:8px;font-size:12px;color:#d4d4d4;cursor:pointer}
 .u-092{width:14px;height:14px;accent-color:#3a7bd5}
 .u-093{display:grid;grid-template-columns:160px 1fr 56px;gap:9px 12px;align-items:center}
@@ -120,6 +120,17 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .mouse-preset-row{display:flex;align-items:center;gap:6px}
 .mouse-preset-btn{height:24px;padding:0 10px;border:1px solid #555;border-radius:5px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:11px}
 .mouse-preset-btn.is-active{border-color:#3a7bd5;background:#1a4f7a;color:#fff}
+
+/* Compact editable color scheme grids inside Preferences. */
+.color-scheme-block{display:grid;gap:6px}
+.color-scheme-head{font-size:11px;color:#aaa;font-weight:600}
+.color-scheme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(34px,1fr));gap:6px;max-height:94px;overflow:auto;padding-right:4px}
+.atom-color-grid{grid-template-columns:repeat(auto-fill,minmax(42px,1fr));max-height:114px}
+.color-tile{position:relative;display:block;width:32px;height:32px;border:1px solid #555;border-radius:4px;overflow:hidden;background:#1f1f1f;cursor:pointer}
+.atom-color-grid .color-tile{width:40px}
+.color-tile:hover{filter:brightness(1.18)}
+.color-tile input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.color-tile-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 10px/1 ui-monospace,Menlo,Consolas,monospace;text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
 
 /* Clip plane control (toolbar, right end of Fit/Focus/Clear row). */
 .clip-control{display:flex;align-items:center;gap:8px;height:38px;padding-left:10px;border-left:1px solid #2a2a2a}

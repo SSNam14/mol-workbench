@@ -189,10 +189,17 @@
         <div class="u-057"></div>
         <section class="u-079">
           <div class="u-088">
-            <h3 class="u-080">Chain colors</h3>
-            <button id="resetChainColors" data-btn class="u-089">Reset</button>
+            <h3 class="u-080">Color schemes</h3>
+            <button id="resetColorSchemes" data-btn class="u-089">Reset</button>
           </div>
-          <div id="chainColorList" class="u-090"></div>
+          <div class="color-scheme-block">
+            <div class="color-scheme-head">Chain</div>
+            <div id="chainColorList" class="u-090 color-scheme-grid chain-color-grid"></div>
+          </div>
+          <div class="color-scheme-block">
+            <div class="color-scheme-head">Atom</div>
+            <div id="atomColorList" class="color-scheme-grid atom-color-grid"></div>
+          </div>
           <label class="u-091"><input id="setCarbonByChain" type="checkbox" checked class="u-092">Color protein carbons by chain</label>
         </section>
 

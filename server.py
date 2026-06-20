@@ -26,6 +26,7 @@ MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
 MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
 MOUSE_PRESETS = {"select-left", "custom", "default"}
 CHAIN_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+ELEMENT_IDS = ("H", "C", "N", "O", "S", "P", "F", "CL", "BR", "I", "FE", "ZN", "MG", "CA", "NA", "K", "MN", "CU", "CO", "NI")
 
 
 def normalize_entry(value):
@@ -132,6 +133,20 @@ def normalize_preferences(value):
                 return None
             normalized_colors[chain] = color
         out["chainColors"] = normalized_colors
+
+    atom_colors = value.get("atomColors")
+    if atom_colors is not None:
+        if not isinstance(atom_colors, dict):
+            return None
+        normalized_atom_colors = {}
+        for element in ELEMENT_IDS:
+            if element not in atom_colors:
+                continue
+            color = normalize_hex_color(atom_colors[element])
+            if color is None:
+                return None
+            normalized_atom_colors[element] = color
+        out["atomColors"] = normalized_atom_colors
 
     if "carbonByChain" in value:
         out["carbonByChain"] = bool(value.get("carbonByChain"))
