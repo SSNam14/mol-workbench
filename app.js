@@ -234,10 +234,10 @@ function boot(){
     else shape.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1});
   }
   function selectionStyleSpec(rep,o){
-    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
-    if(rep==='sphere')return {sphere:{scale:o.scale||0.18,color,opacity}};
+    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
+    if(rep==='sphere')return {sphere:{scale:o.scale||0.18,colorfunc,opacity}};
     if(rep==='line')return {};
-    return {stick:{radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity}};
+    return {stick:{radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),colorfunc,opacity}};
   }
   function applyLargeSelectionStyle(selected,rep,opts){
     const sel=serialSelectorForAtoms(selected);
@@ -247,9 +247,9 @@ function boot(){
     return true;
   }
   function selectionColorStyleSpec(rep,o){
-    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
-    if(rep==='sphere')return {sphere:{scale:o.scale||0.32,color,opacity}};
-    if(rep==='stick')return {stick:{radius:o.radius||0.16,color,opacity}};
+    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
+    if(rep==='sphere')return {sphere:{scale:o.scale||0.32,colorfunc,opacity}};
+    if(rep==='stick')return {stick:{radius:o.radius||0.16,colorfunc,opacity}};
     return selectionStyleSpec(rep,o);
   }
   function applySelectionStyleOverlay(selected,rep,opts){
