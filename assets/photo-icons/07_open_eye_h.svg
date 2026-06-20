@@ -20,6 +20,7 @@
       <path d="M13 61 C27 40 44 30 64 30 C84 30 101 40 115 61 C101 82 84 92 64 92 C44 92 27 82 13 61 Z"/>
     </g>
     <circle cx="64" cy="61" r="20" fill="#87ceeb"/>
+    <text x="64" y="88" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="81" font-weight="800" fill="none" stroke="#2d2d2d" stroke-width="4" stroke-linejoin="round">H</text>
     <text x="64" y="88" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="81" font-weight="800" fill="url(#hGold)" stroke="#5b3511" stroke-width="2" paint-order="stroke fill">H</text>
   </g>
 </svg>
