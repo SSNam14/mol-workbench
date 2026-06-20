@@ -24,6 +24,9 @@ function boot(){
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:1.8}; }
+  const LARGE_SELECTOR_ARRAY_LIMIT = 32;
+  const LARGE_SELECTION_BOND_LIMIT = 700;
+  const SELECTION_DRAW_BUDGET_MS = 10;
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
@@ -37,7 +40,9 @@ function boot(){
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
   let findMatches = [], findIndex = -1;
   let seqResidues = [], seqResidueByKey = new Map(), activeSeqKeys = new Set();
+  let selectionAtoms = [];
   let selectionShapes = [];
+  let selectionHighlightJob = 0;
   let resetMouseDrag = function(){};
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -69,6 +74,38 @@ function boot(){
     if(rep==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:o.thickness||0.45,colorfunc:rc,opacity:op},line:{linewidth:o.linewidth||0.65,colorfunc:ac,opacity:op}};
     return {cartoon:{colorfunc:rc,opacity:op}};
   }
+  const selectorArrayCache = new WeakMap();
+  function isResiRangeValue(value){ return typeof value==='string'&&/^-?\d+\s*-\s*-?\d+$/.test(value.trim()); }
+  function canUseSelectorArraySet(want,key){
+    return want.length>LARGE_SELECTOR_ARRAY_LIMIT&&want.every(x=>typeof x==='string'||typeof x==='number')&&!want.some(x=>key==='resi'&&isResiRangeValue(x));
+  }
+  function selectorArraySet(want,key,mode){
+    let byKey=selectorArrayCache.get(want);
+    if(!byKey){ byKey=new Map(); selectorArrayCache.set(want,byKey); }
+    const cacheKey=key+':'+mode;
+    if(!byKey.has(cacheKey)){
+      const set=new Set();
+      want.forEach(x=>{
+        if(mode==='number'){
+          const n=Number(x);
+          if(!Number.isNaN(n))set.add(n);
+        }else set.add(normUpper(x));
+      });
+      byKey.set(cacheKey,set);
+    }
+    return byKey.get(cacheKey);
+  }
+  function matchArray(av,want,key){
+    if(canUseSelectorArraySet(want,key)){
+      const mode=(key==='serial'||key==='index'||key==='resi'||typeof av==='number')?'number':'text';
+      if(mode==='number'){
+        const n=Number(av);
+        return !Number.isNaN(n)&&selectorArraySet(want,key,mode).has(n);
+      }
+      return selectorArraySet(want,key,mode).has(normUpper(av));
+    }
+    return want.some(x=>matchScalar(av,x,key));
+  }
   function proteinBackboneStyleSpec(){
     const r=state.baseProtein;
     if(r==='off'||r==='hide')return {};
@@ -86,8 +123,8 @@ function boot(){
 
   function matchScalar(av,want,key){
     if(want==null)return true;
-    if(Array.isArray(want))return want.some(x=>matchScalar(av,x,key));
-    if(key==='resi'&&typeof want==='string'&&/^-?\d+\s*-\s*-?\d+$/.test(want.trim())){ const p=want.split('-').map(x=>Number(x.trim())),lo=Math.min(p[0],p[1]),hi=Math.max(p[0],p[1]),v=Number(av); return Number.isFinite(v)&&v>=lo&&v<=hi; }
+    if(Array.isArray(want))return matchArray(av,want,key);
+    if(key==='resi'&&isResiRangeValue(want)){ const p=want.split('-').map(x=>Number(x.trim())),lo=Math.min(p[0],p[1]),hi=Math.max(p[0],p[1]),v=Number(av); return Number.isFinite(v)&&v>=lo&&v<=hi; }
     if(typeof want==='boolean')return Boolean(av)===want;
     if(typeof av==='number'||typeof want==='number')return Number(av)===Number(want);
     return normUpper(av)===normUpper(want);
@@ -125,14 +162,33 @@ function boot(){
     return uniqueSerials(serialsForSelector(sel,opts));
   }
   function addSelectorSerials(set,sel,opts){ serialsFromSelector(sel,opts).forEach(s=>set.add(s)); }
-  function filterAtoms(sel){ const r=resolveSelector(sel||{}); return atoms.filter(a=>matchesResolvedSelector(a,r)); }
+  function isPureSerialSelector(sel){ return !!(sel&&typeof sel==='object'&&!Array.isArray(sel)&&sel.serial!=null&&Object.keys(sel).length===1); }
+  function filterAtomsBySerial(want){
+    if(Array.isArray(want)&&canUseSelectorArraySet(want,'serial')){
+      const set=selectorArraySet(want,'serial','number');
+      return atoms.filter(a=>{ const n=Number(a.serial); return !Number.isNaN(n)&&set.has(n); });
+    }
+    return atoms.filter(a=>matchScalar(a.serial,want,'serial'));
+  }
+  function filterAtoms(sel){
+    const r=resolveSelector(sel||{});
+    if(isPureSerialSelector(r))return filterAtomsBySerial(r.serial);
+    return atoms.filter(a=>matchesResolvedSelector(a,r));
+  }
   function residueUiKey(a){ return (a.chain||'')+':'+a.resi; }
-  function selectionInfo(sel){
+  function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
+  function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
     if(!sel)return info;
     try{
-      const r=resolveSelector(sel);
-      for(const a of atoms){ if(!matchesResolvedSelector(a,r))continue; info.atomCount++; info.residueKeys.add(residueUiKey(a)); }
+      const source=selected||(sel===state.selectionSel?selectionAtoms:null);
+      if(source){
+        info.atomCount=source.length;
+        source.forEach(a=>info.residueKeys.add(residueUiKey(a)));
+      }else{
+        const r=resolveSelector(sel);
+        for(const a of atoms){ if(!matchesResolvedSelector(a,r))continue; info.atomCount++; info.residueKeys.add(residueUiKey(a)); }
+      }
       info.residueCount=info.residueKeys.size;
     }catch(e){}
     return info;
@@ -149,31 +205,24 @@ function boot(){
     displayedCount = atoms.length - off.length;
   }
   function clearSelectionHighlight(){
+    selectionHighlightJob++;
     if(!viewer||!selectionShapes.length){ selectionShapes=[]; return; }
     selectionShapes.forEach(s=>{ try{ viewer.removeShape(s); }catch(e){} });
     selectionShapes=[];
   }
   function pushSelectionShape(shape){ if(shape)selectionShapes.push(shape); }
-  function drawSelectionAtom(a,o){
+  function drawSelectionAtom(shape,a,o){
     const radius=Number(o.scale||Math.max((o.radius||0.06)*2.2,0.12));
-    pushSelectionShape(viewer.addSphere({center:point(a),radius,color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity)}));
+    shape.addSphere({center:point(a),radius,color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity)});
   }
-  function drawSelectionBond(a,b,rep,o){
+  function drawSelectionBond(shape,a,b,rep,o){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
-    if(rep==='line')pushSelectionShape(viewer.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||2}));
-    else pushSelectionShape(viewer.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1}));
+    if(rep==='line')shape.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||2});
+    else shape.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1});
   }
-  function applySelectionHighlight(){
-    clearSelectionHighlight();
-    if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
-    const rep=normText(state.selectionRepresentation||'stick').toLowerCase(),opts=state.selectionOptions||{},selected=filterAtoms(state.selectionSel);
-    if(!selected.length)return;
-    const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set();
+  function selectionBondData(selected){
+    const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set(),bonds=[];
     selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(a.index); });
-    if(rep==='sphere'){
-      selected.forEach(a=>drawSelectionAtom(a,opts));
-      return;
-    }
     selected.forEach(a=>{
       (a.bonds||[]).forEach(idx=>{
         const b=atomByIndex.get(idx);
@@ -183,14 +232,52 @@ function boot(){
         bondKeys.add(ka);
         if(a.serial!=null)bondedSerials.add(a.serial);
         if(b.serial!=null)bondedSerials.add(b.serial);
-        drawSelectionBond(a,b,rep,opts);
+        bonds.push([a,b]);
       });
     });
-    selected.forEach(a=>{ if(a.serial!=null&&!bondedSerials.has(a.serial))drawSelectionAtom(a,opts); });
+    return {bonds,looseAtoms:selected.filter(a=>a.serial==null||!bondedSerials.has(a.serial))};
   }
-  function renderSelectionHighlight(render){
+  function drawSelectionChunks(shape,bonds,looseAtoms,rep,opts,job){
+    let bi=0,ai=0;
+    function consume(){
+      const start=performance.now();
+      while(bi<bonds.length&&(performance.now()-start)<SELECTION_DRAW_BUDGET_MS){
+        const p=bonds[bi++]; drawSelectionBond(shape,p[0],p[1],rep,opts);
+      }
+      while(bi>=bonds.length&&ai<looseAtoms.length&&(performance.now()-start)<SELECTION_DRAW_BUDGET_MS){
+        drawSelectionAtom(shape,looseAtoms[ai++],opts);
+      }
+      return bi<bonds.length||ai<looseAtoms.length;
+    }
+    const more=consume();
+    if(more&&typeof requestAnimationFrame==='function'){
+      requestAnimationFrame(function step(){
+        if(job!==selectionHighlightJob)return;
+        const hasMore=consume();
+        viewer.render();
+        if(hasMore)requestAnimationFrame(step);
+      });
+    }
+  }
+  function applySelectionHighlight(selectedAtomsOverride){
+    clearSelectionHighlight();
+    if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
+    const rep=normText(state.selectionRepresentation||'stick').toLowerCase(),opts=state.selectionOptions||{},selected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel);
+    if(!selected.length)return;
+    const shape=viewer.addShape({});
+    const job=selectionHighlightJob;
+    pushSelectionShape(shape);
+    if(rep==='sphere'){
+      drawSelectionChunks(shape,[],selected,'sphere',opts,job);
+      return;
+    }
+    const data=selectionBondData(selected);
+    const effectiveRep=data.bonds.length>LARGE_SELECTION_BOND_LIMIT?'line':rep;
+    drawSelectionChunks(shape,data.bonds,data.looseAtoms,effectiveRep,opts,job);
+  }
+  function renderSelectionHighlight(render,selectedAtomsOverride){
     if(!viewer||!model)return;
-    applySelectionHighlight();
+    applySelectionHighlight(selectedAtomsOverride);
     if(render!==false)viewer.render();
   }
   function applyStylesFull(render,opts){
@@ -205,7 +292,8 @@ function boot(){
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
     if(!opts.skipInteractions)redrawInteractions(false);
-    applySelectionHighlight();
+    selectionAtoms=selectedAtomsForSelector(state.selectionSel);
+    applySelectionHighlight(selectionAtoms);
     if(!opts.skipStatus)updateStatusBar();
     if(render!==false)viewer.render();
   }
@@ -269,11 +357,12 @@ function boot(){
     opts=opts||{};
     const next=normalizeSelectorInput(sel), add=!!(opts.additive||opts.add);
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
+    selectionAtoms=selectedAtomsForSelector(state.selectionSel);
     state.rangeAnchor=null; state.focusTarget=null;
     applySelectionOptionOverrides(opts);
-    renderSelectionHighlight(true);
+    renderSelectionHighlight(true,selectionAtoms);
     if(opts.focus)focus(state.selectionSel);
-    const info=selectionInfo(state.selectionSel);
+    const info=selectionInfo(state.selectionSel,selectionAtoms);
     updateSelectionStatus(info);
     syncSeqHighlight(info.residueKeys);
     setStatus((add?'Added: ':'Selected: ')+info.atomCount.toLocaleString()+' atoms');
@@ -285,8 +374,8 @@ function boot(){
     return {representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)};
   }
   function clearSelection(){
-    state.selectionSel=null; state.rangeAnchor=null; state.focusTarget=null;
-    renderSelectionHighlight(true);
+    state.selectionSel=null; selectionAtoms=[]; state.rangeAnchor=null; state.focusTarget=null;
+    renderSelectionHighlight(true,selectionAtoms);
     updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
     syncSeqHighlight(new Set());
     setStatus('Selection cleared.');
@@ -391,7 +480,7 @@ function boot(){
   function drawDashAP(a,p,c){ viewer.addLine({start:point(a),end:p,color:c,dashed:true,linewidth:2}); }
   function drawDashPP(p,q,c){ viewer.addLine({start:p,end:q,color:c,dashed:true,linewidth:2}); }
   function redrawInteractions(render){
-    if(!viewer)return; viewer.removeAllShapes(); selectionShapes=[];
+    if(!viewer)return; viewer.removeAllShapes(); selectionShapes=[]; selectionHighlightJob++;
     if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
     _lvlCache=atoms.filter(isAtomLevelShown);
     const T=interState.types,S=interState.scope;
@@ -618,7 +707,7 @@ function boot(){
     atomByIndex=new Map();
     atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); });
     currentName=e.name;
-    state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
+    state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;selectionAtoms=[];state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
     state.visibility={protein:true,ligands:true,solvents:true,other:true}; state.chainVisible={};
     setupAtomEvents();
     applyStylesFull(false);
