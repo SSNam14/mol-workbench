@@ -24,14 +24,14 @@ function boot(){
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
-  function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:lineWidths.selection}; }
+  function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
-    selectionSel:null, selectionRepresentation:'stick', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
+    selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
     visibility:{protein:true,ligands:true,solvents:true,other:true}, chainVisible:{},
     bgColor:'#000000', carbonByChain:true, hbondCutoff:3.6, saltCutoff:4.2,
@@ -246,6 +246,19 @@ function boot(){
     selectionStyleActive=true;
     return true;
   }
+  function selectionColorStyleSpec(rep,o){
+    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
+    if(rep==='sphere')return {sphere:{scale:o.scale||0.32,color,opacity}};
+    if(rep==='stick')return {stick:{radius:o.radius||0.16,color,opacity}};
+    return selectionStyleSpec(rep,o);
+  }
+  function applySelectionStyleOverlay(selected,rep,opts){
+    const sel=serialSelectorForAtoms(selected);
+    if(!sel)return false;
+    viewer.addStyle(sel,selectionColorStyleSpec(rep,opts));
+    selectionStyleActive=true;
+    return true;
+  }
   function selectionBondData(selected){
     const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set(),bonds=[];
     selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(a.index); });
@@ -293,13 +306,53 @@ function boot(){
       points.push(p);
     });
   }
-  function drawSelectionWideLines(selected,o){
+  function atomDisplayRepresentation(a){
+    if(!isAtomVisibleNow(a))return 'none';
+    let rep=null;
+    for(const r of state.styleRules){
+      if(r.disabled)continue;
+      try{
+        if(!matchesResolvedSelector(a,resolveSelector(r.selector)))continue;
+        const next=normText(r.representation).toLowerCase();
+        if(next==='hide'||next==='off')return 'none';
+        if(ATOM_REPS.has(next))rep=next;
+        else if(next==='tube')rep='line';
+      }catch(e){}
+    }
+    if(rep)return rep;
+    const base=a.hetflag?state.ligand:state.proteinAtoms;
+    return ATOM_REPS.has(base)?base:'none';
+  }
+  function partitionSelectionByDisplay(selected){
+    const groups={none:[],line:[],stick:[],sphere:[]};
+    selected.forEach(a=>{
+      const rep=atomDisplayRepresentation(a);
+      if(groups[rep])groups[rep].push(a);
+      else groups.none.push(a);
+    });
+    return groups;
+  }
+  function drawSelectionRepGroup(selected,rep,opts,job){
+    if(!selected.length)return;
+    if((rep==='stick'||rep==='sphere')&&applySelectionStyleOverlay(selected,rep,opts))return;
+    if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
+    const shape=viewer.addShape(selectionShapeStyle(opts));
+    pushSelectionShape(shape);
+    if(rep==='sphere')drawSelectionChunks(shape,[],selected,'sphere',opts,job);
+    else{
+      const data=selectionBondData(selected);
+      drawSelectionChunks(shape,data.bonds,data.looseAtoms,rep,opts,job);
+    }
+  }
+  function drawAdaptiveLineSelection(selected,o,job){
     if(!wideLineLayer)return false;
-    const lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
-    appendWideAtomLines(lines,points,selected,o,function(){ return o.color||'#fdd835'; },width,false);
-    if(!lines.length&&!points.length)return false;
-    wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
-    return true;
+    const groups=partitionSelectionByDisplay(selected),lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
+    appendWideAtomLines(lines,points,groups.none,o,function(){ return o.color||'#fdd835'; },width,false);
+    appendWideAtomLines(lines,points,groups.line,o,function(){ return o.color||'#fdd835'; },width,false);
+    if(lines.length||points.length)wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
+    drawSelectionRepGroup(groups.stick,'stick',o,job);
+    drawSelectionRepGroup(groups.sphere,'sphere',o,job);
+    return !!(lines.length||points.length||groups.stick.length||groups.sphere.length);
   }
   function addWideStyleAtoms(lines,points,sel,o,defaultColorFn,widthDefault,dashed){
     const selected=filterAtoms(sel).filter(isAtomVisibleNow);
@@ -344,12 +397,12 @@ function boot(){
   function applySelectionHighlight(selectedAtomsOverride){
     clearSelectionHighlight();
     if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
-    const rep=normText(state.selectionRepresentation||'stick').toLowerCase(),opts=state.selectionOptions||{},selected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel);
+    const rep=normText(state.selectionRepresentation||'line').toLowerCase(),opts=state.selectionOptions||{},selected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel);
     if(!selected.length)return;
-    if(rep==='line'&&drawSelectionWideLines(selected,opts))return;
+    const job=selectionHighlightJob;
+    if(rep==='line'&&drawAdaptiveLineSelection(selected,opts,job))return;
     if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
     const shape=viewer.addShape(selectionShapeStyle(opts));
-    const job=selectionHighlightJob;
     pushSelectionShape(shape);
     if(rep==='sphere'){
       drawSelectionChunks(shape,[],selected,'sphere',opts,job);
@@ -1142,7 +1195,7 @@ function installFrameSyncedMotion(targetViewer){
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=3.6; state.saltCutoff=4.2; state.selectionRepresentation='stick'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=3.6; state.saltCutoff=4.2; state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };

@@ -138,10 +138,7 @@ Useful `getState()` fields:
 Select a residue range:
 
 ```js
-molAgent.setSelection(
-  {chain: "H", resi: "30-35"},
-  {representation: "stick"}
-);
+molAgent.setSelection({chain: "H", resi: "30-35"});
 ```
 
 Add another selection instead of replacing:
@@ -149,20 +146,20 @@ Add another selection instead of replacing:
 ```js
 molAgent.setSelection(
   {chain: "L", resi: "90-95"},
-  {additive: true, representation: "stick"}
+  {additive: true}
 );
 ```
 
 Select a whole chain:
 
 ```js
-molAgent.setSelection({chain: "A"}, {representation: "stick"});
+molAgent.setSelection({chain: "A"});
 ```
 
 Select all atoms:
 
 ```js
-molAgent.setSelection({}, {representation: "stick"});
+molAgent.setSelection({});
 ```
 
 Clear selection:
@@ -193,18 +190,18 @@ molAgent.focus({chain: "H", resi: "30-35"});
 For a user request such as "select chain A on the current viewer", the direct page action is:
 
 ```js
-molAgent.setSelection({chain: "A"}, {representation: "stick"});
+molAgent.setSelection({chain: "A"});
 ```
 
 If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
-Selection highlight is intentionally not exposed in the visible GUI. The default is a thin yellow stick highlight. Agents may still change it programmatically:
+Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, or `sphere`, the highlight follows that atom-level representation using the selection color. Agents may still change highlight options programmatically:
 
 ```js
 molAgent.setSelectionHighlight({
-  representation: "stick",
+  representation: "line",
   color: "#fdd835",
-  radius: 0.06
+  linewidth: 2
 });
 ```
 
@@ -392,7 +389,7 @@ Selection:
 molAgent.run({
   type: "selection",
   selector: {chain: "H", resi: "30-35"},
-  options: {representation: "stick", focus: true}
+  options: {focus: true}
 });
 ```
 
