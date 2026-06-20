@@ -485,7 +485,7 @@ function boot(){
     for(const a of atoms){
       const c=atomCategory(a);
       if(!state.visibility[c]){off.push(a.serial);continue;}
-      if(c==='protein'&&state.chainVisible[a.chain]===false){off.push(a.serial);continue;}
+      if(c==='protein'&&!isChainVisible(a)){off.push(a.serial);continue;}
       if(c==='solvents'&&state.solvent==='off'){off.push(a.serial);continue;}
       if(c==='other'&&state.other==='off')off.push(a.serial);
     }
@@ -852,7 +852,7 @@ function boot(){
   function isAtomVisibleNow(a){
     const c=atomCategory(a);
     if(state.visibility[c]===false)return false;
-    if(c==='protein'&&state.chainVisible[a.chain]===false)return false;
+    if(c==='protein'&&!isChainVisible(a))return false;
     if(c==='solvents'&&state.solvent==='off')return false;
     if(c==='other'&&state.other==='off')return false;
     if(hiddenByRules(a))return false;
@@ -1268,10 +1268,21 @@ function boot(){
     row.appendChild(chk); row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
     return row;
   }
+  function chainVisibilityKey(entry,chain){ return (entry||'')+'\u0001'+(chain||'?'); }
+  function chainVisibilityValue(entry,chain){
+    const key=chainVisibilityKey(entry,chain);
+    if(Object.prototype.hasOwnProperty.call(state.chainVisible,key))return state.chainVisible[key]!==false;
+    if(Object.prototype.hasOwnProperty.call(state.chainVisible,chain))return state.chainVisible[chain]!==false;
+    return true;
+  }
+  function isChainVisible(a){ return chainVisibilityValue(a&&a._entryName,a&&a.chain); }
+  function setChainVisibility(entry,chain,on){
+    state.chainVisible[chainVisibilityKey(entry,chain)]=!!on;
+    delete state.chainVisible[chain];
+  }
   function hierarchySelect(sel,e){
     const additive=!!(e&&e.shiftKey);
     setSelection(sel,{additive});
-    if(!additive)focus(sel);
   }
   function hierarchySubhead(label,indent){
     const row=document.createElement('div');
@@ -1376,8 +1387,8 @@ function boot(){
           color:chainColor(g.chain),
           indent:46,
           checkbox:true,
-          checked:state.chainVisible[g.chain]!==false,
-          oncheck:function(){ state.chainVisible[g.chain]=this.checked; applyStylesFull(true); },
+          checked:chainVisibilityValue(g.entry,g.chain),
+          oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyStylesFull(true); },
           onselect:function(e){ hierarchySelect(sel,e); }
         }));
       });
