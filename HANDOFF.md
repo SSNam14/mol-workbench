@@ -66,6 +66,8 @@ http://10.36.102.65:8704/
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z`/Focus.
 - Selection highlight should remain visible without becoming overly thick; current default is a slim yellow stick highlight.
 - Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.
+- Selection changes must stay incremental. The current highlight is drawn as removable 3Dmol shape overlays, not by mutating atom styles, so selection events do not trigger full protein/ligand restyling.
+- The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
 - Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
 

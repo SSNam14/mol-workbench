@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, atoms = [], currentName = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, atoms = [], atomByIndex = new Map(), currentName = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entries = [];
   let displayedCount = 0;
 
@@ -36,6 +36,8 @@ function boot(){
   const defaultChainColors = Object.assign({}, chainColors);
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
   let findMatches = [], findIndex = -1;
+  let seqResidues = [], seqResidueByKey = new Map(), activeSeqKeys = new Set();
+  let selectionShapes = [];
   let resetMouseDrag = function(){};
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -112,10 +114,32 @@ function boot(){
   }
   function isComplexSelector(s){ return !!(s&&typeof s==='object'&&(s.not||s.or||s.and)); }
   function styleSelection(sel,opts){ const r=resolveSelector(sel); if((opts&&opts.sidechainOnly)||isComplexSelector(r))return {serial:serialsForSelector(sel,opts)}; return r; }
+  function uniqueSerials(list){
+    const seen=new Set(),out=[];
+    (list||[]).forEach(s=>{ if(s==null||seen.has(s))return; seen.add(s); out.push(s); });
+    return out;
+  }
+  function serialsFromSelector(sel,opts){
+    const r=resolveSelector(sel);
+    if(!(opts&&opts.sidechainOnly)&&r.serial!=null&&Object.keys(r).length===1)return uniqueSerials(Array.isArray(r.serial)?r.serial:[r.serial]);
+    return uniqueSerials(serialsForSelector(sel,opts));
+  }
+  function addSelectorSerials(set,sel,opts){ serialsFromSelector(sel,opts).forEach(s=>set.add(s)); }
   function filterAtoms(sel){ const r=resolveSelector(sel||{}); return atoms.filter(a=>matchesResolvedSelector(a,r)); }
-  function countAtoms(sel){ try{ const r=resolveSelector(sel); let n=0; for(const a of atoms)if(matchesResolvedSelector(a,r))n++; return n; }catch(e){return 0;} }
-  function residueCount(sel){ const r=resolveSelector(sel),set=new Set(); for(const a of atoms)if(matchesResolvedSelector(a,r))set.add((a.chain||'')+':'+a.resi); return set.size; }
-  function combineSelectors(a,b){ const seen=new Set(),ser=[]; [a,b].forEach(s=>{ serialsForSelector(s,{}).forEach(x=>{ if(!seen.has(x)){seen.add(x);ser.push(x);} }); }); return {serial:ser}; }
+  function residueUiKey(a){ return (a.chain||'')+':'+a.resi; }
+  function selectionInfo(sel){
+    const info={atomCount:0,residueCount:0,residueKeys:new Set()};
+    if(!sel)return info;
+    try{
+      const r=resolveSelector(sel);
+      for(const a of atoms){ if(!matchesResolvedSelector(a,r))continue; info.atomCount++; info.residueKeys.add(residueUiKey(a)); }
+      info.residueCount=info.residueKeys.size;
+    }catch(e){}
+    return info;
+  }
+  function countAtoms(sel){ return selectionInfo(sel).atomCount; }
+  function residueCount(sel){ return selectionInfo(sel).residueCount; }
+  function combineSelectors(a,b){ const seen=new Set(); [a,b].forEach(s=>addSelectorSerials(seen,s,{})); return {serial:Array.from(seen)}; }
   function normalizeSelectorInput(s){ if(s==null)return {}; if(typeof s!=='object')return s; return s; }
 
   function applyVisibility(){
@@ -124,20 +148,65 @@ function boot(){
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
   }
-  function applyStylesFull(render){
+  function clearSelectionHighlight(){
+    if(!viewer||!selectionShapes.length){ selectionShapes=[]; return; }
+    selectionShapes.forEach(s=>{ try{ viewer.removeShape(s); }catch(e){} });
+    selectionShapes=[];
+  }
+  function pushSelectionShape(shape){ if(shape)selectionShapes.push(shape); }
+  function drawSelectionAtom(a,o){
+    const radius=Number(o.scale||Math.max((o.radius||0.06)*2.2,0.12));
+    pushSelectionShape(viewer.addSphere({center:point(a),radius,color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity)}));
+  }
+  function drawSelectionBond(a,b,rep,o){
+    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
+    if(rep==='line')pushSelectionShape(viewer.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||2}));
+    else pushSelectionShape(viewer.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1}));
+  }
+  function applySelectionHighlight(){
+    clearSelectionHighlight();
+    if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
+    const rep=normText(state.selectionRepresentation||'stick').toLowerCase(),opts=state.selectionOptions||{},selected=filterAtoms(state.selectionSel);
+    if(!selected.length)return;
+    const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set();
+    selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(a.index); });
+    if(rep==='sphere'){
+      selected.forEach(a=>drawSelectionAtom(a,opts));
+      return;
+    }
+    selected.forEach(a=>{
+      (a.bonds||[]).forEach(idx=>{
+        const b=atomByIndex.get(idx);
+        if(!b||!selectedIndexes.has(b.index))return;
+        const ka=a.index<b.index?a.index+':'+b.index:b.index+':'+a.index;
+        if(bondKeys.has(ka))return;
+        bondKeys.add(ka);
+        if(a.serial!=null)bondedSerials.add(a.serial);
+        if(b.serial!=null)bondedSerials.add(b.serial);
+        drawSelectionBond(a,b,rep,opts);
+      });
+    });
+    selected.forEach(a=>{ if(a.serial!=null&&!bondedSerials.has(a.serial))drawSelectionAtom(a,opts); });
+  }
+  function renderSelectionHighlight(render){
     if(!viewer||!model)return;
-    const proteinSel=styleSelection({hetflag:false,not:{resn:Array.from(waterNames)}},{});
+    applySelectionHighlight();
+    if(render!==false)viewer.render();
+  }
+  function applyStylesFull(render,opts){
+    if(!viewer||!model)return;
+    opts=opts||{};
     viewer.setStyle({},{});
-    viewer.setStyle(proteinSel, proteinBackboneStyleSpec());
-    if(state.proteinAtoms!=='off')viewer.addStyle(proteinSel, proteinAtomStyleSpec());
+    viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
+    if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
     viewer.setStyle({hetflag:true}, ligandStyleSpec());
     viewer.setStyle({resn:Array.from(waterNames)},{});
     for(const r of state.styleRules){ if(r.disabled)continue; try{ viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
-    if(state.selectionSel&&state.selectionRepresentation!=='off'){ try{ viewer.addStyle(styleSelection(state.selectionSel,state.selectionOptions), styleSpec(state.selectionRepresentation,state.selectionOptions)); }catch(e){} }
-    redrawInteractions(false);
-    updateStatusBar();
+    if(!opts.skipInteractions)redrawInteractions(false);
+    applySelectionHighlight();
+    if(!opts.skipStatus)updateStatusBar();
     if(render!==false)viewer.render();
   }
 
@@ -202,18 +271,26 @@ function boot(){
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
     state.rangeAnchor=null; state.focusTarget=null;
     applySelectionOptionOverrides(opts);
-    applyStylesFull(true);
+    renderSelectionHighlight(true);
     if(opts.focus)focus(state.selectionSel);
-    setStatus((add?'Added: ':'Selected: ')+countAtoms(state.selectionSel).toLocaleString()+' atoms');
-    syncSeqHighlight();
+    const info=selectionInfo(state.selectionSel);
+    updateSelectionStatus(info);
+    syncSeqHighlight(info.residueKeys);
+    setStatus((add?'Added: ':'Selected: ')+info.atomCount.toLocaleString()+' atoms');
     return state.selectionSel;
   }
   function setSelectionHighlight(options){
     applySelectionOptionOverrides(options||{});
-    applyStylesFull(true);
+    renderSelectionHighlight(true);
     return {representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)};
   }
-  function clearSelection(){ state.selectionSel=null; state.rangeAnchor=null; state.focusTarget=null; applyStylesFull(true); syncSeqHighlight(); setStatus('Selection cleared.'); }
+  function clearSelection(){
+    state.selectionSel=null; state.rangeAnchor=null; state.focusTarget=null;
+    renderSelectionHighlight(true);
+    updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
+    syncSeqHighlight(new Set());
+    setStatus('Selection cleared.');
+  }
   function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo({},450); state.focusTarget={mode:'overview'}; return true; }
   function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s={}; viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
@@ -314,7 +391,7 @@ function boot(){
   function drawDashAP(a,p,c){ viewer.addLine({start:point(a),end:p,color:c,dashed:true,linewidth:2}); }
   function drawDashPP(p,q,c){ viewer.addLine({start:p,end:q,color:c,dashed:true,linewidth:2}); }
   function redrawInteractions(render){
-    if(!viewer)return; viewer.removeAllShapes();
+    if(!viewer)return; viewer.removeAllShapes(); selectionShapes=[];
     if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
     _lvlCache=atoms.filter(isAtomLevelShown);
     const T=interState.types,S=interState.scope;
@@ -389,9 +466,16 @@ function boot(){
     $('stMols').textContent=mols;
     $('stCharge').textContent=(charge>0?'+':'')+charge;
     $('stDisplayed').textContent=displayedCount.toLocaleString()+' of '+atoms.length.toLocaleString();
-    const selAtoms = state.selectionSel?countAtoms(state.selectionSel):0;
-    const selRes = state.selectionSel?residueCount(state.selectionSel):0;
-    $('stSel').textContent=selAtoms.toLocaleString()+' atoms, '+selRes.toLocaleString()+' residues';
+    updateSelectionStatus();
+  }
+  function updateSelectionStatus(info){
+    info=info||selectionInfo(state.selectionSel);
+    const hasSelection=!!state.selectionSel;
+    $('stSel').textContent=info.atomCount.toLocaleString()+' atoms, '+info.residueCount.toLocaleString()+' residues';
+    const label=$('curSelLabel');
+    if(label)label.textContent=hasSelection?(info.atomCount.toLocaleString()+' atoms selected'):'Current Selection';
+    const chk=$('curSelChk');
+    if(chk)chk.checked=hasSelection;
   }
 
   // ---------- Hierarchy & Entries ----------
@@ -423,7 +507,7 @@ function boot(){
   }
   function buildHierarchy(){
     const tree=$('hierarchyTree'); tree.innerHTML='';
-    $('curSelLabel').textContent = state.selectionSel ? (countAtoms(state.selectionSel).toLocaleString()+' atoms selected') : 'Current Selection';
+    updateSelectionStatus();
     const head=document.createElement('div');
     head.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:600';
     const arrow=document.createElement('span');
@@ -456,9 +540,8 @@ function boot(){
   }
 
   // ---------- Sequence viewer ----------
-  let seqResidues = [];
   function buildSequence(){
-    const body=$('seqBody'); if(!body){ seqResidues=[]; return; } body.innerHTML=''; seqResidues=[];
+    const body=$('seqBody'); if(!body){ seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set(); return; } body.innerHTML=''; seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set();
     const byChain=new Map();
     atoms.forEach(a=>{ if(!isProtein(a))return; const c=a.chain||'?'; if(!byChain.has(c))byChain.set(c,new Map()); const m=byChain.get(c); if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c}); });
     const chains=Array.from(byChain.keys()).sort();
@@ -476,18 +559,26 @@ function boot(){
         sp.onclick=function(e){ setSelection({chain:c,resi:Number(r.resi),resn:r.resn},{additive:e.shiftKey}); focus({chain:c,resi:Number(r.resi)}); };
         sp.title=c+' '+r.resn+' '+r.resi;
         strip.appendChild(sp);
-        seqResidues.push({el:sp,chain:c,resi:Number(r.resi)});
+        const key=c+':'+Number(r.resi);
+        seqResidues.push({el:sp,chain:c,resi:Number(r.resi),key});
+        if(!seqResidueByKey.has(key))seqResidueByKey.set(key,[]);
+        seqResidueByKey.get(key).push(sp);
       });
       rowWrap.appendChild(strip);
       body.appendChild(rowWrap);
     });
   }
-  function syncSeqHighlight(){
-    if(!seqResidues.length)return;
-    const resolved = state.selectionSel?resolveSelector(state.selectionSel):null;
-    const selSet=new Set();
-    if(resolved){ atoms.forEach(a=>{ if(matchesResolvedSelector(a,resolved))selSet.add((a.chain||'')+':'+a.resi); }); }
-    seqResidues.forEach(r=>{ const on=selSet.has(r.chain+':'+r.resi); r.el.style.background=on?'#fdd835':'transparent'; r.el.style.color=on?'#1a1a1a':'#c8c8c8'; });
+  function paintSeqKey(key,on){
+    const els=seqResidueByKey.get(key); if(!els)return;
+    els.forEach(el=>{ el.style.background=on?'#fdd835':'transparent'; el.style.color=on?'#1a1a1a':'#c8c8c8'; });
+  }
+  function syncSeqHighlight(residueKeys){
+    if(!seqResidueByKey.size)return;
+    const next=residueKeys||selectionInfo(state.selectionSel).residueKeys, dirty=new Set();
+    activeSeqKeys.forEach(k=>dirty.add(k));
+    next.forEach(k=>dirty.add(k));
+    dirty.forEach(k=>{ const on=next.has(k); if(activeSeqKeys.has(k)!==on)paintSeqKey(k,on); });
+    activeSeqKeys=new Set(next);
   }
 
   // ---------- Find ----------
@@ -524,6 +615,8 @@ function boot(){
     viewer.clear();
     model=viewer.addModel(e.data,e.fmt||'pdb');
     atoms=model.selectedAtoms({});
+    atomByIndex=new Map();
+    atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); });
     currentName=e.name;
     state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
     state.visibility={protein:true,ligands:true,solvents:true,other:true}; state.chainVisible={};
@@ -565,6 +658,17 @@ function boot(){
   function atomResidueKey(a){ return (a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
   function serialSelectorForAtoms(list){ const ser=[],seen=new Set(); for(const a of list){ if(a.serial==null||seen.has(a.serial))continue; seen.add(a.serial); ser.push(a.serial); } return ser.length?{serial:ser}:null; }
   function atomsInPageRect(rect){ if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return []; let pts=[]; try{ pts=viewer.modelToScreen(atoms); }catch(e){ return []; } const out=[]; for(let i=0;i<atoms.length;i++){ const p=pts[i]; if(!p||!Number.isFinite(p.x))continue; if(p.x>=rect.left&&p.x<=rect.right&&p.y>=rect.top&&p.y<=rect.bottom)out.push(atoms[i]); } return out; }
+  function atomAtPagePoint(pt,maxDist){
+    if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return null;
+    let pts=[]; try{ pts=viewer.modelToScreen(atoms); }catch(e){ return null; }
+    const max2=(maxDist||14)*(maxDist||14); let best=null,bestD=max2;
+    for(let i=0;i<atoms.length;i++){
+      const p=pts[i],a=atoms[i]; if(!p||!a||!Number.isFinite(p.x)||!isAtomVisibleNow(a))continue;
+      const dx=p.x-pt.x,dy=p.y-pt.y,d=dx*dx+dy*dy;
+      if(d<bestD){ bestD=d; best=a; }
+    }
+    return best;
+  }
   function selectorFromDragHits(hits){ if(!hits.length||state.selectionMode==='off')return null; if(state.selectionMode==='model')return {}; if(state.selectionMode==='atom')return serialSelectorForAtoms(hits); if(state.selectionMode==='chain'){ const ch=new Set(hits.map(a=>a.chain||'')); return serialSelectorForAtoms(atoms.filter(a=>ch.has(a.chain||''))); } const res=new Set(hits.map(atomResidueKey)); return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a)))); }
   function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ setStatus('No atoms in box'); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
   function isCustomMousePreset(){ return !(mousePresets[state.mousePreset]&&mousePresets[state.mousePreset].passThrough); }
@@ -640,7 +744,16 @@ function installFrameSyncedMotion(targetViewer){
 }
   function mouseButtonKey(e){ if(e.button===0)return 'left'; if(e.button===1)return 'middle'; if(e.button===2)return 'right'; return null; }
   function dragRatios(p,d){ const xr=viewer&&viewer.renderer&&viewer.renderer.getXRatio?viewer.renderer.getXRatio():1,yr=viewer&&viewer.renderer&&viewer.renderer.getYRatio?viewer.renderer.getYRatio():1; return {x:(p.x-d.startX)/viewer.WIDTH*xr,y:(p.y-d.startY)/viewer.HEIGHT*yr,xRatio:xr,yRatio:yr}; }
-  function selectAtPoint(p,e){ if(!viewer||!model||!viewer.mouseXY||!viewer.handleClickSelection)return; if(viewer.updateClickables)viewer.updateClickables(); const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e); }
+  function selectAtPoint(p,e){
+    if(viewer&&model&&viewer.modelToScreen){
+      const atom=atomAtPagePoint(p,14);
+      if(atom){ handleAtomClick(atom,e); return; }
+      setStatus('No atom under cursor');
+      return;
+    }
+    if(!viewer||!model||!viewer.mouseXY||!viewer.handleClickSelection){ setStatus('No atom under cursor'); return; }
+    const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e);
+  }
   function bindCustomMouseActions(){
     const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0}; const tol=3;
     function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0; hideDragSelectBox(); }
