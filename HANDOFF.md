@@ -41,7 +41,7 @@ http://10.36.102.65:8704/
 - Prefer dense, work-focused molecular-viewer UI over landing-page or explanatory UI.
 - Preserve fast interactive camera behavior. Do not change camera semantics to hide performance problems.
 - Keep settings extensible; the settings panel should be able to host future visual/input preferences without restructuring.
-- Keep control surfaces explicit. Selection should persist until explicit clear, not disappear because of empty clicks.
+- Keep control surfaces explicit. Empty select clicks and empty range-select drags in the viewer clear the current selection.
 - Keep `window.molAgent` as the structured automation/API surface. Do not add free-form natural-language command execution.
 
 ## Must-Have Behavior

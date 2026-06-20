@@ -783,7 +783,7 @@ function boot(){
     return best;
   }
   function selectorFromDragHits(hits){ if(!hits.length||state.selectionMode==='off')return null; if(state.selectionMode==='model')return {}; if(state.selectionMode==='atom')return serialSelectorForAtoms(hits); if(state.selectionMode==='chain'){ const ch=new Set(hits.map(a=>a.chain||'')); return serialSelectorForAtoms(atoms.filter(a=>ch.has(a.chain||''))); } const res=new Set(hits.map(atomResidueKey)); return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a)))); }
-  function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ setStatus('No atoms in box'); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
+  function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ clearSelection(); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
   function isCustomMousePreset(){ return !(mousePresets[state.mousePreset]&&mousePresets[state.mousePreset].passThrough); }
   function showViewer(){ if(!viewer)return; if(viewer.show)viewer.show(); else viewer.render(); }
 function tweenVector(from, to, amount){
@@ -861,10 +861,10 @@ function installFrameSyncedMotion(targetViewer){
     if(viewer&&model&&viewer.modelToScreen){
       const atom=atomAtPagePoint(p,14);
       if(atom){ handleAtomClick(atom,e); return; }
-      setStatus('No atom under cursor');
+      clearSelection();
       return;
     }
-    if(!viewer||!model||!viewer.mouseXY||!viewer.handleClickSelection){ setStatus('No atom under cursor'); return; }
+    if(!viewer||!model||!viewer.mouseXY||!viewer.handleClickSelection){ clearSelection(); return; }
     const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e);
   }
   function bindCustomMouseActions(){
