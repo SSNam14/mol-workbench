@@ -1268,6 +1268,72 @@ function boot(){
     row.appendChild(chk); row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
     return row;
   }
+  function hierarchySelect(sel,e){
+    const additive=!!(e&&e.shiftKey);
+    setSelection(sel,{additive});
+    if(!additive)focus(sel);
+  }
+  function hierarchySubhead(label,indent){
+    const row=document.createElement('div');
+    row.style.cssText='height:19px;padding:0 8px 0 '+(indent||34)+'px;font-size:10.5px;color:#8f8f8f;display:flex;align-items:center;text-transform:uppercase;letter-spacing:.04em';
+    row.textContent=label;
+    return row;
+  }
+  function hierarchyChildRow(opts){
+    const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.style.cssText='display:flex;align-items:center;gap:7px;min-height:20px;padding:0 8px 0 '+(opts.indent||34)+'px;font-size:11.5px;cursor:pointer';
+    if(opts.checkbox){
+      const chk=document.createElement('input');
+      chk.type='checkbox';
+      chk.checked=opts.checked!==false;
+      chk.style.cssText='width:12px;height:12px;accent-color:#3a7bd5;cursor:pointer;flex:none';
+      chk.onclick=function(e){ e.stopPropagation(); };
+      chk.onchange=opts.oncheck;
+      row.appendChild(chk);
+    }
+    const dot=document.createElement('span');
+    dot.style.cssText='width:8px;height:8px;border-radius:2px;background:'+(opts.color||'#888')+';flex:none';
+    const lab=document.createElement('span');
+    lab.textContent=opts.label;
+    lab.title=opts.title||opts.label;
+    lab.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const cnt=document.createElement('span');
+    cnt.textContent=opts.count?'('+opts.count+')':'';
+    cnt.style.cssText='color:#777;font-size:10px;flex:none';
+    row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
+    row.onclick=function(e){ if(opts.onselect)opts.onselect(e); };
+    return row;
+  }
+  function residueSortValue(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
+  function compareHierarchyGroups(a,b){
+    const ea=normText(a.entryTitle||a.entry),eb=normText(b.entryTitle||b.entry);
+    if(ea!==eb)return ea<eb?-1:1;
+    const ca=normText(a.chain),cb=normText(b.chain);
+    if(ca!==cb)return ca<cb?-1:1;
+    const an=residueSortValue(a.resi),bn=residueSortValue(b.resi);
+    if(an!=null&&bn!=null&&an!==bn)return an-bn;
+    const ra=normText(a.resi),rb=normText(b.resi);
+    if(ra!==rb)return ra<rb?-1:1;
+    return normText(a.resn)<normText(b.resn)?-1:(normText(a.resn)>normText(b.resn)?1:0);
+  }
+  function hierarchyPrefix(g,multi){ return multi?(normText(g.entryTitle||g.entry)+': '):''; }
+  function moleculeLabel(g,multi){
+    const parts=[hierarchyPrefix(g,multi)+normText(g.resn||'MOL')];
+    if(g.resi!=null&&normText(g.resi)!=='')parts.push(String(g.resi));
+    if(normText(g.chain))parts.push('Chain '+g.chain);
+    return parts.join(' ');
+  }
+  function residueGroupKey(a){ return [a._entryName||'',a.chain||'',a.resn||'',a.resi==null?'':a.resi].join('\u0001'); }
+  function groupedResidues(list){
+    const by=new Map();
+    list.forEach(a=>{
+      const key=residueGroupKey(a);
+      if(!by.has(key))by.set(key,{entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'',resn:a.resn||'',resi:a.resi,atoms:[]});
+      by.get(key).atoms.push(a);
+    });
+    return Array.from(by.values()).sort(compareHierarchyGroups);
+  }
   function buildHierarchy(){
     const tree=$('hierarchyTree'); tree.innerHTML='';
     updateSelectionStatus();
@@ -1282,25 +1348,52 @@ function boot(){
     tree.appendChild(head);
     const counts={protein:0,ligands:0,solvents:0,other:0};
     atoms.forEach(a=>{ counts[atomCategory(a)]++; });
+    const multiEntry=shown.length>1;
+
     tree.appendChild(catRow('Ligands','ligands','#FF8A65',counts.ligands));
+    groupedResidues(atoms.filter(isLigand)).forEach(g=>{
+      const sel=serialSelectorForAtoms(g.atoms);
+      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+    });
+
+    const proteinAtoms=atoms.filter(isProtein);
     tree.appendChild(catRow('Protein','protein','#64B5F6',counts.protein));
-    tree.appendChild(catRow('Solvents','solvents','#4DD0E1',counts.solvents));
-    tree.appendChild(catRow('Other','other','#CE93D8',counts.other));
-    // chains
-    const chains=Array.from(new Set(atoms.filter(isProtein).map(a=>a.chain||'?'))).sort();
+    const byChain=new Map();
+    proteinAtoms.forEach(a=>{
+      const key=(a._entryName||'')+'\u0001'+(a.chain||'?');
+      if(!byChain.has(key))byChain.set(key,{entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'?',atoms:[]});
+      byChain.get(key).atoms.push(a);
+    });
+    const chains=Array.from(byChain.values()).sort(compareHierarchyGroups);
     if(chains.length){
-      const ch=document.createElement('div'); ch.style.cssText='height:21px;padding:0 8px;font-size:11px;color:#8f8f8f;display:flex;align-items:center'; ch.textContent='Chains'; tree.appendChild(ch);
-      chains.forEach(c=>{
-        const row=document.createElement('div'); row.setAttribute('data-row',''); row.style.cssText='display:flex;align-items:center;gap:7px;height:20px;padding:0 8px 0 34px;font-size:11.5px;cursor:pointer';
-        const chk=document.createElement('input'); chk.type='checkbox'; chk.checked=state.chainVisible[c]!==false; chk.style.cssText='width:12px;height:12px;accent-color:#3a7bd5;cursor:pointer';
-        chk.onchange=function(){ state.chainVisible[c]=chk.checked; applyStylesFull(true); };
-        const dot=document.createElement('span'); dot.style.cssText='width:8px;height:8px;border-radius:2px;background:'+chainColor(c);
-        const lab=document.createElement('span'); lab.textContent='Chain '+c; lab.style.color='#d4d4d4';
-        row.appendChild(chk); row.appendChild(dot); row.appendChild(lab);
-        row.onclick=function(e){ if(e.target===chk)return; setSelection({chain:c},{}); focus({chain:c}); };
-        tree.appendChild(row);
+      tree.appendChild(hierarchySubhead('Chains',34));
+      chains.forEach(g=>{
+        const sel=serialSelectorForAtoms(g.atoms);
+        tree.appendChild(hierarchyChildRow({
+          label:hierarchyPrefix(g,multiEntry)+'Chain '+g.chain,
+          title:hierarchyPrefix(g,multiEntry)+'Chain '+g.chain,
+          count:g.atoms.length,
+          color:chainColor(g.chain),
+          indent:46,
+          checkbox:true,
+          checked:state.chainVisible[g.chain]!==false,
+          oncheck:function(){ state.chainVisible[g.chain]=this.checked; applyStylesFull(true); },
+          onselect:function(e){ hierarchySelect(sel,e); }
+        }));
       });
     }
+
+    tree.appendChild(catRow('Solvents','solvents','#4DD0E1',counts.solvents));
+    groupedResidues(atoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
+      const sel=serialSelectorForAtoms(g.atoms);
+      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+    });
+
+    tree.appendChild(catRow('Other','other','#CE93D8',counts.other));
+    groupedResidues(atoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
+      const sel=serialSelectorForAtoms(g.atoms);
+      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+    });
   }
 
   // ---------- Sequence viewer ----------
