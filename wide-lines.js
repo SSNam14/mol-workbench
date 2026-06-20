@@ -58,7 +58,7 @@ function viewKey(viewer){
 
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
-const DEFAULT_LINE_WIDTH = 4;
+const DEFAULT_LINE_WIDTH = 2;
 
 class MolWideLineLayer{
   constructor(host,getViewer){

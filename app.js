@@ -19,7 +19,7 @@ function boot(){
   const chainColors = {};
   'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
   const elemColors = {H:'#FFFFFF',C:'#B0BEC5',N:'#64B5F6',O:'#EF5350',S:'#FDD835',P:'#FFB74D',F:'#81C784',CL:'#81C784',BR:'#A1887F',I:'#9575CD',FE:'#FF8A65',ZN:'#90A4AE',MG:'#A5D6A7',CA:'#B0BEC5',NA:'#90CAF9',K:'#CE93D8',MN:'#CE93D8',CU:'#4DD0E1',CO:'#F48FB1',NI:'#80CBC4'};
-  const lineWidths = {fallback:4,selection:3.6,protein:2.3,ligand:2.5,tube:1.3,interaction:4,interactionSolid:8};
+  const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2,interactionSolid:2};
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
