@@ -20,6 +20,9 @@ function boot(){
   'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
   const elemColors = {H:'#FFFFFF',C:'#B0BEC5',N:'#64B5F6',O:'#EF5350',S:'#FDD835',P:'#FFB74D',F:'#81C784',CL:'#81C784',BR:'#A1887F',I:'#9575CD',FE:'#FF8A65',ZN:'#90A4AE',MG:'#A5D6A7',CA:'#B0BEC5',NA:'#90CAF9',K:'#CE93D8',MN:'#CE93D8',CU:'#4DD0E1',CO:'#F48FB1',NI:'#80CBC4'};
   const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2,interactionSolid:2};
+  const DEFAULT_VISUAL_CONFIG = {
+    cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
+  };
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
@@ -39,6 +42,7 @@ function boot(){
   };
   const defaultChainColors = Object.assign({}, chainColors);
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
+  let visualConfig = clonePlain(DEFAULT_VISUAL_CONFIG);
   let findMatches = [], findIndex = -1;
   let seqResidues = [], seqResidueByKey = new Map(), activeSeqKeys = new Set();
   let selectionAtoms = [];
@@ -54,6 +58,47 @@ function boot(){
   function nextId(p){ return p + '-' + (idSeq++); }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
+  function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
+  function mergePlain(base,extra){
+    if(!extra||typeof extra!=='object'||Array.isArray(extra))return base;
+    Object.keys(extra).forEach(k=>{
+      const v=extra[k];
+      if(v&&typeof v==='object'&&!Array.isArray(v)){
+        if(!base[k]||typeof base[k]!=='object'||Array.isArray(base[k]))base[k]={};
+        mergePlain(base[k],v);
+      }else if(v!==undefined)base[k]=v;
+    });
+    return base;
+  }
+  function positiveNumber(v,fallback){ const n=Number(v); return Number.isFinite(n)&&n>0?n:fallback; }
+  function configuredNumber(group,context,fallback){
+    const obj=visualConfig.cpk&&visualConfig.cpk[group]||{};
+    return positiveNumber(obj[context],positiveNumber(obj.default,fallback));
+  }
+  function cpkStyleSpec(colorfunc,opacity,context,o){
+    o=o||{};
+    const stickRadius=positiveNumber(o.radius,configuredNumber('stickRadius',context||'default'));
+    const sphereScale=positiveNumber(o.scale,configuredNumber('sphereScale',context||'default'));
+    const stick={colorfunc,opacity},sphere={colorfunc,opacity};
+    if(stickRadius!=null)stick.radius=stickRadius;
+    if(sphereScale!=null)sphere.scale=sphereScale;
+    return {stick,sphere};
+  }
+  function applyVdwRadiiConfig(){
+    const target=window.$3Dmol&&window.$3Dmol.GLModel&&window.$3Dmol.GLModel.vdwRadii;
+    const radii=visualConfig.cpk&&visualConfig.cpk.vdwRadii;
+    if(!target||!radii)return;
+    Object.keys(radii).forEach(k=>{ const n=Number(radii[k]); if(Number.isFinite(n)&&n>0)target[k]=n; });
+  }
+  async function loadVisualConfig(){
+    visualConfig=clonePlain(DEFAULT_VISUAL_CONFIG);
+    try{
+      const res=await fetch('config/visualization.json',{cache:'no-store'});
+      if(res.ok)mergePlain(visualConfig,await res.json());
+    }catch(e){}
+    applyVdwRadiiConfig();
+    return clonePlain(visualConfig);
+  }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
   function elementColor(a){ return elemColors[atomElem(a)]||'#D1D5DB'; }
@@ -76,7 +121,7 @@ function boot(){
     if(rep==='line')return {};
     if(rep==='stick')return {stick:{radius:o.radius||0.17,colorfunc:ac,opacity:op}};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.3,colorfunc:ac,opacity:op}};
-    if(rep==='cpk')return {stick:{radius:o.radius||0.12,colorfunc:ac,opacity:op},sphere:{scale:o.scale||0.25,colorfunc:ac,opacity:op}};
+    if(rep==='cpk')return cpkStyleSpec(ac,op,'default',o);
     if(rep==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:o.thickness||0.45,colorfunc:rc,opacity:op}};
     return {cartoon:{colorfunc:rc,opacity:op}};
   }
@@ -123,10 +168,10 @@ function boot(){
     if(r==='line')return {};
     if(r==='stick')return {stick:{radius:0.14,colorfunc:chainAwareAtomColor}};
     if(r==='sphere')return {sphere:{scale:0.28,colorfunc:chainAwareAtomColor}};
-    if(r==='cpk')return {stick:{radius:0.1,colorfunc:chainAwareAtomColor},sphere:{scale:0.23,colorfunc:chainAwareAtomColor}};
+    if(r==='cpk')return cpkStyleSpec(chainAwareAtomColor,1,'protein',{});
     return {};
   }
-  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; if(r==='cpk')return {stick:{radius:0.13,colorfunc:elementColor},sphere:{scale:0.3,colorfunc:elementColor}}; return {stick:{radius:0.2,colorfunc:elementColor}}; }
+  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; if(r==='cpk')return cpkStyleSpec(elementColor,1,'ligand',{}); return {stick:{radius:0.2,colorfunc:elementColor}}; }
 
   function matchScalar(av,want,key){
     if(want==null)return true;
@@ -239,7 +284,7 @@ function boot(){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.18,colorfunc,opacity}};
     if(rep==='line')return {};
-    if(rep==='cpk')return {stick:{radius:o.radius||0.06,colorfunc,opacity},sphere:{scale:o.scale||0.18,colorfunc,opacity}};
+    if(rep==='cpk')return cpkStyleSpec(colorfunc,opacity,'selection',o);
     return {stick:{radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),colorfunc,opacity}};
   }
   function applyLargeSelectionStyle(selected,rep,opts){
@@ -253,7 +298,7 @@ function boot(){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.32,colorfunc,opacity}};
     if(rep==='stick')return {stick:{radius:o.radius||0.16,colorfunc,opacity}};
-    if(rep==='cpk')return {stick:{radius:o.radius||0.16,colorfunc,opacity},sphere:{scale:o.scale||0.32,colorfunc,opacity}};
+    if(rep==='cpk')return cpkStyleSpec(colorfunc,opacity,'selection',o);
     return selectionStyleSpec(rep,o);
   }
   function applySelectionStyleOverlay(selected,rep,opts){
@@ -1170,6 +1215,8 @@ function installFrameSyncedMotion(targetViewer){
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
     getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getVisualConfig:function(){ return clonePlain(visualConfig); },
+    reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
     loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }
   };
 
@@ -1228,7 +1275,9 @@ function installFrameSyncedMotion(targetViewer){
   initViewer();
   startFpsOverlay();
   $('selLevel').value=state.selectionMode;
-  loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD').catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
+  loadVisualConfig().then(function(){
+    return loadUrl('data/8UCD.pdb','pdb','8UCD','8UCD - prepared','8UCD');
+  }).catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
 }
 function waitFor3Dmol(){
   if(window.$3Dmol){ boot(); return; }

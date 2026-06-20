@@ -8,6 +8,7 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
+- `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
 ## Purpose Of This Manual
@@ -269,6 +270,12 @@ molAgent.setLigandStyle("sphere");
 molAgent.setLigandStyle("cpk");
 ```
 
+CPK defaults are loaded from `config/visualization.json`. Edit that tracked file to adjust default CPK stick radius, CPK sphere scale, or VDW radii, then reload the page or run:
+
+```js
+molAgent.reloadVisualConfig();
+```
+
 Supported representations:
 
 - `cartoon`
@@ -294,7 +301,7 @@ Common style options:
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
 - `linewidth`: line width in screen pixels for app-managed `line` render paths
-- For `cpk`, `radius` controls stick radius and `scale` controls sphere scale.
+- For `cpk`, `radius` controls stick radius and `scale` controls the VDW sphere multiplier. Atom sizes remain element-dependent through the configured VDW radii.
 
 Line rendering note:
 

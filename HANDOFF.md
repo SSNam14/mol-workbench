@@ -14,6 +14,7 @@ The Python HTTP server only serves files. Rendering happens in the client browse
 - `styles.css`: static UI styling.
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
 - `wide-lines.js`: screen-space-width line renderer implemented as 3Dmol scene meshes with depth testing.
+- `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/8UCD.pdb` and `data/steap1_complex_seed2.pdb`: built-in local structures.
 
@@ -72,7 +73,7 @@ http://10.36.102.65:8704/
 - Large range selections must avoid O(atom count * selector size) matching. Large `serial: [...]` selectors use cached Set lookup and reuse the selected atom list for highlight/status updates.
 - `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to camera-facing mesh quads inside the 3Dmol scene, so they keep pixel-like width while participating in depth testing. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
 - The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
-- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules.
+- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules. CPK sphere size uses configured VDW radii times a configured scale, so H/He remain smaller than C/N/O/etc.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
 
 ## API Contract
@@ -97,6 +98,8 @@ molAgent.setMouseActions(actions);
 molAgent.getMouseActions();
 molAgent.selectAtoms(selector);
 molAgent.getState();
+molAgent.getVisualConfig();
+molAgent.reloadVisualConfig();
 molAgent.loadUrl(url, fmt, name, title, pdbId);
 molAgent.run(commandObject);
 molAgent.viewer();
