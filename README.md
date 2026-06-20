@@ -51,6 +51,9 @@ Expected initial state:
 
 ```js
 {
+  proteinBackbone: "cartoon",
+  proteinAtoms: "off",
+  ligand: "stick",
   mousePreset: "select-left",
   mouseActions: {
     buttons: {left: "select", right: "rotate", middle: "pan"},
@@ -59,7 +62,7 @@ Expected initial state:
 }
 ```
 
-The exact object also includes current `selection`, `styleRules`, and `hiddenRules`.
+The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`.
 
 ## Selector Objects
 
@@ -119,9 +122,13 @@ Useful `getState()` fields:
 
 - `file`: current structure name
 - `atoms`: total loaded atom count
+- `proteinBackbone`: protein backbone representation, usually `cartoon`, `tube`, or `off`
+- `proteinAtoms`: protein atom-level representation, usually `off`, `line`, `stick`, or `sphere`
+- `ligand`: ligand representation
 - `mousePreset`: current mouse preset name
 - `mouseActions`: current button/wheel assignment
 - `selection`: current selection selector
+- `selectionHighlight`: fixed selection highlight style used for selected atoms
 - `styleRules`: persistent style rules added through `molAgent.style(...)`
 - `hiddenRules`: hide rules added through `molAgent.run({type: "hide", ...})`
 
@@ -168,6 +175,7 @@ Selection options currently used by `setSelection`:
 - `representation`: `stick`, `line`, `tube`, `sphere`, or `off`
 - `additive` / `add`: add to existing selection
 - `focus`: focus after setting selection
+- `color`, `opacity`, `radius`, `scale`, `thickness`, `linewidth`: optional selection highlight overrides
 
 Focus current selection:
 
@@ -188,6 +196,16 @@ molAgent.setSelection({chain: "A"}, {representation: "stick"});
 ```
 
 If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
+
+Selection highlight is intentionally not exposed in the visible GUI. The default is a thin yellow stick highlight. Agents may still change it programmatically:
+
+```js
+molAgent.setSelectionHighlight({
+  representation: "stick",
+  color: "#fdd835",
+  radius: 0.06
+});
+```
 
 ## Styling Commands
 
@@ -226,14 +244,21 @@ Clear all added style/hide rules:
 molAgent.clearStyles();
 ```
 
-Change base protein representation:
+Change protein backbone representation:
 
 ```js
-molAgent.setBaseStyle("cartoon");
-molAgent.setBaseStyle("line");
-molAgent.setBaseStyle("stick");
-molAgent.setBaseStyle("sphere");
-molAgent.setBaseStyle("tube");
+molAgent.setProteinBackboneStyle("cartoon");
+molAgent.setProteinBackboneStyle("tube");
+molAgent.setProteinBackboneStyle("off");
+```
+
+Change protein atom-level representation independently from the backbone:
+
+```js
+molAgent.setProteinAtomStyle("off");
+molAgent.setProteinAtomStyle("line");
+molAgent.setProteinAtomStyle("stick");
+molAgent.setProteinAtomStyle("sphere");
 ```
 
 Change ligand representation:
@@ -252,6 +277,13 @@ Supported representations:
 - `sphere`
 - `tube`
 - `hide` / `off`
+
+Representation scope:
+
+- Protein backbone GUI/API supports `cartoon`, `tube`, and `off`.
+- Protein atom GUI/API supports `off`, `line`, `stick`, and `sphere`.
+- Ligand GUI/API supports `stick`, `line`, and `sphere`.
+- `molAgent.style(...)` can still apply supported representations to any selector as a persistent style rule.
 
 Common style options:
 

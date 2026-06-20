@@ -25,7 +25,7 @@ function boot(){
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:1.8}; }
   const state = {
-    baseProtein:'cartoon', ligand:'stick',
+    baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
     selectionSel:null, selectionRepresentation:'stick', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
@@ -66,6 +66,19 @@ function boot(){
     if(rep==='sphere')return {sphere:{scale:o.scale||0.3,colorfunc:ac,opacity:op}};
     if(rep==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:o.thickness||0.45,colorfunc:rc,opacity:op},line:{linewidth:o.linewidth||0.65,colorfunc:ac,opacity:op}};
     return {cartoon:{colorfunc:rc,opacity:op}};
+  }
+  function proteinBackboneStyleSpec(){
+    const r=state.baseProtein;
+    if(r==='off'||r==='hide')return {};
+    if(r==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:0.45,colorfunc:chainRibbonColor}};
+    return {cartoon:{colorfunc:chainRibbonColor}};
+  }
+  function proteinAtomStyleSpec(){
+    const r=state.proteinAtoms;
+    if(r==='line')return {line:{linewidth:1.15,colorfunc:chainAwareAtomColor}};
+    if(r==='stick')return {stick:{radius:0.14,colorfunc:chainAwareAtomColor}};
+    if(r==='sphere')return {sphere:{scale:0.28,colorfunc:chainAwareAtomColor}};
+    return {};
   }
   function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {line:{linewidth:1.25,colorfunc:elementColor}}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; return {stick:{radius:0.2,colorfunc:elementColor}}; }
 
@@ -113,8 +126,10 @@ function boot(){
   }
   function applyStylesFull(render){
     if(!viewer||!model)return;
+    const proteinSel=styleSelection({hetflag:false,not:{resn:Array.from(waterNames)}},{});
     viewer.setStyle({},{});
-    viewer.setStyle({hetflag:false}, styleSpec(state.baseProtein,{}));
+    viewer.setStyle(proteinSel, proteinBackboneStyleSpec());
+    if(state.proteinAtoms!=='off')viewer.addStyle(proteinSel, proteinAtomStyleSpec());
     viewer.setStyle({hetflag:true}, ligandStyleSpec());
     viewer.setStyle({resn:Array.from(waterNames)},{});
     for(const r of state.styleRules){ if(r.disabled)continue; try{ viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
@@ -174,20 +189,31 @@ function boot(){
     const lo=Math.min(state.rangeAnchor.resi,resi),hi=Math.max(state.rangeAnchor.resi,resi); state.rangeAnchor=null;
     setSelection({chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
   }
+  function applySelectionOptionOverrides(opts){
+    if(opts.representation)state.selectionRepresentation=normText(opts.representation).toLowerCase();
+    const nextOpts=opts.options&&typeof opts.options==='object'?opts.options:opts;
+    ['color','opacity','radius','scale','thickness','linewidth'].forEach(k=>{
+      if(nextOpts[k]!=null)state.selectionOptions[k]=nextOpts[k];
+    });
+  }
   function setSelection(sel,opts){
     opts=opts||{};
     const next=normalizeSelectorInput(sel), add=!!(opts.additive||opts.add);
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
     state.rangeAnchor=null; state.focusTarget=null;
-    if(opts.representation)state.selectionRepresentation=normText(opts.representation).toLowerCase();
-    $('selectionRepresentation').value=state.selectionRepresentation;
+    applySelectionOptionOverrides(opts);
     applyStylesFull(true);
     if(opts.focus)focus(state.selectionSel);
     setStatus((add?'Added: ':'Selected: ')+countAtoms(state.selectionSel).toLocaleString()+' atoms');
     syncSeqHighlight();
     return state.selectionSel;
   }
-  function clearSelection(){ state.selectionSel=null; state.rangeAnchor=null; state.focusTarget=null; state.selectionOptions=defaultSelectionOptions(); applyStylesFull(true); syncSeqHighlight(); setStatus('Selection cleared.'); }
+  function setSelectionHighlight(options){
+    applySelectionOptionOverrides(options||{});
+    applyStylesFull(true);
+    return {representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)};
+  }
+  function clearSelection(){ state.selectionSel=null; state.rangeAnchor=null; state.focusTarget=null; applyStylesFull(true); syncSeqHighlight(); setStatus('Selection cleared.'); }
   function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo({},450); state.focusTarget={mode:'overview'}; return true; }
   function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s={}; viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
@@ -218,7 +244,7 @@ function boot(){
     if(!isAtomVisibleNow(a))return false;
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector))&&ATOM_REPS.has(normText(r.representation).toLowerCase()))return true; }catch(e){} }
     if(a.hetflag)return ATOM_REPS.has(state.ligand);
-    return ATOM_REPS.has(state.baseProtein);
+    return ATOM_REPS.has(state.proteinAtoms);
   }
   function atomLevelAtoms(){ return _lvlCache||atoms.filter(isAtomLevelShown); }
   const interState={ scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
@@ -698,7 +724,7 @@ function installFrameSyncedMotion(targetViewer){
   }
   function openSettings(){
     buildMouseMatrix();
-    $('setCarbonByChain').checked=state.carbonByChain; $('setSelColor').value=toHex(state.selectionOptions.color||'#fdd835');
+    $('setCarbonByChain').checked=state.carbonByChain;
     $('setHbond').value=state.hbondCutoff; $('hbondVal').textContent=Number(state.hbondCutoff).toFixed(2);
     $('setSalt').value=state.saltCutoff; $('saltVal').textContent=Number(state.saltCutoff).toFixed(1);
     setBackground(state.bgColor); buildChainColorList();
@@ -735,7 +761,27 @@ function installFrameSyncedMotion(targetViewer){
     return cloneMouseSettings();
   }
   function clearStyles(){ state.styleRules=[]; state.hiddenRules=[]; applyStylesFull(true); }
-  function setBaseStyle(representation){ state.baseProtein=normText(representation||'cartoon').toLowerCase(); if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; applyStylesFull(true); }
+  function setProteinBackboneStyle(representation){
+    let rep=normText(representation||'cartoon').toLowerCase();
+    if(rep==='hide')rep='off';
+    state.baseProtein=(rep==='tube'||rep==='off')?rep:'cartoon';
+    if($('proteinStyle'))$('proteinStyle').value=state.baseProtein;
+    applyStylesFull(true);
+    return state.baseProtein;
+  }
+  function setProteinAtomStyle(representation){
+    let rep=normText(representation||'off').toLowerCase();
+    if(rep==='hide')rep='off';
+    state.proteinAtoms=ATOM_REPS.has(rep)?rep:'off';
+    if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms;
+    applyStylesFull(true);
+    return state.proteinAtoms;
+  }
+  function setBaseStyle(representation){
+    const rep=normText(representation||'cartoon').toLowerCase();
+    if(ATOM_REPS.has(rep))return setProteinAtomStyle(rep);
+    return setProteinBackboneStyle(rep);
+  }
   function setLigandStyle(representation){ state.ligand=normText(representation||'stick').toLowerCase(); if($('ligandStyle'))$('ligandStyle').value=state.ligand; applyStylesFull(true); }
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
@@ -748,12 +794,12 @@ function installFrameSyncedMotion(targetViewer){
     throw new Error('Unsupported run() command type: '+(type||'-'));
   }
   window.molAgent={
-    setSelection, clearSelection, focus,
+    setSelection, setSelectionHighlight, clearSelection, focus,
     style:function(selector,representation,options){ const rule={selector:selector||{},representation:representation||'cartoon',options:options||{}}; state.styleRules.push(rule); applyStylesFull(true); return rule; },
-    clearStyle:clearStyles, clearStyles, setBaseStyle, setLigandStyle,
+    clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
-    getState:function(){ return {file:currentName,atoms:atoms.length,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }
   };
 
@@ -771,9 +817,8 @@ function installFrameSyncedMotion(targetViewer){
   $('styleBtn').onclick=function(){ const p=$('stylePopover'); p.hidden=!p.hidden; };
   $('styleClose').onclick=function(){ $('stylePopover').hidden=true; };
   $('proteinStyle').onchange=function(){ state.baseProtein=$('proteinStyle').value; applyStylesFull(true); };
+  $('proteinAtomStyle').onchange=function(){ state.proteinAtoms=$('proteinAtomStyle').value; applyStylesFull(true); };
   $('ligandStyle').onchange=function(){ state.ligand=$('ligandStyle').value; applyStylesFull(true); };
-  $('selectionRepresentation').onchange=function(){ state.selectionRepresentation=$('selectionRepresentation').value; applyStylesFull(true); };
-  $('selColor').onchange=function(){ state.selectionOptions.color=$('selColor').value; applyStylesFull(true); };
   $('clipNear').oninput=applyClip; $('clipFar').oninput=applyClip;
   $('resetClip').onclick=function(){ $('clipNear').value=-100; $('clipFar').value=100; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
@@ -781,13 +826,12 @@ function installFrameSyncedMotion(targetViewer){
   $('settingsDone').onclick=closeSettings;
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); };
-  $('setSelColor').oninput=function(){ state.selectionOptions.color=$('setSelColor').value; if($('selColor'))$('selColor').value=$('setSelColor').value; applyStylesFull(true); };
   $('setHbond').oninput=function(){ state.hbondCutoff=Number($('setHbond').value); $('hbondVal').textContent=state.hbondCutoff.toFixed(2); redrawInteractions(true); };
   $('setSalt').oninput=function(){ state.saltCutoff=Number($('setSalt').value); $('saltVal').textContent=state.saltCutoff.toFixed(1); redrawInteractions(true); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.carbonByChain=true; state.hbondCutoff=3.6; state.saltCutoff=4.2; state.selectionOptions.color='#fdd835'; settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; if($('selColor'))$('selColor').value='#fdd835'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=3.6; state.saltCutoff=4.2; state.selectionRepresentation='stick'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };

@@ -65,6 +65,8 @@ http://10.36.102.65:8704/
 - Pressing `z` toggles between focusing the current selection and overview.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z`/Focus.
 - Selection highlight should remain visible without becoming overly thick; current default is a slim yellow stick highlight.
+- Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.
+- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
 
 ## API Contract
@@ -73,12 +75,15 @@ http://10.36.102.65:8704/
 
 ```js
 molAgent.setSelection(selector, options);
+molAgent.setSelectionHighlight(options);
 molAgent.clearSelection();
 molAgent.focus(selector);
 molAgent.style(selector, representation, options);
 molAgent.clearStyle();
 molAgent.clearStyles();
 molAgent.setBaseStyle(representation);
+molAgent.setProteinBackboneStyle(representation);
+molAgent.setProteinAtomStyle(representation);
 molAgent.setLigandStyle(representation);
 molAgent.setMousePreset(preset);
 molAgent.getMousePreset();

@@ -115,14 +115,12 @@
         </div>
         <div class="u-053">
           <div class="u-054">
-            <span class="u-020">Protein</span>
-            <select id="proteinStyle" class="u-055"><option value="cartoon">cartoon</option><option value="tube">tube</option><option value="line">line</option><option value="stick">stick</option><option value="sphere">sphere</option></select>
+            <span class="u-020">Backbone</span>
+            <select id="proteinStyle" class="u-055"><option value="cartoon">cartoon</option><option value="tube">tube</option><option value="off">off</option></select>
+            <span class="u-020">Protein atoms</span>
+            <select id="proteinAtomStyle" class="u-055"><option value="off">off</option><option value="line">line</option><option value="stick">stick</option><option value="sphere">sphere</option></select>
             <span class="u-020">Ligand</span>
             <select id="ligandStyle" class="u-055"><option value="stick">stick</option><option value="line">line</option><option value="sphere">sphere</option></select>
-            <span class="u-020">Selection</span>
-            <select id="selectionRepresentation" class="u-055"><option value="stick">stick</option><option value="line">line</option><option value="tube">tube+line</option><option value="sphere">sphere</option><option value="off">off</option></select>
-            <span class="u-020">Sel color</span>
-            <input id="selColor" type="color" value="#fdd835" class="u-056">
           </div>
           <div class="u-057"></div>
           <div class="u-058">
@@ -198,11 +196,8 @@
 
         <div class="u-057"></div>
         <section class="u-079">
-          <h3 class="u-080">Highlight &amp; interactions</h3>
+          <h3 class="u-080">Interactions</h3>
           <div class="u-093">
-            <span class="u-094">Selection color</span>
-            <input id="setSelColor" type="color" value="#fdd835" class="u-095">
-            <span></span>
             <span class="u-094">H-bond max (&#8491;)</span>
             <input id="setHbond" type="range" min="3" max="4" step="0.05" value="3.6">
             <span id="hbondVal" class="u-096">3.6</span>
