@@ -7,6 +7,7 @@ Runtime layout:
 - `index.html`: DOM structure
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
+- `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
 ## Purpose Of This Manual
@@ -137,10 +138,7 @@ Useful `getState()` fields:
 Select a residue range:
 
 ```js
-molAgent.setSelection(
-  {chain: "H", resi: "30-35"},
-  {representation: "stick"}
-);
+molAgent.setSelection({chain: "H", resi: "30-35"});
 ```
 
 Add another selection instead of replacing:
@@ -148,20 +146,20 @@ Add another selection instead of replacing:
 ```js
 molAgent.setSelection(
   {chain: "L", resi: "90-95"},
-  {additive: true, representation: "stick"}
+  {additive: true}
 );
 ```
 
 Select a whole chain:
 
 ```js
-molAgent.setSelection({chain: "A"}, {representation: "stick"});
+molAgent.setSelection({chain: "A"});
 ```
 
 Select all atoms:
 
 ```js
-molAgent.setSelection({}, {representation: "stick"});
+molAgent.setSelection({});
 ```
 
 Clear selection:
@@ -192,18 +190,18 @@ molAgent.focus({chain: "H", resi: "30-35"});
 For a user request such as "select chain A on the current viewer", the direct page action is:
 
 ```js
-molAgent.setSelection({chain: "A"}, {representation: "stick"});
+molAgent.setSelection({chain: "A"});
 ```
 
 If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
-Selection highlight is intentionally not exposed in the visible GUI. The default is a thin yellow stick highlight. Agents may still change it programmatically:
+Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, or `sphere`, the highlight follows that atom-level representation using the selection color. Agents may still change highlight options programmatically:
 
 ```js
 molAgent.setSelectionHighlight({
-  representation: "stick",
+  representation: "line",
   color: "#fdd835",
-  radius: 0.06
+  linewidth: 2
 });
 ```
 
@@ -292,7 +290,13 @@ Common style options:
 - `radius`: stick radius
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
-- `linewidth`: line width where supported by the browser/WebGL stack
+- `linewidth`: line width in screen pixels for app-managed `line` render paths
+
+Line rendering note:
+
+- App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to camera-facing mesh quads in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
+- Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
+- Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 
 ## Mouse Action Commands
 
@@ -385,7 +389,7 @@ Selection:
 molAgent.run({
   type: "selection",
   selector: {chain: "H", resi: "30-35"},
-  options: {representation: "stick", focus: true}
+  options: {focus: true}
 });
 ```
 
