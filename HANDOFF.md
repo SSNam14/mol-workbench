@@ -125,7 +125,7 @@ curl -sI http://127.0.0.1:8704/styles.css | head
 curl -sI http://127.0.0.1:8704/app.js | head
 ```
 
-Browser smoke check:
+Optional local browser debugging only, when `agbrowse` is installed:
 
 ```bash
 agbrowse navigate 'http://127.0.0.1:8704/' --wait-until domcontentloaded --timeout 60000

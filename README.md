@@ -10,40 +10,65 @@ Runtime layout:
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 - `data/8UCD.pdb`, `data/steap1_complex_seed2.pdb`: built-in structures
 
-## Agent Control Overview
+## Purpose Of This Manual
 
-Agents should control the frontend through `window.molAgent` whenever possible. Use UI clicks only to smoke-test visible controls such as Settings.
+This README is a tool-agnostic operation manual for agents. It assumes only that the agent can open the page and execute JavaScript in the page context, for example through a browser console, browser automation framework, extension, or test runner.
 
-String commands are intentionally disabled. Do not send natural-language commands into the page. Use structured JavaScript objects.
+Tool-specific debugging commands are intentionally not included here.
 
-Open the app:
+## Control Surface
 
-```bash
-agbrowse navigate 'http://127.0.0.1:8704/' --wait-until domcontentloaded --timeout 60000
-agbrowse wait 3000 --json
+Agents should control the viewer through:
+
+```js
+window.molAgent
 ```
 
-Check that the API is available:
+Do not send natural-language commands into the page. String commands are intentionally disabled. Use structured JavaScript objects.
 
-```bash
-agbrowse evaluate 'JSON.stringify({
-  ready: !!window.molAgent,
-  state: window.molAgent && molAgent.getState()
-})' --unsafe-allow evaluate
+Wait until the API exists before issuing commands:
+
+```js
+async function waitForMolAgent(timeoutMs = 10000) {
+  const start = performance.now();
+  while (!window.molAgent) {
+    if (performance.now() - start > timeoutMs) {
+      throw new Error("window.molAgent was not initialized");
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return window.molAgent;
+}
+```
+
+Basic readiness check:
+
+```js
+const api = await waitForMolAgent();
+api.getState();
 ```
 
 Expected initial state:
 
-- `ready: true`
-- `state.file: "8UCD"`
-- `state.atoms` around `8058`
-- `state.mousePreset: "select-left"`
+```js
+{
+  file: "8UCD",
+  atoms: 8058,
+  mousePreset: "select-left",
+  mouseActions: {
+    buttons: {left: "select", right: "rotate", middle: "pan"},
+    wheel: "zoom"
+  }
+}
+```
+
+The exact object also includes current `selection`, `styleRules`, and `hiddenRules`.
 
 ## Selector Objects
 
 Selectors are plain JavaScript objects matched against atom fields.
 
-Common fields:
+Common selectors:
 
 ```js
 {chain: "H"}
@@ -66,33 +91,31 @@ Boolean composition:
 {and: [{chain: "H"}, {resi: "30-35"}]}
 ```
 
-Notes:
+Selector notes:
 
 - `{}` means all atoms.
-- `resi: "30-35"` means inclusive residue range.
+- `resi: "30-35"` means an inclusive residue range.
 - Arrays match any listed value.
-- Numeric and string residue numbers are both accepted where 3Dmol provides numeric values.
+- Numeric and string residue numbers are both accepted where the loaded model provides numeric residue values.
 
 ## State Inspection
 
 Get full app state:
 
-```bash
-agbrowse evaluate 'JSON.stringify(molAgent.getState())' --unsafe-allow evaluate
+```js
+molAgent.getState();
 ```
 
 Count atoms matching a selector:
 
-```bash
-agbrowse evaluate 'molAgent.selectAtoms({chain:"H"}).length' --unsafe-allow evaluate
+```js
+molAgent.selectAtoms({chain: "H"}).length;
 ```
 
 Inspect a few matching atoms:
 
-```bash
-agbrowse evaluate 'JSON.stringify(
-  molAgent.selectAtoms({chain:"H", resi:"30-35"}).slice(0, 5)
-)' --unsafe-allow evaluate
+```js
+molAgent.selectAtoms({chain: "H", resi: "30-35"}).slice(0, 5);
 ```
 
 Useful `getState()` fields:
@@ -103,44 +126,44 @@ Useful `getState()` fields:
 - `mouseActions`: current button/wheel assignment
 - `selection`: current selection selector
 - `styleRules`: persistent style rules added through `molAgent.style(...)`
-- `hiddenRules`: hide rules added through `molAgent.run({type:"hide", ...})`
+- `hiddenRules`: hide rules added through `molAgent.run({type: "hide", ...})`
 
 ## Selection Commands
 
 Select a residue range:
 
-```bash
-agbrowse evaluate 'molAgent.setSelection(
-  {chain:"H", resi:"30-35"},
-  {representation:"stick"}
-)' --unsafe-allow evaluate
+```js
+molAgent.setSelection(
+  {chain: "H", resi: "30-35"},
+  {representation: "stick"}
+);
 ```
 
 Add another selection instead of replacing:
 
-```bash
-agbrowse evaluate 'molAgent.setSelection(
-  {chain:"L", resi:"90-95"},
-  {additive:true, representation:"stick"}
-)' --unsafe-allow evaluate
+```js
+molAgent.setSelection(
+  {chain: "L", resi: "90-95"},
+  {additive: true, representation: "stick"}
+);
 ```
 
 Select a whole chain:
 
-```bash
-agbrowse evaluate 'molAgent.setSelection({chain:"A"}, {representation:"stick"})' --unsafe-allow evaluate
+```js
+molAgent.setSelection({chain: "A"}, {representation: "stick"});
 ```
 
 Select all atoms:
 
-```bash
-agbrowse evaluate 'molAgent.setSelection({}, {representation:"stick"})' --unsafe-allow evaluate
+```js
+molAgent.setSelection({}, {representation: "stick"});
 ```
 
 Clear selection:
 
-```bash
-agbrowse evaluate 'molAgent.clearSelection()' --unsafe-allow evaluate
+```js
+molAgent.clearSelection();
 ```
 
 Selection options currently used by `setSelection`:
@@ -151,75 +174,77 @@ Selection options currently used by `setSelection`:
 
 Focus current selection:
 
-```bash
-agbrowse evaluate 'molAgent.focus()' --unsafe-allow evaluate
+```js
+molAgent.focus();
 ```
 
 Focus a selector directly:
 
-```bash
-agbrowse evaluate 'molAgent.focus({chain:"H", resi:"30-35"})' --unsafe-allow evaluate
+```js
+molAgent.focus({chain: "H", resi: "30-35"});
 ```
 
-Keyboard focus toggle, equivalent to user pressing `z`:
+For a user request such as "select chain A on the current viewer", the direct page action is:
 
-```bash
-agbrowse press z
+```js
+molAgent.setSelection({chain: "A"}, {representation: "stick"});
 ```
+
+If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
 ## Styling Commands
 
 Add a persistent style rule:
 
-```bash
-agbrowse evaluate 'molAgent.style(
-  {chain:"H", resi:"30-35"},
+```js
+molAgent.style(
+  {chain: "H", resi: "30-35"},
   "stick",
-  {color:"#fdd835", radius:0.08}
-)' --unsafe-allow evaluate
+  {color: "#fdd835", radius: 0.08}
+);
 ```
 
 Style a chain as tube:
 
-```bash
-agbrowse evaluate 'molAgent.style(
-  {chain:"A"},
+```js
+molAgent.style(
+  {chain: "A"},
   "tube",
-  {color:"#4FC3F7", thickness:0.35, linewidth:0.7}
-)' --unsafe-allow evaluate
+  {color: "#4FC3F7", thickness: 0.35, linewidth: 0.7}
+);
 ```
 
-Hide a selector through structured compatibility API:
+Hide a selector through the structured compatibility API:
 
-```bash
-agbrowse evaluate 'molAgent.run({
-  type:"hide",
-  selector:{resn:["HOH", "WAT"]}
-})' --unsafe-allow evaluate
+```js
+molAgent.run({
+  type: "hide",
+  selector: {resn: ["HOH", "WAT"]}
+});
 ```
 
 Clear all added style/hide rules:
 
-```bash
-agbrowse evaluate 'molAgent.clearStyles()' --unsafe-allow evaluate
+```js
+molAgent.clearStyles();
 ```
 
 Change base protein representation:
 
-```bash
-agbrowse evaluate 'molAgent.setBaseStyle("cartoon")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setBaseStyle("line")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setBaseStyle("stick")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setBaseStyle("sphere")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setBaseStyle("tube")' --unsafe-allow evaluate
+```js
+molAgent.setBaseStyle("cartoon");
+molAgent.setBaseStyle("line");
+molAgent.setBaseStyle("stick");
+molAgent.setBaseStyle("sphere");
+molAgent.setBaseStyle("tube");
 ```
 
 Change ligand representation:
 
-```bash
-agbrowse evaluate 'molAgent.setLigandStyle("stick")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setLigandStyle("line")' --unsafe-allow evaluate
-agbrowse evaluate 'molAgent.setLigandStyle("sphere")' --unsafe-allow evaluate
+```js
+molAgent.setLigandStyle("stick");
+molAgent.setLigandStyle("line");
+molAgent.setLigandStyle("sphere");
 ```
 
 Supported representations:
@@ -244,46 +269,46 @@ Common style options:
 
 Read current mouse config:
 
-```bash
-agbrowse evaluate 'JSON.stringify({
+```js
+{
   preset: molAgent.getMousePreset(),
   actions: molAgent.getMouseActions()
-})' --unsafe-allow evaluate
+}
 ```
 
 Restore app default:
 
-```bash
-agbrowse evaluate 'molAgent.setMousePreset("select-left")' --unsafe-allow evaluate
+```js
+molAgent.setMousePreset("select-left");
 ```
 
 Pass through to 3Dmol default mouse controls:
 
-```bash
-agbrowse evaluate 'molAgent.setMousePreset("default")' --unsafe-allow evaluate
+```js
+molAgent.setMousePreset("default");
 ```
 
 Assign custom button actions:
 
-```bash
-agbrowse evaluate 'molAgent.setMouseActions({
-  buttons:{left:"select", right:"rotate", middle:"pan"},
-  wheel:"zoom"
-})' --unsafe-allow evaluate
+```js
+molAgent.setMouseActions({
+  buttons: {left: "select", right: "rotate", middle: "pan"},
+  wheel: "zoom"
+});
 ```
 
 Alternative examples:
 
-```bash
-agbrowse evaluate 'molAgent.setMouseActions({
-  buttons:{left:"rotate", right:"select", middle:"pan"},
-  wheel:"zoom"
-})' --unsafe-allow evaluate
+```js
+molAgent.setMouseActions({
+  buttons: {left: "rotate", right: "select", middle: "pan"},
+  wheel: "zoom"
+});
 
-agbrowse evaluate 'molAgent.setMouseActions({
-  buttons:{left:"select", right:"zoom", middle:"pan"},
-  wheel:"zoom"
-})' --unsafe-allow evaluate
+molAgent.setMouseActions({
+  buttons: {left: "select", right: "zoom", middle: "pan"},
+  wheel: "zoom"
+});
 ```
 
 Supported button actions:
@@ -312,121 +337,100 @@ Default `select-left` behavior:
 
 Load the built-in 8UCD:
 
-```bash
-agbrowse evaluate '(async () => {
-  await molAgent.loadUrl("data/8UCD.pdb", "pdb", "8UCD", "8UCD", "8UCD");
-  return JSON.stringify(molAgent.getState());
-})()' --unsafe-allow evaluate
+```js
+await molAgent.loadUrl("data/8UCD.pdb", "pdb", "8UCD", "8UCD", "8UCD");
+molAgent.getState();
 ```
 
 Load the built-in prediction structure:
 
-```bash
-agbrowse evaluate '(async () => {
-  await molAgent.loadUrl("data/steap1_complex_seed2.pdb", "pdb", "steap1_complex_seed2", "Prediction", "");
-  return JSON.stringify(molAgent.getState());
-})()' --unsafe-allow evaluate
+```js
+await molAgent.loadUrl(
+  "data/steap1_complex_seed2.pdb",
+  "pdb",
+  "steap1_complex_seed2",
+  "Prediction",
+  ""
+);
+molAgent.getState();
 ```
 
 Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
 
 ## `molAgent.run` Compatibility Commands
 
-Use this only for structured compatibility objects.
+Use `molAgent.run(...)` only for structured compatibility objects.
 
 Selection:
 
-```bash
-agbrowse evaluate 'molAgent.run({
-  type:"selection",
-  selector:{chain:"H", resi:"30-35"},
-  options:{representation:"stick", focus:true}
-})' --unsafe-allow evaluate
+```js
+molAgent.run({
+  type: "selection",
+  selector: {chain: "H", resi: "30-35"},
+  options: {representation: "stick", focus: true}
+});
 ```
 
 Focus:
 
-```bash
-agbrowse evaluate 'molAgent.run({
-  type:"focus",
-  selector:{chain:"H", resi:"30-35"}
-})' --unsafe-allow evaluate
+```js
+molAgent.run({
+  type: "focus",
+  selector: {chain: "H", resi: "30-35"}
+});
 ```
 
 Style:
 
-```bash
-agbrowse evaluate 'molAgent.run({
-  type:"style",
-  selector:{chain:"H", resi:"30-35"},
-  representation:"stick",
-  options:{color:"#00e676", radius:0.08}
-})' --unsafe-allow evaluate
+```js
+molAgent.run({
+  type: "style",
+  selector: {chain: "H", resi: "30-35"},
+  representation: "stick",
+  options: {color: "#00e676", radius: 0.08}
+});
 ```
 
 Hide:
 
-```bash
-agbrowse evaluate 'molAgent.run({
-  type:"hide",
-  selector:{resn:["HOH", "WAT"]}
-})' --unsafe-allow evaluate
+```js
+molAgent.run({
+  type: "hide",
+  selector: {resn: ["HOH", "WAT"]}
+});
 ```
 
 Clear selection:
 
-```bash
-agbrowse evaluate 'molAgent.run({type:"clearSelection"})' --unsafe-allow evaluate
+```js
+molAgent.run({type: "clearSelection"});
 ```
 
 Forbidden:
 
 ```js
-molAgent.run("select chain H")
+molAgent.run("select chain H");
 ```
 
-## UI Smoke-Test Commands
+## UI Verification Without Tool-Specific Commands
 
-Prefer API calls for actual manipulation. Use DOM/UI interaction only to verify that visible controls still work.
+When validating the visible UI manually or through any generic browser automation framework:
 
-Open Settings:
-
-```bash
-agbrowse snapshot --interactive --max-nodes 60
-agbrowse click <SettingsRef>
-agbrowse wait 500 --json
-agbrowse text --format text
-```
-
-Expected Settings text includes:
-
-- `Preferences`
-- `MOUSE ACTIONS`
-- `Rotate`
-- `Pan`
-- `Zoom`
-- `Select`
-- `Done`
-
-Check console:
-
-```bash
-agbrowse console --clear --duration 1000 --limit 50
-```
-
-Expected:
-
-```text
-(no console output captured)
-```
+1. Open the page.
+2. Wait until `window.molAgent` exists.
+3. Verify `molAgent.getState().file === "8UCD"`.
+4. Verify `molAgent.getState().atoms` is about `8058`.
+5. Open the visible `Settings` button.
+6. Confirm the Settings panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
+7. Confirm the browser console has no errors.
 
 ## Direct 3Dmol Escape Hatch
 
 Use these only when the structured API is insufficient.
 
-```bash
-agbrowse evaluate '!!molAgent.viewer()' --unsafe-allow evaluate
-agbrowse evaluate '!!molAgent.model()' --unsafe-allow evaluate
+```js
+molAgent.viewer();
+molAgent.model();
 ```
 
 `molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the current 3Dmol model. Direct calls can bypass app state, so prefer the structured API first.
