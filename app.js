@@ -8,6 +8,7 @@ function boot(){
 
   let viewer = null, model = null, atoms = [], atomByIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entries = [];
+  const entryChecked = Object.create(null);
   let displayedCount = 0;
 
   const waterNames = new Set(['HOH','WAT','DOD','H2O']);
@@ -43,7 +44,7 @@ function boot(){
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const state = {
-    baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
+    baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick', solvent:'off', other:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
     selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
@@ -205,15 +206,17 @@ function boot(){
     if(r==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:0.45,colorfunc:chainRibbonColor}};
     return {cartoon:{colorfunc:chainRibbonColor,thickness:0.15}};
   }
-  function proteinAtomStyleSpec(){
-    const r=state.proteinAtoms;
-    if(r==='line')return {};
-    if(r==='stick')return {stick:{radius:0.14,colorfunc:chainAwareAtomColor}};
-    if(r==='sphere')return {sphere:{scale:0.28,colorfunc:chainAwareAtomColor}};
-    if(r==='cpk')return cpkStyleSpec(chainAwareAtomColor,1,'protein',{});
-    return {};
+  function atomRepSpec(rep,colorfunc,ctx,sizes){
+    rep=normText(rep||'off').toLowerCase(); sizes=sizes||{};
+    if(rep==='off'||rep==='hide'||rep==='line')return {};
+    if(rep==='sphere')return {sphere:{scale:sizes.sphere||0.36,colorfunc}};
+    if(rep==='cpk')return cpkStyleSpec(colorfunc,1,ctx,{});
+    return {stick:{radius:sizes.stick||0.2,colorfunc}};
   }
-  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; if(r==='cpk')return cpkStyleSpec(elementColor,1,'ligand',{}); return {stick:{radius:0.2,colorfunc:elementColor}}; }
+  function proteinAtomStyleSpec(){ return atomRepSpec(state.proteinAtoms, chainAwareAtomColor, 'protein', {stick:0.14,sphere:0.28}); }
+  function ligandStyleSpec(){ return atomRepSpec(state.ligand, elementColor, 'ligand', {stick:0.2,sphere:0.36}); }
+  function solventStyleSpec(){ return atomRepSpec(state.solvent, elementColor, 'ligand', {stick:0.16,sphere:0.3}); }
+  function otherStyleSpec(){ return atomRepSpec(state.other, elementColor, 'ligand', {stick:0.2,sphere:0.36}); }
 
   function matchScalar(av,want,key){
     if(want==null)return true;
@@ -294,7 +297,13 @@ function boot(){
 
   function applyVisibility(){
     const off=[];
-    for(const a of atoms){ const c=atomCategory(a); if(!state.visibility[c]){off.push(a.serial);continue;} if(c==='protein'&&state.chainVisible[a.chain]===false)off.push(a.serial); }
+    for(const a of atoms){
+      const c=atomCategory(a);
+      if(!state.visibility[c]){off.push(a.serial);continue;}
+      if(c==='protein'&&state.chainVisible[a.chain]===false){off.push(a.serial);continue;}
+      if(c==='solvents'&&state.solvent==='off'){off.push(a.serial);continue;}
+      if(c==='other'&&state.other==='off')off.push(a.serial);
+    }
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
   }
@@ -411,7 +420,8 @@ function boot(){
       }catch(e){}
     }
     if(rep)return rep;
-    const base=a.hetflag?state.ligand:state.proteinAtoms;
+    const c=atomCategory(a);
+    const base=c==='ligands'?state.ligand:(c==='solvents'?state.solvent:(c==='other'?state.other:state.proteinAtoms));
     return ATOM_REPS.has(base)?base:'none';
   }
   function partitionSelectionByDisplay(selected){
@@ -454,8 +464,11 @@ function boot(){
     if(!wideLineLayer)return;
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
+    const cs=_catSer||categorySerials();
     if(state.proteinAtoms==='line')addWideStyleAtoms(lines,points,{hetflag:false},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
-    if(state.ligand==='line')addWideStyleAtoms(lines,points,{hetflag:true},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
     for(const r of state.styleRules){
       if(r.disabled)continue;
       const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
@@ -514,11 +527,13 @@ function boot(){
     opts=opts||{};
     resetAtomLevelCache();
     selectionStyleActive=false;
+    _catSer=categorySerials();
     viewer.setStyle({},{});
     viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
     if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
-    viewer.setStyle({hetflag:true}, ligandStyleSpec());
-    viewer.setStyle({resn:Array.from(waterNames)},{});
+    if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
+    if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
+    if(_catSer.other.length)viewer.setStyle({serial:_catSer.other}, otherStyleSpec());
     for(const r of state.styleRules){ if(r.disabled)continue; try{ viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
@@ -634,17 +649,36 @@ function boot(){
   function residueKey(a){ return (a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
-  let _lvlCache=null, _lvlSerialCache=null;
-  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; }
+  let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
+  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; }
+  function categorySerials(){
+    const out={ligands:[],solvents:[],other:[]};
+    for(const a of atoms){
+      const c=atomCategory(a);
+      if(out[c]&&a.serial!=null)out[c].push(a.serial);
+    }
+    return out;
+  }
   function hiddenByRules(a){ for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector)))return true; }catch(e){} } return false; }
-  function isAtomVisibleNow(a){ const c=atomCategory(a); if(state.visibility[c]===false)return false; if(c==='protein'&&state.chainVisible[a.chain]===false)return false; if(isWaterAtom(a))return false; if(hiddenByRules(a))return false; return true; }
+  function isAtomVisibleNow(a){
+    const c=atomCategory(a);
+    if(state.visibility[c]===false)return false;
+    if(c==='protein'&&state.chainVisible[a.chain]===false)return false;
+    if(c==='solvents'&&state.solvent==='off')return false;
+    if(c==='other'&&state.other==='off')return false;
+    if(hiddenByRules(a))return false;
+    return true;
+  }
   // "Visualized atoms" = atoms currently shown at the ATOM level by the display
   // settings. This is independent of the (yellow) selection, so the Interactions button behaves the
   // same way regardless of what is selected.
   function isAtomLevelShown(a){
     if(!isAtomVisibleNow(a))return false;
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector))&&ATOM_REPS.has(normText(r.representation).toLowerCase()))return true; }catch(e){} }
-    if(a.hetflag)return ATOM_REPS.has(state.ligand);
+    const c=atomCategory(a);
+    if(c==='ligands')return ATOM_REPS.has(state.ligand);
+    if(c==='solvents')return ATOM_REPS.has(state.solvent);
+    if(c==='other')return ATOM_REPS.has(state.other);
     return ATOM_REPS.has(state.proteinAtoms);
   }
   function atomLevelAtoms(){ if(!_lvlCache)_lvlCache=atoms.filter(isAtomLevelShown); return _lvlCache; }
@@ -665,7 +699,7 @@ function boot(){
     const n=Number(a.serial);
     return atomLevelSerials().has(Number.isNaN(n)?String(a.serial):n);
   }
-  const interState={ scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
+  const interState={ enabled:true, scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
     hbond:{label:'Hydrogen bonds',color:'#ffd400',on:true},
     halogen:{label:'Halogen bonds',color:'#9b30ff',on:true},
     salt:{label:'Salt bridges',color:'#ff45c0',on:true},
@@ -864,6 +898,7 @@ function boot(){
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
+    if(!interState.enabled){ if(render!==false)viewer.render(); return; }
     if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
     if(!indexedInteractionsReady()){
       if(render!==false)viewer.render();
@@ -927,6 +962,14 @@ function boot(){
   function openInterPanel(){ $('interPanel').hidden=false; setBtnActive($('interBtn'),true); }
   function closeInterPanel(){ $('interPanel').hidden=true; setBtnActive($('interBtn'),false); }
   function toggleInterPanel(){ if($('interPanel').hidden)openInterPanel(); else closeInterPanel(); }
+  function updateInterToggle(){
+    const b=$('interToggle'); if(!b)return;
+    const on=interState.enabled;
+    b.style.background=on?'#1a4f7a':'#2d2d2d';
+    b.style.borderColor=on?'#3a7bd5':'#555';
+    b.style.color=on?'#fff':'#6f6f6f';
+    b.title=on?'Interactions on - click to turn off':'Interactions off - click to turn on';
+  }
   function setBtnActive(btn,on){ if(!btn)return; btn.style.background=on?'#1a4f7a':'#2d2d2d'; btn.style.borderColor=on?'#3a7bd5':'#555'; btn.style.color=on?'#fff':'#d4d4d4'; }
 
   function chargeOf(resn){ const r=normUpper(resn); if(r==='ARG'||r==='LYS')return 1; if(r==='ASP'||r==='GLU')return -1; return 0; }
@@ -961,9 +1004,17 @@ function boot(){
       const row=document.createElement('div');
       const active=e.name===currentName;
       row.setAttribute('data-row','');
-      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr;align-items:center;height:22px;padding:0 8px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
+      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
-      const chk=document.createElement('input'); chk.type='radio'; chk.checked=active; chk.style.cssText='width:12px;height:12px;accent-color:#3a7bd5;pointer-events:none';
+      const chk=document.createElement('input'); chk.type='checkbox';
+      const checked=(e.name in entryChecked)?entryChecked[e.name]:active;
+      entryChecked[e.name]=checked; chk.checked=checked;
+      const CHK_ON="border:1px solid #3a7bd5;background:#3a7bd5 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E\") center/10px no-repeat";
+      const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
+      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:3px;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
+      paintChk();
+      chk.onclick=function(ev){ ev.stopPropagation(); };
+      chk.onchange=function(){ entryChecked[e.name]=chk.checked; paintChk(); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
       row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl);
       row.onclick=function(){ if(e.name!==currentName)persistAndLoadEntry(e).catch(err=>setStatus('Load failed: '+err.message)); };
@@ -1131,10 +1182,55 @@ function boot(){
     return loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY');
   }
 
+  const CLIP_MIN=-200, CLIP_MAX=200, CLIP_GAP=2;
+  const clip={near:-100, far:100};
+  function clipPct(v){ return (v-CLIP_MIN)/(CLIP_MAX-CLIP_MIN)*100; }
+  function renderClipUI(){
+    const nh=$('clipNearH'),fh=$('clipFarH'),rg=$('clipRange'),val=$('clipVal');
+    if(!nh||!fh)return;
+    const np=clipPct(clip.near),fp=clipPct(clip.far);
+    nh.style.left=np+'%'; fh.style.left=fp+'%';
+    if(rg){ rg.style.left=np+'%'; rg.style.width=Math.max(0,fp-np)+'%'; }
+    if(val)val.textContent=Math.round(clip.near)+' / '+Math.round(clip.far);
+  }
   function applyClip(){
-    if(!viewer)return; const near=Number($('clipNear').value),far=Number($('clipFar').value);
-    $('nearVal').textContent=String(near); $('farVal').textContent=String(far);
+    renderClipUI();
+    if(!viewer)return;
+    const near=clip.near,far=clip.far;
     try{ if(viewer.setSlab)viewer.setSlab(near,far); else { if(viewer.setSlabNear)viewer.setSlabNear(near); if(viewer.setSlabFar)viewer.setSlabFar(far); } viewer.render(); }catch(e){}
+  }
+  function setClipValue(which,v){
+    v=Math.max(CLIP_MIN,Math.min(CLIP_MAX,v));
+    if(which==='near')clip.near=Math.min(v,clip.far-CLIP_GAP);
+    else clip.far=Math.max(v,clip.near+CLIP_GAP);
+    applyClip();
+  }
+  function clipValueFromEvent(ev){
+    const bar=$('clipBar'); if(!bar)return null;
+    const r=bar.getBoundingClientRect(); if(!r.width)return null;
+    const pct=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));
+    return CLIP_MIN+pct*(CLIP_MAX-CLIP_MIN);
+  }
+  function bindClipHandle(id,which){
+    const h=$(id); if(!h)return;
+    h.addEventListener('pointerdown',function(e){
+      e.preventDefault(); e.stopPropagation();
+      try{ h.setPointerCapture(e.pointerId); }catch(_){}
+      function move(ev){ const v=clipValueFromEvent(ev); if(v!=null)setClipValue(which,v); }
+      function up(){ try{ h.releasePointerCapture(e.pointerId); }catch(_){} window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); }
+      window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
+    });
+  }
+  function bindClipControl(){
+    bindClipHandle('clipNearH','near'); bindClipHandle('clipFarH','far');
+    const bar=$('clipBar');
+    if(bar)bar.addEventListener('pointerdown',function(e){
+      if(e.target&&e.target.classList&&e.target.classList.contains('clip-handle'))return;
+      const v=clipValueFromEvent(e); if(v==null)return;
+      const which=Math.abs(v-clip.near)<=Math.abs(v-clip.far)?'near':'far';
+      setClipValue(which,v);
+    });
+    renderClipUI();
   }
 
   // ---------- Navigator thumbnail ----------
@@ -1272,7 +1368,7 @@ function installFrameSyncedMotion(targetViewer){
     viewerEl.addEventListener('contextmenu',function(e){ if(isCustomMousePreset())stopMouseEvent(e); },{capture:true,passive:false});
     window.addEventListener('blur',resetDrag);
   }
-  function overUiPanel(e){ const t=e&&e.target; return !!(t&&t.closest&&t.closest('#interPanel,#stylePopover')); }
+  function overUiPanel(e){ const t=e&&e.target; return !!(t&&t.closest&&t.closest('#interPanel,#settingsOverlay')); }
   function bindWheelZoom(){ viewerEl.addEventListener('wheel',function(e){ if(overUiPanel(e))return; if(!viewer||state.locked)return; if(!isCustomMousePreset())return; if(settings.mouse.wheel!=='zoom')return; stopMouseEvent(e); const delta=e.deltaY||-e.wheelDelta||1,amount=Math.max(1,Math.min(4,Math.abs(delta)/100)),step=Math.pow(1.12,amount); viewer.zoom(delta<0?step:1/step); },{capture:true,passive:false}); }
 
   function startFpsOverlay(){ const fpsEl=$('fpsOverlay'); let frames=0,last=performance.now(); function tick(){ frames++; requestAnimationFrame(tick); } function update(){ if(document.hidden){ fpsEl.textContent='FPS --'; frames=0; last=performance.now(); return; } const now=performance.now(),el=now-last; fpsEl.textContent='FPS '+Math.round(frames*1000/el); frames=0; last=now; } setInterval(update,500); requestAnimationFrame(tick); }
@@ -1384,7 +1480,7 @@ function installFrameSyncedMotion(targetViewer){
     let rep=normText(representation||'cartoon').toLowerCase();
     if(rep==='hide')rep='off';
     state.baseProtein=(rep==='tube'||rep==='off')?rep:'cartoon';
-    if($('proteinStyle'))$('proteinStyle').value=state.baseProtein;
+    if($('repBackbone'))$('repBackbone').value=state.baseProtein;
     applyStylesFull(true);
     return state.baseProtein;
   }
@@ -1392,7 +1488,7 @@ function installFrameSyncedMotion(targetViewer){
     let rep=normText(representation||'off').toLowerCase();
     if(rep==='hide')rep='off';
     state.proteinAtoms=ATOM_REPS.has(rep)?rep:'off';
-    if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms;
+    if($('repProtein'))$('repProtein').value=state.proteinAtoms;
     applyStylesFull(true);
     return state.proteinAtoms;
   }
@@ -1401,7 +1497,9 @@ function installFrameSyncedMotion(targetViewer){
     if(ATOM_REPS.has(rep))return setProteinAtomStyle(rep);
     return setProteinBackboneStyle(rep);
   }
-  function setLigandStyle(representation){ state.ligand=normText(representation||'stick').toLowerCase(); if($('ligandStyle'))$('ligandStyle').value=state.ligand; applyStylesFull(true); }
+  function setLigandStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.ligand=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repLigand'))$('repLigand').value=state.ligand; applyStylesFull(true); return state.ligand; }
+  function setSolventStyle(representation){ let rep=normText(representation||'off').toLowerCase(); if(rep==='hide')rep='off'; state.solvent=(rep==='off'||ATOM_REPS.has(rep))?rep:'off'; if($('repSolvent'))$('repSolvent').value=state.solvent; applyStylesFull(true); return state.solvent; }
+  function setOtherStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.other=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repOther'))$('repOther').value=state.other; applyStylesFull(true); return state.other; }
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
     const type=normText(command.type||command.action).toLowerCase();
@@ -1415,10 +1513,10 @@ function installFrameSyncedMotion(targetViewer){
   window.molAgent={
     setSelection, setSelectionHighlight, clearSelection, focus,
     style:function(selector,representation,options){ const rule={selector:selector||{},representation:representation||'cartoon',options:options||{}}; state.styleRules.push(rule); applyStylesFull(true); return rule; },
-    clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle,
+    clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle, setSolventStyle, setOtherStyle,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
-    getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,elapsedMs:interactionIndex.elapsedMs,atoms:interactionIndex.atoms,rings:interactionIndex.rings,error:interactionIndex.error}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
@@ -1433,17 +1531,19 @@ function installFrameSyncedMotion(targetViewer){
   $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
   $('qsAll').onclick=function(){ setSelection({},{}); focus({}); };
   $('interBtn').onclick=toggleInterPanel;
+  $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
   $('btnFit').onclick=function(){ if(viewer){ viewer.zoomTo(); viewer.render(); } };
   $('btnFocus').onclick=function(){ focus(state.selectionSel); };
   $('btnClear').onclick=clearSelection;
-  $('styleBtn').onclick=function(){ const p=$('stylePopover'); p.hidden=!p.hidden; };
-  $('styleClose').onclick=function(){ $('stylePopover').hidden=true; };
-  $('proteinStyle').onchange=function(){ state.baseProtein=$('proteinStyle').value; applyStylesFull(true); };
-  $('proteinAtomStyle').onchange=function(){ state.proteinAtoms=$('proteinAtomStyle').value; applyStylesFull(true); };
-  $('ligandStyle').onchange=function(){ state.ligand=$('ligandStyle').value; applyStylesFull(true); };
-  $('clipNear').oninput=applyClip; $('clipFar').oninput=applyClip;
-  $('resetClip').onclick=function(){ $('clipNear').value=-100; $('clipFar').value=100; applyClip(); };
+  $('repBackbone').onchange=function(){ setProteinBackboneStyle($('repBackbone').value); };
+  $('repProtein').onchange=function(){ setProteinAtomStyle($('repProtein').value); };
+  $('repLigand').onchange=function(){ setLigandStyle($('repLigand').value); };
+  $('repSolvent').onchange=function(){ setSolventStyle($('repSolvent').value); buildHierarchy(); };
+  $('repOther').onchange=function(){ setOtherStyle($('repOther').value); buildHierarchy(); };
+  $('repSelected').onchange=function(){ setSelectionHighlight({representation:$('repSelected').value}); };
+  bindClipControl();
+  $('clipReset').onclick=function(){ clip.near=-100; clip.far=100; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
@@ -1454,7 +1554,7 @@ function installFrameSyncedMotion(targetViewer){
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; interState.enabled=true; updateInterToggle(); state.selectionRepresentation='line'; if($('repSelected'))$('repSelected').value='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
@@ -1469,15 +1569,22 @@ function installFrameSyncedMotion(targetViewer){
   $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; persistAndLoadEntry(e2).catch(err=>setStatus('Load failed: '+err.message)); e.target.value=''; };
 
   window.addEventListener('keydown',function(e){
-    const tag=document.activeElement&&document.activeElement.tagName;
-    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'){ return; }
-    if(e.key==='z'||e.key==='Z'){ if(!e.repeat)toggleFocus(); }
-    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('stylePopover').hidden){ $('stylePopover').hidden=true; } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
+    const ae=document.activeElement;
+    const tag=ae&&ae.tagName;
+    if(e.key==='z'||e.key==='Z'){
+      if(ae&&ae.closest&&ae.closest('#findGo,#findPrev,#findNext,#findClear,#findType'))return;
+      if(ae&&ae.id==='findInput')e.preventDefault();
+      else if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+      if(!e.repeat)toggleFocus();
+      return;
+    }
+    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
 
-  $('stylePopover').hidden=true;
   $('interPanel').hidden=true;
   buildInterPanel();
+  updateInterToggle();
   initViewer();
   startFpsOverlay();
   $('selLevel').value=state.selectionMode;
