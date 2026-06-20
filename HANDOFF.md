@@ -4,37 +4,27 @@ Last updated: 2026-06-20 KST
 
 ## Purpose
 
-This project is a browser-based molecular viewer served from `/home/nam114/test_visualizer` on port 8704.
+This project is a browser-based molecular viewer. Serve it from the repository root with `server.py`; choose the port at launch.
 
-Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment. The server only serves files plus a small persisted last-structure API.
+Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment. The server serves files and persists small runtime state such as the last loaded structure and interaction indexes.
 
 ## Runtime Shape
 
 - `index.html`: static DOM structure only.
 - `styles.css`: static UI styling.
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
+- `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: screen-space-width line renderer implemented as 3Dmol scene meshes with depth testing.
-- `server.py`: static file server plus `/api/last-structure` for server-side last molecule persistence.
+- `server.py`: static file server plus `/api/last-structure` and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
-- `data/8UCD.pdb` and `data/steap1_complex_seed2.pdb`: built-in local structures.
+- `data/`: optional bundled sample structures.
 
 Serve with:
 
 ```bash
-python3 server.py --port 8704 --bind 0.0.0.0
-```
-
-Local check URL:
-
-```text
-http://127.0.0.1:8704/
-```
-
-User-facing URL:
-
-```text
-http://10.36.102.65:8704/
+PORT=8704
+python3 server.py --port "$PORT" --bind 0.0.0.0
 ```
 
 ## Design Principles
@@ -49,9 +39,10 @@ http://10.36.102.65:8704/
 
 ## Must-Have Behavior
 
-- Initial load restores the last loaded structure from server storage when available; otherwise it opens local `data/8UCD.pdb`.
+- Initial load restores the last loaded structure from server storage when available; otherwise it opens the bundled sample structure.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side last-structure cache so browser refresh keeps the same molecule.
-- `+ Pred` loads local `data/steap1_complex_seed2.pdb`.
+- Loading a structure starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching between previously loaded entries does not recompute interactions.
+- Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
 - Default mouse preset is `select-left`:
   - left click selects
   - left drag performs screen-space range selection
@@ -74,6 +65,9 @@ http://10.36.102.65:8704/
 - Selection changes must stay incremental. Default line selection uses the `wide-lines.js` selection collection for atom-level `none`/`line` groups and temporary 3Dmol style overlays for visible stick/sphere/cpk groups. Explicit non-line highlight modes may still use removable shapes for small selections and a temporary style overlay for large selections. Do not trigger full protein/ligand restyling on every selection event.
 - Large range selections must avoid O(atom count * selector size) matching. Large `serial: [...]` selectors use cached Set lookup and reuse the selected atom list for highlight/status updates.
 - `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to camera-facing mesh quads inside the 3Dmol scene, so they keep pixel-like width while participating in depth testing. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
+- All nonbonded interaction guide lines are dashed.
+- Nonbonded pair interactions are drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`). Cartoon-only protein atoms do not count as visible endpoints for interaction rendering.
+- H-bond and salt UI sliders filter the precomputed interaction index; changing those cutoffs must not trigger full reindexing.
 - The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
 - Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules. CPK sphere size uses configured VDW radii times a configured scale, so H/He remain smaller than C/N/O/etc.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
@@ -102,6 +96,8 @@ molAgent.selectAtoms(selector);
 molAgent.getState();
 molAgent.getVisualConfig();
 molAgent.reloadVisualConfig();
+molAgent.getInteractionIndex();
+molAgent.rebuildInteractionIndex();
 molAgent.loadUrl(url, fmt, name, title, pdbId);
 molAgent.run(commandObject);
 molAgent.viewer();
@@ -133,20 +129,22 @@ Common selector examples:
 Run focused checks after edits:
 
 ```bash
-cd /home/nam114/test_visualizer
+cd <repo-root>
+PORT=8704
 node --check app.js
+node --check interaction-worker.js
 python3 -m py_compile server.py
 git diff --check
-curl -sI http://127.0.0.1:8704/ | head
-curl -sI http://127.0.0.1:8704/styles.css | head
-curl -sI http://127.0.0.1:8704/app.js | head
-curl -s http://127.0.0.1:8704/api/last-structure | head -c 200
+curl -sI "http://127.0.0.1:${PORT}/" | head
+curl -sI "http://127.0.0.1:${PORT}/styles.css" | head
+curl -sI "http://127.0.0.1:${PORT}/app.js" | head
+curl -s "http://127.0.0.1:${PORT}/api/last-structure" | head -c 200
 ```
 
 Optional local browser debugging only, when `agbrowse` is installed:
 
 ```bash
-agbrowse navigate 'http://127.0.0.1:8704/' --wait-until domcontentloaded --timeout 60000
+agbrowse navigate "http://127.0.0.1:${PORT}/" --wait-until domcontentloaded --timeout 60000
 agbrowse wait 3000 --json
 agbrowse console --clear --duration 1000 --limit 50
 ```
@@ -155,5 +153,5 @@ Expected:
 
 - no console errors
 - `window.molAgent` exists
-- initial structure shows `8UCD` with about 8,058 atoms
+- initial structure name is populated and atom count is greater than zero
 - `Settings` opens and shows mouse actions

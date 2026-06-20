@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, atoms = [], atomByIndex = new Map(), currentName = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, atoms = [], atomByIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entries = [];
   let displayedCount = 0;
 
@@ -19,9 +19,19 @@ function boot(){
   const chainColors = {};
   'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
   const elemColors = {H:'#FFFFFF',C:'#B0BEC5',N:'#64B5F6',O:'#EF5350',S:'#FDD835',P:'#FFB74D',F:'#81C784',CL:'#81C784',BR:'#A1887F',I:'#9575CD',FE:'#FF8A65',ZN:'#90A4AE',MG:'#A5D6A7',CA:'#B0BEC5',NA:'#90CAF9',K:'#CE93D8',MN:'#CE93D8',CU:'#4DD0E1',CO:'#F48FB1',NI:'#80CBC4'};
-  const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2,interactionSolid:2};
+  const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2};
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
+  };
+  const INTERACTION_INDEX_SCHEMA = 'interaction-index-v3';
+  const INTERACTION_INDEX_API = 'api/interaction-index/';
+  const INTERACTION_CRITERIA = {
+    hbond:{indexMaxDistance:4.0,maxDistance:2.8,minDonorAngle:120,minAcceptorAngle:90,maxAcceptorAngle:360},
+    halogen:{maxDistance:3.5,minDonorAngle:140,minAcceptorAngle:90,maxAcceptorAngle:360},
+    salt:{indexCutoff:5.5,cutoff:5.0,excludeCovalentDepth:3},
+    pication:{maxDistance:6.6,maxAngle:30},
+    pipi:{faceMaxDistance:4.4,faceMaxAngle:30,edgeMaxDistance:5.5,edgeMinAngle:60},
+    contact:{maxDistance:4.8,minDistance:2.0,goodCutoffRatio:1.3,badCutoffRatio:0.89,uglyCutoffRatio:0.75,maxInteractions:12000}
   };
   const LAST_STRUCTURE_API = 'api/last-structure';
 
@@ -38,7 +48,7 @@ function boot(){
     selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
     visibility:{protein:true,ligands:true,solvents:true,other:true}, chainVisible:{},
-    bgColor:'#000000', carbonByChain:true, hbondCutoff:3.6, saltCutoff:4.2,
+    bgColor:'#000000', carbonByChain:true, hbondCutoff:2.8, saltCutoff:5.0,
     locked:false
   };
   const defaultChainColors = Object.assign({}, chainColors);
@@ -53,12 +63,27 @@ function boot(){
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
+  let interactionWorker = null;
+  let interactionBuildSeq = 0;
+  let interactionIndex = {status:'empty',jobId:0,interactions:null,counts:{}};
   let resetMouseDrag = function(){};
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
   function nextId(p){ return p + '-' + (idSeq++); }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
+  function fnv1aHex(text){
+    let h=0x811c9dc5;
+    for(let i=0;i<text.length;i++){
+      h^=text.charCodeAt(i);
+      h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;
+    }
+    return ('00000000'+h.toString(16)).slice(-8);
+  }
+  function structureCacheKey(e){
+    const data=String(e&&e.data||''),fmt=normText(e&&e.fmt||'pdb').toLowerCase();
+    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data);
+  }
   function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
   function mergePlain(base,extra){
     if(!extra||typeof extra!=='object'||Array.isArray(extra))return base;
@@ -487,6 +512,7 @@ function boot(){
   function applyStylesFull(render,opts){
     if(!viewer||!model)return;
     opts=opts||{};
+    resetAtomLevelCache();
     selectionStyleActive=false;
     viewer.setStyle({},{});
     viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
@@ -608,7 +634,8 @@ function boot(){
   function residueKey(a){ return (a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
-  let _lvlCache=null;
+  let _lvlCache=null, _lvlSerialCache=null;
+  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; }
   function hiddenByRules(a){ for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector)))return true; }catch(e){} } return false; }
   function isAtomVisibleNow(a){ const c=atomCategory(a); if(state.visibility[c]===false)return false; if(c==='protein'&&state.chainVisible[a.chain]===false)return false; if(isWaterAtom(a))return false; if(hiddenByRules(a))return false; return true; }
   // "Visualized atoms" = atoms currently shown at the ATOM level by the display
@@ -620,7 +647,24 @@ function boot(){
     if(a.hetflag)return ATOM_REPS.has(state.ligand);
     return ATOM_REPS.has(state.proteinAtoms);
   }
-  function atomLevelAtoms(){ return _lvlCache||atoms.filter(isAtomLevelShown); }
+  function atomLevelAtoms(){ if(!_lvlCache)_lvlCache=atoms.filter(isAtomLevelShown); return _lvlCache; }
+  function atomLevelSerials(){
+    if(!_lvlSerialCache){
+      _lvlSerialCache=new Set();
+      atomLevelAtoms().forEach(a=>{
+        if(a.serial==null)return;
+        _lvlSerialCache.add(String(a.serial));
+        const n=Number(a.serial);
+        if(!Number.isNaN(n))_lvlSerialCache.add(n);
+      });
+    }
+    return _lvlSerialCache;
+  }
+  function isInteractionAtomShown(a){
+    if(!a||a.serial==null)return false;
+    const n=Number(a.serial);
+    return atomLevelSerials().has(Number.isNaN(n)?String(a.serial):n);
+  }
   const interState={ scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
     hbond:{label:'Hydrogen bonds',color:'#ffd400',on:true},
     halogen:{label:'Halogen bonds',color:'#9b30ff',on:true},
@@ -632,6 +676,118 @@ function boot(){
     bad:{label:'Bad',color:'#ffa726',on:true},
     ugly:{label:'Ugly',color:'#ef5350',on:true}
   }};
+  function atomPayloadForInteractionIndex(){
+    return atoms.map(a=>{
+      const bonds=(a.bonds||[]).map(idx=>atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
+      return {serial:a.serial,index:a.index,chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
+    });
+  }
+  function resetInteractionIndex(status){
+    interactionBuildSeq++;
+    if(interactionWorker){ try{ interactionWorker.terminate(); }catch(e){} interactionWorker=null; }
+    interactionIndex={status:status||'empty',jobId:interactionBuildSeq,interactions:null,counts:{}};
+  }
+  function countInteractionIndex(interactions){
+    interactions=interactions||{};
+    return {
+      hbond:(interactions.hbond||[]).length,
+      halogen:(interactions.halogen||[]).length,
+      salt:(interactions.salt||[]).length,
+      pipi:(interactions.pipi||[]).length,
+      pication:(interactions.pication||[]).length,
+      contactGood:(interactions.contacts&&interactions.contacts.good||[]).length,
+      contactBad:(interactions.contacts&&interactions.contacts.bad||[]).length,
+      contactUgly:(interactions.contacts&&interactions.contacts.ugly||[]).length
+    };
+  }
+  function interactionIndexCacheUrl(key){ return INTERACTION_INDEX_API+encodeURIComponent(key); }
+  function validCachedInteractionIndex(payload,key){
+    return payload&&payload.schema===INTERACTION_INDEX_SCHEMA&&payload.structureKey===key&&payload.interactions&&typeof payload.interactions==='object';
+  }
+  function useInteractionIndexPayload(payload,jobId,source){
+    const counts=countInteractionIndex(payload.interactions);
+    interactionIndex={status:'ready',jobId,structureKey:payload.structureKey,source:source||payload.source||'worker',interactions:payload.interactions||{},counts,elapsedMs:payload.elapsedMs,atoms:payload.atoms,rings:payload.rings,cachedAt:payload.cachedAt};
+    setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms \u00b7 interactions indexed'+(source==='server'?' (server cache)':''));
+    redrawInteractions(true);
+  }
+  function saveInteractionIndexPayload(payload,key){
+    if(!payload||!key)return Promise.resolve(false);
+    return fetch(interactionIndexCacheUrl(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
+  }
+  function startInteractionWorker(jobId,key){
+    if(!window.Worker){
+      interactionIndex.status='unavailable';
+      return;
+    }
+    setStatus('Building interaction index...');
+    const worker=new Worker('interaction-worker.js');
+    interactionWorker=worker;
+    worker.onmessage=function(e){
+      const msg=e.data||{};
+      if(jobId!==interactionBuildSeq)return;
+      if(msg.error){
+        interactionIndex={status:'error',jobId,interactions:null,counts:{},error:msg.error};
+        setStatus('Interaction index failed: '+msg.error);
+        return;
+      }
+      interactionWorker=null;
+      const payload={schema:INTERACTION_INDEX_SCHEMA,structureKey:key,source:'worker',createdAt:new Date().toISOString(),criteria:msg.criteria||INTERACTION_CRITERIA,interactions:msg.interactions||{},elapsedMs:msg.elapsedMs,atoms:msg.atoms,rings:msg.rings};
+      useInteractionIndexPayload(payload,jobId,'worker');
+      saveInteractionIndexPayload(payload,key);
+    };
+    worker.onerror=function(e){
+      if(jobId!==interactionBuildSeq)return;
+      interactionIndex={status:'error',jobId,interactions:null,counts:{},error:e.message||'worker error'};
+      interactionWorker=null;
+      setStatus('Interaction index failed: '+interactionIndex.error);
+    };
+    worker.postMessage({jobId,atoms:atomPayloadForInteractionIndex(),criteria:INTERACTION_CRITERIA});
+  }
+  function startInteractionIndexBuild(){
+    resetInteractionIndex('loading-cache');
+    const key=currentStructureKey;
+    if(!key){ startInteractionWorker(interactionBuildSeq,key); return; }
+    const jobId=interactionBuildSeq;
+    setStatus('Loading interaction index...');
+    fetch(interactionIndexCacheUrl(key),{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).then(payload=>{
+      if(jobId!==interactionBuildSeq)return;
+      if(validCachedInteractionIndex(payload,key)){
+        useInteractionIndexPayload(payload,jobId,'server');
+      }else{
+        startInteractionWorker(jobId,key);
+      }
+    }).catch(()=>{
+      if(jobId===interactionBuildSeq)startInteractionWorker(jobId,key);
+    });
+  }
+  function categoryIsProtein(c){ return c==='protein'; }
+  function categoryIsLigand(c){ return c==='ligands'||c==='ligand'; }
+  function interactionInScope(item,scope){
+    if(!item)return false;
+    if(scope==='pl')return (categoryIsProtein(item.ca)&&categoryIsLigand(item.cb))||(categoryIsLigand(item.ca)&&categoryIsProtein(item.cb));
+    if(scope==='pp')return categoryIsProtein(item.ca)&&categoryIsProtein(item.cb);
+    return true;
+  }
+  function atomForInteractionSerial(serial){ return atomBySerial.get(Number(serial))||atomBySerial.get(serial)||null; }
+  function drawIndexedPair(item,color){
+    const a=atomForInteractionSerial(item.a),b=atomForInteractionSerial(item.b);
+    if(!isInteractionAtomShown(a)||!isInteractionAtomShown(b))return;
+    drawDash(a,b,color);
+  }
+  function drawIndexedPiCation(item,color){
+    const ring=atomForInteractionSerial(item.ringAtom),cat=atomForInteractionSerial(item.cat);
+    if(!isInteractionAtomShown(ring)||!isInteractionAtomShown(cat))return;
+    drawDashAP(cat,item.center,color);
+  }
+  function drawIndexedPiPi(item,color){
+    const a=atomForInteractionSerial(item.ringAtomA),b=atomForInteractionSerial(item.ringAtomB);
+    if(!item.centerA||!item.centerB||!isInteractionAtomShown(a)||!isInteractionAtomShown(b))return;
+    drawDashPP(item.centerA,item.centerB,color);
+  }
+  function indexedInteractionsReady(){ return interactionIndex&&interactionIndex.status==='ready'&&interactionIndex.interactions; }
   // Scope: 'all' = any pair of visualized atoms; 'pl' = protein<->ligand only; 'pp' = protein<->protein only.
   function pairsSym(scope,C,mn,mx,lim){
     if(scope==='pl')return nearbyPairs(C.filter(isLigand),C.filter(isProtein),mn,mx,lim,null);
@@ -698,29 +854,31 @@ function boot(){
   }
   function drawLine(a,b,color,radius,dashed){ addInteractionWideLine(point(a),point(b),color,dashed?lineWidths.interaction:Math.max(lineWidths.interaction,Number(radius||0.05)*120),dashed); }
   function drawDash(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interaction,true); }
-  function drawSolid(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interactionSolid,false); }
   function drawDashAP(a,p,c){ addInteractionWideLine(point(a),p,c,lineWidths.interaction,true); }
   function drawDashPP(p,q,c){ addInteractionWideLine(p,q,c,lineWidths.interaction,true); }
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
     if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
-    _lvlCache=atoms.filter(isAtomLevelShown);
+    if(!indexedInteractionsReady()){
+      if(render!==false)viewer.render();
+      return;
+    }
+    const data=interactionIndex.interactions;
     const T=interState.types,S=interState.scope;
     try{
-      if(T.hbond.on)detectHBonds(S.noncov).forEach(p=>drawDash(p[0],p[1],T.hbond.color));
-      if(T.halogen.on)detectHalogen(S.noncov).forEach(p=>drawDash(p[0],p[1],T.halogen.color));
-      if(T.salt.on)detectSalt(S.noncov).forEach(p=>drawSolid(p[0],p[1],T.salt.color));
+      if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.hbond.color); });
+      if(T.halogen.on)(data.halogen||[]).forEach(item=>{ if(interactionInScope(item,S.noncov))drawIndexedPair(item,T.halogen.color); });
+      if(T.salt.on)(data.salt||[]).forEach(item=>{ if(item.distance<=state.saltCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.salt.color); });
       if(T.aromhb.on)detectAromHB(S.noncov).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
-      if(T.pipi.on)detectPiPi(S.pi).forEach(p=>drawDashPP(p[0].center,p[1].center,T.pipi.color));
-      if(T.pication.on)detectPiCation(S.pi).forEach(p=>drawDashAP(p.cat,p.center,T.pication.color));
-      if(T.good.on||T.bad.on||T.ugly.on){ const c=detectContacts(S.contact);
-        if(T.good.on)c.good.forEach(p=>drawDash(p[0],p[1],T.good.color));
-        if(T.bad.on)c.bad.forEach(p=>drawDash(p[0],p[1],T.bad.color));
-        if(T.ugly.on)c.ugly.forEach(p=>drawDash(p[0],p[1],T.ugly.color));
+      if(T.pipi.on)(data.pipi||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiPi(item,T.pipi.color); });
+      if(T.pication.on)(data.pication||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiCation(item,T.pication.color); });
+      if(T.good.on||T.bad.on||T.ugly.on){ const c=data.contacts||{};
+        if(T.good.on)(c.good||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.good.color); });
+        if(T.bad.on)(c.bad||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.bad.color); });
+        if(T.ugly.on)(c.ugly||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.ugly.color); });
       }
     }catch(e){}
-    _lvlCache=null;
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
     if(render!==false)viewer.render();
   }
@@ -933,16 +1091,19 @@ function boot(){
     opts=opts||{};
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
+    currentStructureKey=structureCacheKey(e);
     if(!viewer)initViewer();
     const existingEntry=entries.findIndex(x=>x.name===e.name);
     if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
     viewer.clear();
     if(wideLineLayer)wideLineLayer.clear();
     interactionShapes=[]; interactionWideLines=[];
+    resetInteractionIndex('empty');
     model=viewer.addModel(e.data,e.fmt||'pdb');
     atoms=model.selectedAtoms({});
     atomByIndex=new Map();
-    atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); });
+    atomBySerial=new Map();
+    atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); if(a.serial!=null)atomBySerial.set(Number(a.serial),a); });
     currentName=e.name;
     state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;selectionAtoms=[];state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
     state.visibility={protein:true,ligands:true,solvents:true,other:true}; state.chainVisible={};
@@ -952,6 +1113,7 @@ function boot(){
     buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
     showHover(null);
     setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
+    startInteractionIndexBuild();
     if(opts.persist!==false)saveLastStructure(e);
     return e;
   }
@@ -1252,6 +1414,8 @@ function installFrameSyncedMotion(targetViewer){
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
     getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getInteractionIndex:function(){ return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,elapsedMs:interactionIndex.elapsedMs,atoms:interactionIndex.atoms,rings:interactionIndex.rings,error:interactionIndex.error}); },
+    rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
     loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }
@@ -1285,7 +1449,7 @@ function installFrameSyncedMotion(targetViewer){
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=3.6; state.saltCutoff=4.2; state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };

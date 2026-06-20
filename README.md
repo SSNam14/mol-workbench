@@ -7,8 +7,9 @@ Runtime layout:
 - `index.html`: DOM structure
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
+- `interaction-worker.js`: background nonbonded interaction index builder
 - `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
-- `server.py`: static file server plus persisted last-structure API
+- `server.py`: static file server plus persisted structure and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
@@ -23,10 +24,11 @@ Tool-specific debugging commands are intentionally not included here.
 Run the project server from the repository root:
 
 ```bash
-python3 server.py --port 8704 --bind 0.0.0.0
+PORT=8704
+python3 server.py --port "$PORT" --bind 0.0.0.0
 ```
 
-Use this server instead of `python3 -m http.server`; the generic static server cannot persist the last loaded structure.
+Use this server instead of `python3 -m http.server`; the generic static server cannot persist the last loaded structure or server-side interaction indexes.
 
 ## Control Surface
 
@@ -144,6 +146,37 @@ Useful `getState()` fields:
 - `selectionHighlight`: fixed selection highlight style used for selected atoms
 - `styleRules`: persistent style rules added through `molAgent.style(...)`
 - `hiddenRules`: hide rules added through `molAgent.run({type: "hide", ...})`
+
+## Interaction Index Commands
+
+The viewer builds a nonbonded interaction index in a Web Worker when a structure is loaded. The completed index is stored on the server by structure key and reused when switching back to the same loaded molecule.
+
+Inspect index status:
+
+```js
+molAgent.getInteractionIndex();
+```
+
+Expected fields:
+
+- `status`: `empty`, `loading-cache`, `ready`, `unavailable`, or `error`
+- `source`: `worker` or `server` when ready
+- `structureKey`: server cache key for the current structure
+- `counts`: precomputed interaction counts by type
+- `elapsedMs`: worker build time when available
+
+Force a rebuild:
+
+```js
+molAgent.rebuildInteractionIndex();
+```
+
+Rendering rules:
+
+- All nonbonded interaction guide lines are dashed.
+- A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
+- Protein cartoon alone does not count as atom-level display for interaction endpoints.
+- H-bond and salt sliders filter the precomputed index; they do not trigger a full reindex.
 
 ## Selection Commands
 
@@ -399,9 +432,11 @@ molAgent.getState();
 
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
 
-Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
+Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing.
 
-The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that structure first; `data/8UCD.pdb` is only used when no saved structure exists.
+The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that structure first; the bundled sample structure is only used when no saved structure exists.
+
+Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files.
 
 ## `molAgent.run` Compatibility Commands
 
@@ -484,6 +519,6 @@ molAgent.model();
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files and the `/api/last-structure` persistence endpoint.
+- `server.py` serves static files plus `/api/last-structure` and `/api/interaction-index/<structureKey>`.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

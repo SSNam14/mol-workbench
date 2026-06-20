@@ -12,7 +12,10 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 STATE_DIR = ROOT / ".viewer_state"
 LAST_STRUCTURE_PATH = STATE_DIR / "last_structure.json"
+INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
+MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
+INTERACTION_INDEX_SCHEMA = "interaction-index-v3"
 
 
 def normalize_entry(value):
@@ -44,20 +47,32 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if urlparse(self.path).path == "/api/last-structure":
+        path = urlparse(self.path).path
+        if path == "/api/last-structure":
             self.handle_get_last_structure()
+            return
+        if path.startswith("/api/interaction-index/"):
+            self.handle_get_interaction_index(path.rsplit("/", 1)[-1])
             return
         super().do_GET()
 
     def do_POST(self):
-        if urlparse(self.path).path == "/api/last-structure":
+        path = urlparse(self.path).path
+        if path == "/api/last-structure":
             self.handle_put_last_structure()
+            return
+        if path.startswith("/api/interaction-index/"):
+            self.handle_put_interaction_index(path.rsplit("/", 1)[-1])
             return
         self.send_error(404)
 
     def do_PUT(self):
-        if urlparse(self.path).path == "/api/last-structure":
+        path = urlparse(self.path).path
+        if path == "/api/last-structure":
             self.handle_put_last_structure()
+            return
+        if path.startswith("/api/interaction-index/"):
+            self.handle_put_interaction_index(path.rsplit("/", 1)[-1])
             return
         self.send_error(404)
 
@@ -101,6 +116,56 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         with tmp_path.open("w", encoding="utf-8") as fh:
             json.dump({"entry": entry}, fh, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp_path, LAST_STRUCTURE_PATH)
+        self.send_json(200, {"ok": True})
+
+    def interaction_index_path(self, key):
+        if not key or not all(ch.isalnum() or ch in "._-" for ch in key):
+            return None
+        return INTERACTION_INDEX_DIR / f"{key}.json"
+
+    def handle_get_interaction_index(self, key):
+        path = self.interaction_index_path(key)
+        if path is None:
+            self.send_json(400, {"error": "invalid_key"})
+            return
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except FileNotFoundError:
+            self.send_json(404, {"error": "not_found"})
+            return
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "cache_read_failed"})
+            return
+        self.send_json(200, payload)
+
+    def handle_put_interaction_index(self, key):
+        path = self.interaction_index_path(key)
+        if path is None:
+            self.send_json(400, {"error": "invalid_key"})
+            return
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = int(raw_length or "0")
+        except ValueError:
+            self.send_json(400, {"error": "invalid_content_length"})
+            return
+        if length <= 0 or length > MAX_INTERACTION_INDEX_BYTES:
+            self.send_json(413 if length > MAX_INTERACTION_INDEX_BYTES else 400, {"error": "invalid_body_size"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(400, {"error": "invalid_json"})
+            return
+        if not isinstance(payload, dict) or payload.get("schema") != INTERACTION_INDEX_SCHEMA or payload.get("structureKey") != key:
+            self.send_json(400, {"error": "invalid_interaction_index"})
+            return
+        INTERACTION_INDEX_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".json.tmp")
+        with tmp_path.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp_path, path)
         self.send_json(200, {"ok": True})
 
 
