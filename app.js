@@ -6,9 +6,11 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, atoms = [], atomByIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entries = [];
+  const entryChecked = Object.create(null);
   let displayedCount = 0;
+  let lastSessionRevision = null, sessionSyncTimer = null, sessionSyncInFlight = false, suppressSessionPollUntil = 0;
 
   const waterNames = new Set(['HOH','WAT','DOD','H2O']);
   const ionNames = new Set(['NA','CL','K','MG','CA','ZN','MN','FE','CU','CO','NI','CD','HG','SR','BA','CS','RB','LI','AL','IOD','BR']);
@@ -33,6 +35,8 @@ function boot(){
     pipi:{faceMaxDistance:4.4,faceMaxAngle:30,edgeMaxDistance:5.5,edgeMinAngle:60},
     contact:{maxDistance:4.8,minDistance:2.0,goodCutoffRatio:1.3,badCutoffRatio:0.89,uglyCutoffRatio:0.75,maxInteractions:12000}
   };
+  const VIEWER_SESSION_API = 'api/session';
+  const VIEWER_SESSION_META_API = 'api/session-meta';
   const LAST_STRUCTURE_API = 'api/last-structure';
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
@@ -43,7 +47,7 @@ function boot(){
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const state = {
-    baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
+    baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick', solvent:'off', other:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
     selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
@@ -130,16 +134,116 @@ function boot(){
     const name=normText(e.name||'structure');
     return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
   }
-  function saveLastStructure(e){
-    const entry=normalizeStructureEntry(e);
-    if(!entry)return Promise.resolve(false);
-    return fetch(LAST_STRUCTURE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)}).then(res=>res.ok).catch(()=>false);
+  function normalizeViewerSession(payload){
+    if(!payload||typeof payload!=='object'||!Array.isArray(payload.entries))return null;
+    const out=[],seen=new Set();
+    payload.entries.forEach(raw=>{
+      const entry=normalizeStructureEntry(raw&&raw.entry?raw.entry:raw);
+      if(!entry)return;
+      const existing=out.findIndex(e=>e.name===entry.name);
+      if(existing>=0)out[existing]=entry;
+      else{ seen.add(entry.name); out.push(entry); }
+    });
+    if(!out.length)return null;
+    const names=new Set(out.map(e=>e.name));
+    let included=Array.isArray(payload.includedEntries)?payload.includedEntries.map(String).filter(name=>names.has(name)):[];
+    if(!included.length)included=out.map(e=>e.name);
+    let active=normText(payload.activeEntry||payload.currentName||included[0]||out[0].name);
+    if(!names.has(active))active=included[0]||out[0].name;
+    return {entries:out,includedEntries:included,activeEntry:active};
+  }
+  function rememberSessionMeta(meta){
+    if(meta&&meta.revision!=null)lastSessionRevision=String(meta.revision);
+  }
+  function rememberSessionResponse(payload){
+    if(!payload||typeof payload!=='object')return;
+    if(payload.revision!=null)rememberSessionMeta(payload);
+    else if(payload.session)rememberSessionMeta(payload.session);
+  }
+  function loadSessionMeta(){
+    return fetch(VIEWER_SESSION_META_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).catch(()=>null);
+  }
+  function viewerSessionPayload(){
+    const clean=entries.map(normalizeStructureEntry).filter(Boolean);
+    if(!clean.length)return null;
+    const names=new Set(clean.map(e=>e.name));
+    let included=clean.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
+    if(!included.length)included=[clean[0].name];
+    let active=names.has(currentName)?currentName:included[0];
+    return {entries:clean,includedEntries:included,activeEntry:active};
+  }
+  function saveViewerSession(){
+    const payload=viewerSessionPayload();
+    suppressSessionPollUntil=Date.now()+1500;
+    if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+    return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+  }
+  function loadViewerSession(){
+    return fetch(VIEWER_SESSION_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).then(payload=>{ rememberSessionResponse(payload); return normalizeViewerSession(payload); }).catch(()=>null);
   }
   function loadLastStructure(){
     return fetch(LAST_STRUCTURE_API,{cache:'no-store'}).then(res=>{
       if(!res.ok)return null;
       return res.json();
-    }).then(payload=>normalizeStructureEntry(payload&&payload.entry?payload.entry:payload)).catch(()=>null);
+    }).then(payload=>{
+      const entry=normalizeStructureEntry(payload&&payload.entry?payload.entry:payload);
+      return entry?{entries:[entry],includedEntries:[entry.name],activeEntry:entry.name}:null;
+    }).catch(()=>null);
+  }
+  function restoreViewerSession(session,opts){
+    session=normalizeViewerSession(session);
+    if(!session)throw new Error('Invalid viewer session');
+    opts=opts||{};
+    if(!viewer)initViewer();
+    entries.splice(0,entries.length);
+    session.entries.forEach(e=>entries.push(e));
+    Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    currentName=session.activeEntry;
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
+    return session;
+  }
+  function restoreEmptyViewerSession(){
+    entries.splice(0,entries.length);
+    Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    currentName='';
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+  }
+  async function pollViewerSession(){
+    if(sessionSyncInFlight||Date.now()<suppressSessionPollUntil)return;
+    sessionSyncInFlight=true;
+    try{
+      const meta=await loadSessionMeta();
+      if(!meta||meta.revision==null)return;
+      const revision=String(meta.revision);
+      if(lastSessionRevision==null){ lastSessionRevision=revision; return; }
+      if(revision===lastSessionRevision)return;
+      lastSessionRevision=revision;
+      if(!Array.isArray(meta.entries)||!meta.entries.length){
+        restoreEmptyViewerSession();
+        setStatus('Viewer session cleared on server');
+        return;
+      }
+      const session=await loadViewerSession();
+      if(session){
+        restoreViewerSession(session,{realtime:true});
+        setStatus('Viewer session updated from server');
+      }
+    }finally{
+      sessionSyncInFlight=false;
+    }
+  }
+  function startSessionSync(){
+    if(sessionSyncTimer)return;
+    sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
@@ -205,15 +309,17 @@ function boot(){
     if(r==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:0.45,colorfunc:chainRibbonColor}};
     return {cartoon:{colorfunc:chainRibbonColor,thickness:0.15}};
   }
-  function proteinAtomStyleSpec(){
-    const r=state.proteinAtoms;
-    if(r==='line')return {};
-    if(r==='stick')return {stick:{radius:0.14,colorfunc:chainAwareAtomColor}};
-    if(r==='sphere')return {sphere:{scale:0.28,colorfunc:chainAwareAtomColor}};
-    if(r==='cpk')return cpkStyleSpec(chainAwareAtomColor,1,'protein',{});
-    return {};
+  function atomRepSpec(rep,colorfunc,ctx,sizes){
+    rep=normText(rep||'off').toLowerCase(); sizes=sizes||{};
+    if(rep==='off'||rep==='hide'||rep==='line')return {};
+    if(rep==='sphere')return {sphere:{scale:sizes.sphere||0.36,colorfunc}};
+    if(rep==='cpk')return cpkStyleSpec(colorfunc,1,ctx,{});
+    return {stick:{radius:sizes.stick||0.2,colorfunc}};
   }
-  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; if(r==='cpk')return cpkStyleSpec(elementColor,1,'ligand',{}); return {stick:{radius:0.2,colorfunc:elementColor}}; }
+  function proteinAtomStyleSpec(){ return atomRepSpec(state.proteinAtoms, chainAwareAtomColor, 'protein', {stick:0.14,sphere:0.28}); }
+  function ligandStyleSpec(){ return atomRepSpec(state.ligand, elementColor, 'ligand', {stick:0.2,sphere:0.36}); }
+  function solventStyleSpec(){ return atomRepSpec(state.solvent, elementColor, 'ligand', {stick:0.16,sphere:0.3}); }
+  function otherStyleSpec(){ return atomRepSpec(state.other, elementColor, 'ligand', {stick:0.2,sphere:0.36}); }
 
   function matchScalar(av,want,key){
     if(want==null)return true;
@@ -269,7 +375,8 @@ function boot(){
     if(isPureSerialSelector(r))return filterAtomsBySerial(r.serial);
     return atoms.filter(a=>matchesResolvedSelector(a,r));
   }
-  function residueUiKey(a){ return (a.chain||'')+':'+a.resi; }
+  function residueUiKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi; }
+  function atomEntryIndexKey(entry,index){ return (entry||'')+'\u0001'+index; }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
@@ -290,11 +397,25 @@ function boot(){
   function countAtoms(sel){ return selectionInfo(sel).atomCount; }
   function residueCount(sel){ return selectionInfo(sel).residueCount; }
   function combineSelectors(a,b){ const seen=new Set(); [a,b].forEach(s=>addSelectorSerials(seen,s,{})); return {serial:Array.from(seen)}; }
-  function normalizeSelectorInput(s){ if(s==null)return {}; if(typeof s!=='object')return s; return s; }
+  function normalizeSelectorInput(s){
+    if(s==null)return null;
+    if(Array.isArray(s)){
+      if(!s.every(x=>x&&typeof x==='object'&&!Array.isArray(x)))throw new Error('Selection array entries must be selector objects.');
+      return {or:s};
+    }
+    if(typeof s!=='object')throw new Error('Selection selector must be an object, an array of objects, or null.');
+    return s;
+  }
 
   function applyVisibility(){
     const off=[];
-    for(const a of atoms){ const c=atomCategory(a); if(!state.visibility[c]){off.push(a.serial);continue;} if(c==='protein'&&state.chainVisible[a.chain]===false)off.push(a.serial); }
+    for(const a of atoms){
+      const c=atomCategory(a);
+      if(!state.visibility[c]){off.push(a.serial);continue;}
+      if(c==='protein'&&state.chainVisible[a.chain]===false){off.push(a.serial);continue;}
+      if(c==='solvents'&&state.solvent==='off'){off.push(a.serial);continue;}
+      if(c==='other'&&state.other==='off')off.push(a.serial);
+    }
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
   }
@@ -352,12 +473,13 @@ function boot(){
   }
   function selectionBondData(selected){
     const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set(),bonds=[];
-    selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(a.index); });
+    selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(atomEntryIndexKey(a._entryName,a.index)); });
     selected.forEach(a=>{
       (a.bonds||[]).forEach(idx=>{
-        const b=atomByIndex.get(idx);
-        if(!b||!selectedIndexes.has(b.index))return;
-        const ka=a.index<b.index?a.index+':'+b.index:b.index+':'+a.index;
+        const b=atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx);
+        if(!b||!selectedIndexes.has(atomEntryIndexKey(b._entryName,b.index)))return;
+        const ea=a._entryName||'',eb=b._entryName||'';
+        const ka=ea+':'+a.index<eb+':'+b.index?ea+':'+a.index+'|'+eb+':'+b.index:eb+':'+b.index+'|'+ea+':'+a.index;
         if(bondKeys.has(ka))return;
         bondKeys.add(ka);
         if(a.serial!=null)bondedSerials.add(a.serial);
@@ -411,7 +533,8 @@ function boot(){
       }catch(e){}
     }
     if(rep)return rep;
-    const base=a.hetflag?state.ligand:state.proteinAtoms;
+    const c=atomCategory(a);
+    const base=c==='ligands'?state.ligand:(c==='solvents'?state.solvent:(c==='other'?state.other:state.proteinAtoms));
     return ATOM_REPS.has(base)?base:'none';
   }
   function partitionSelectionByDisplay(selected){
@@ -454,8 +577,11 @@ function boot(){
     if(!wideLineLayer)return;
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
+    const cs=_catSer||categorySerials();
     if(state.proteinAtoms==='line')addWideStyleAtoms(lines,points,{hetflag:false},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
-    if(state.ligand==='line')addWideStyleAtoms(lines,points,{hetflag:true},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
     for(const r of state.styleRules){
       if(r.disabled)continue;
       const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
@@ -514,11 +640,13 @@ function boot(){
     opts=opts||{};
     resetAtomLevelCache();
     selectionStyleActive=false;
+    _catSer=categorySerials();
     viewer.setStyle({},{});
     viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
     if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
-    viewer.setStyle({hetflag:true}, ligandStyleSpec());
-    viewer.setStyle({resn:Array.from(waterNames)},{});
+    if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
+    if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
+    if(_catSer.other.length)viewer.setStyle({serial:_catSer.other}, otherStyleSpec());
     for(const r of state.styleRules){ if(r.disabled)continue; try{ viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
@@ -561,10 +689,11 @@ function boot(){
       bar.appendChild(wrap);
     }
     seg('Kind',kind);
+    if(a._entryTitle||a._entryName)seg('Entry',a._entryTitle||a._entryName);
     seg('Chain',a.chain||'-');
     seg('Residue',(a.resn||'-')+' '+(a.resi==null?'-':a.resi));
     seg('Atom',(a.atom||'-')+' ('+(atomElem(a)||'-')+')');
-    seg('Serial',a.serial==null?'-':a.serial);
+    seg('Serial',a._sourceSerial==null?(a.serial==null?'-':a.serial):a._sourceSerial);
     seg('XYZ',Number(a.x).toFixed(2)+', '+Number(a.y).toFixed(2)+', '+Number(a.z).toFixed(2));
   }
   function handleAtomClick(a,e){
@@ -572,13 +701,14 @@ function boot(){
     if(state.selectionMode==='range'){ handleRangeSelection(a,e); return; }
     setSelection(selectionFromAtom(a,state.selectionMode), {source:'click',additive:e&&e.shiftKey});
   }
-  function selectionFromAtom(a,m){ if(m==='atom')return {serial:a.serial}; if(m==='chain')return {chain:a.chain}; if(m==='model')return {}; return {chain:a.chain,resi:a.resi,resn:a.resn}; }
+  function selectionFromAtom(a,m){ if(m==='atom')return {serial:a.serial}; if(m==='chain')return {_entryName:a._entryName,chain:a.chain}; if(m==='model')return {_entryName:a._entryName}; return {_entryName:a._entryName,chain:a.chain,resi:a.resi,resn:a.resn}; }
   function handleRangeSelection(a,e){
     const resi=Number(a.resi),chain=a.chain||'';
-    if(!Number.isFinite(resi)){ setSelection({chain:a.chain,resi:a.resi,resn:a.resn},{additive:e&&e.shiftKey}); return; }
-    if(!state.rangeAnchor||state.rangeAnchor.chain!==chain){ state.rangeAnchor={chain,resi}; setStatus('Range start: '+(chain||'-')+' '+resi+' \u2014 click end residue'); return; }
+    const entry=a._entryName||'';
+    if(!Number.isFinite(resi)){ setSelection({_entryName:entry,chain:a.chain,resi:a.resi,resn:a.resn},{additive:e&&e.shiftKey}); return; }
+    if(!state.rangeAnchor||state.rangeAnchor.chain!==chain||state.rangeAnchor.entry!==entry){ state.rangeAnchor={entry,chain,resi}; setStatus('Range start: '+(chain||'-')+' '+resi+' \u2014 click end residue'); return; }
     const lo=Math.min(state.rangeAnchor.resi,resi),hi=Math.max(state.rangeAnchor.resi,resi); state.rangeAnchor=null;
-    setSelection({chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
+    setSelection({_entryName:entry,chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
   }
   function applySelectionOptionOverrides(opts){
     if(opts.representation)state.selectionRepresentation=normText(opts.representation).toLowerCase();
@@ -590,6 +720,7 @@ function boot(){
   function setSelection(sel,opts){
     opts=opts||{};
     const next=normalizeSelectorInput(sel), add=!!(opts.additive||opts.add);
+    if(next==null){ clearSelection(); return null; }
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
     selectionAtoms=selectedAtomsForSelector(state.selectionSel);
     state.rangeAnchor=null; state.focusTarget=null;
@@ -631,20 +762,39 @@ function boot(){
   const vdwR={H:1.20,C:1.70,N:1.55,O:1.52,S:1.80,P:1.80,F:1.47,CL:1.75,BR:1.85,I:1.98,ZN:1.39,FE:1.56,MG:1.73,CA:2.31,NA:2.27,K:2.75,MN:1.61,CU:1.40,CO:1.50,NI:1.49,SE:1.90};
   function vdwOf(a){ return vdwR[atomElem(a)]||1.7; }
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
-  function residueKey(a){ return (a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
+  function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
-  let _lvlCache=null, _lvlSerialCache=null;
-  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; }
+  let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
+  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; }
+  function categorySerials(){
+    const out={ligands:[],solvents:[],other:[]};
+    for(const a of atoms){
+      const c=atomCategory(a);
+      if(out[c]&&a.serial!=null)out[c].push(a.serial);
+    }
+    return out;
+  }
   function hiddenByRules(a){ for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector)))return true; }catch(e){} } return false; }
-  function isAtomVisibleNow(a){ const c=atomCategory(a); if(state.visibility[c]===false)return false; if(c==='protein'&&state.chainVisible[a.chain]===false)return false; if(isWaterAtom(a))return false; if(hiddenByRules(a))return false; return true; }
+  function isAtomVisibleNow(a){
+    const c=atomCategory(a);
+    if(state.visibility[c]===false)return false;
+    if(c==='protein'&&state.chainVisible[a.chain]===false)return false;
+    if(c==='solvents'&&state.solvent==='off')return false;
+    if(c==='other'&&state.other==='off')return false;
+    if(hiddenByRules(a))return false;
+    return true;
+  }
   // "Visualized atoms" = atoms currently shown at the ATOM level by the display
   // settings. This is independent of the (yellow) selection, so the Interactions button behaves the
   // same way regardless of what is selected.
   function isAtomLevelShown(a){
     if(!isAtomVisibleNow(a))return false;
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector))&&ATOM_REPS.has(normText(r.representation).toLowerCase()))return true; }catch(e){} }
-    if(a.hetflag)return ATOM_REPS.has(state.ligand);
+    const c=atomCategory(a);
+    if(c==='ligands')return ATOM_REPS.has(state.ligand);
+    if(c==='solvents')return ATOM_REPS.has(state.solvent);
+    if(c==='other')return ATOM_REPS.has(state.other);
     return ATOM_REPS.has(state.proteinAtoms);
   }
   function atomLevelAtoms(){ if(!_lvlCache)_lvlCache=atoms.filter(isAtomLevelShown); return _lvlCache; }
@@ -665,7 +815,8 @@ function boot(){
     const n=Number(a.serial);
     return atomLevelSerials().has(Number.isNaN(n)?String(a.serial):n);
   }
-  const interState={ scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
+  const DEFAULT_INTER_SCOPE={noncov:'all', pi:'pl', contact:'pl'};
+  const DEFAULT_INTER_TYPES={
     hbond:{label:'Hydrogen bonds',color:'#ffd400',on:true},
     halogen:{label:'Halogen bonds',color:'#9b30ff',on:true},
     salt:{label:'Salt bridges',color:'#ff45c0',on:true},
@@ -675,17 +826,29 @@ function boot(){
     good:{label:'Good',color:'#26a69a',on:false},
     bad:{label:'Bad',color:'#ffa726',on:true},
     ugly:{label:'Ugly',color:'#ef5350',on:true}
-  }};
+  };
+  function cloneInteractionTypes(){ return clonePlain(DEFAULT_INTER_TYPES); }
+  const interState={ enabled:true, scope:Object.assign({},DEFAULT_INTER_SCOPE), types:cloneInteractionTypes() };
+  function resetInteractionSettings(){
+    interState.enabled=true;
+    interState.scope=Object.assign({},DEFAULT_INTER_SCOPE);
+    interState.types=cloneInteractionTypes();
+    state.hbondCutoff=2.8;
+    state.saltCutoff=5.0;
+    updateInterToggle();
+    buildInterPanel();
+  }
   function atomPayloadForInteractionIndex(){
     return atoms.map(a=>{
-      const bonds=(a.bonds||[]).map(idx=>atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
-      return {serial:a.serial,index:a.index,chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
+      const bonds=(a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
+      return {serial:a.serial,index:a.index,entry:a._entryName||'',chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
     });
   }
   function resetInteractionIndex(status){
     interactionBuildSeq++;
     if(interactionWorker){ try{ interactionWorker.terminate(); }catch(e){} interactionWorker=null; }
     interactionIndex={status:status||'empty',jobId:interactionBuildSeq,interactions:null,counts:{}};
+    updateInteractionSummary(0);
   }
   function countInteractionIndex(interactions){
     interactions=interactions||{};
@@ -717,6 +880,7 @@ function boot(){
   function startInteractionWorker(jobId,key){
     if(!window.Worker){
       interactionIndex.status='unavailable';
+      updateInteractionSummary(0);
       return;
     }
     setStatus('Building interaction index...');
@@ -727,6 +891,7 @@ function boot(){
       if(jobId!==interactionBuildSeq)return;
       if(msg.error){
         interactionIndex={status:'error',jobId,interactions:null,counts:{},error:msg.error};
+        updateInteractionSummary(0);
         setStatus('Interaction index failed: '+msg.error);
         return;
       }
@@ -739,11 +904,18 @@ function boot(){
       if(jobId!==interactionBuildSeq)return;
       interactionIndex={status:'error',jobId,interactions:null,counts:{},error:e.message||'worker error'};
       interactionWorker=null;
+      updateInteractionSummary(0);
       setStatus('Interaction index failed: '+interactionIndex.error);
     };
     worker.postMessage({jobId,atoms:atomPayloadForInteractionIndex(),criteria:INTERACTION_CRITERIA});
   }
   function startInteractionIndexBuild(){
+    const visible=includedEntries();
+    if(visible.length!==1){
+      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      clearInteractionShapes();
+      return;
+    }
     resetInteractionIndex('loading-cache');
     const key=currentStructureKey;
     if(!key){ startInteractionWorker(interactionBuildSeq,key); return; }
@@ -807,7 +979,7 @@ function boot(){
   function detectHBonds(scope){ const C=atomLevelAtoms().filter(a=>isPolar(a)&&!isWaterAtom(a)); return pairsSym(scope,C,2.4,state.hbondCutoff,1500); }
   function detectHalogen(scope){ const hal=a=>['CL','BR','I'].includes(atomElem(a)),acc=a=>['O','N','S'].includes(atomElem(a))&&!isWaterAtom(a); return pairsAsym(scope,atomLevelAtoms().filter(hal),atomLevelAtoms().filter(acc),2.6,3.9,400); }
   function detectSalt(scope){ return pairsAsym(scope,atomLevelAtoms().filter(isPositive),atomLevelAtoms().filter(isNegative),1.6,state.saltCutoff,800); }
-  function aromaticRings(){ const by=new Map(); for(const a of atoms){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
+  function aromaticRings(){ const by=new Map(); for(const a of atoms){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
   function ringsLvl(){ return aromaticRings().filter(r=>isAtomLevelShown(r.atom)); }
   function ringPairs(scope,rings){
     const out=[];
@@ -864,8 +1036,10 @@ function boot(){
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
-    if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
+    if(!interState.enabled){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
+    if(!model||!atoms.length){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
     if(!indexedInteractionsReady()){
+      updateInteractionSummary(0);
       if(render!==false)viewer.render();
       return;
     }
@@ -885,6 +1059,7 @@ function boot(){
       }
     }catch(e){}
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
+    updateInteractionSummary(interactionWideLines.length);
     if(render!==false)viewer.render();
   }
   function interIcon(kind){ const s=document.createElement('span'); s.style.cssText='display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex:none;background:#159aad;color:#fff;font-size:13px;font-weight:700'; s.textContent=kind==='noncov'?'H':(kind==='pi'?'\u03c0':'\u2731'); return s; }
@@ -904,9 +1079,9 @@ function boot(){
     const body=$('interPanelBody'); if(!body)return; body.innerHTML='';
     const SCOPE_OPTS=[['All','all'],['Protein-Ligand','pl'],['Protein-Protein','pp']];
     const groups=[
-      {key:'noncov',name:'Non-covalent bonds',rows:[['hbond','halogen'],['salt','aromhb']],gear:false},
-      {key:'pi',name:'Pi interactions',rows:[['pipi','pication']],gear:true},
-      {key:'contact',name:'Contacts/Clashes',rows:[['good','bad','ugly']],gear:true}
+      {key:'noncov',name:'Non-covalent bonds',rows:[['hbond','halogen'],['salt','aromhb']]},
+      {key:'pi',name:'Pi interactions',rows:[['pipi','pication']]},
+      {key:'contact',name:'Contacts/Clashes',rows:[['good','bad','ugly']]}
     ];
     groups.forEach((g,gi)=>{
       const sec=document.createElement('div'); sec.style.cssText='display:grid;gap:9px;padding:11px 0'+(gi>0?';border-top:1px solid #1c1c1c':'');
@@ -918,7 +1093,6 @@ function boot(){
       sel.value=interState.scope[g.key];
       sel.onchange=function(){ interState.scope[g.key]=sel.value; redrawInteractions(true); };
       head.appendChild(sel);
-      const gr=document.createElement('span'); gr.textContent=g.gear?'\u2699':''; gr.style.cssText='flex:none;width:14px;text-align:center;color:#8f8f8f;font-size:13px'; head.appendChild(gr);
       sec.appendChild(head);
       g.rows.forEach(row=>{ const r=document.createElement('div'); r.style.cssText='display:grid;grid-template-columns:repeat('+row.length+',1fr);gap:8px;padding-left:30px'; row.forEach(k=>r.appendChild(makeInterToggle(k))); sec.appendChild(r); });
       body.appendChild(sec);
@@ -927,18 +1101,43 @@ function boot(){
   function openInterPanel(){ $('interPanel').hidden=false; setBtnActive($('interBtn'),true); }
   function closeInterPanel(){ $('interPanel').hidden=true; setBtnActive($('interBtn'),false); }
   function toggleInterPanel(){ if($('interPanel').hidden)openInterPanel(); else closeInterPanel(); }
+  function indexedInteractionTotal(){
+    const c=interactionIndex&&interactionIndex.counts||{};
+    return ['hbond','halogen','salt','pipi','pication','contactGood','contactBad','contactUgly'].reduce((sum,k)=>sum+Number(c[k]||0),0);
+  }
+  function updateInteractionSummary(visibleCount){
+    const btn=$('interBtn'); if(!btn)return;
+    const visible=Number(visibleCount||0),indexed=indexedInteractionTotal();
+    btn.textContent=indexedInteractionsReady()?'Interactions '+visible:'Interactions';
+    if(interactionIndex&&interactionIndex.status==='multi-entry'){
+      btn.title='Interactions disabled for multi-entry display';
+    }else if(indexedInteractionsReady()){
+      btn.title='Indexed '+indexed+' interactions; '+visible+' currently visible with atom-level display';
+    }else{
+      btn.title='Interactions not indexed yet';
+    }
+  }
+  function updateInterToggle(){
+    const b=$('interToggle'); if(!b)return;
+    const on=interState.enabled;
+    b.style.background=on?'#1a4f7a':'#2d2d2d';
+    b.style.borderColor=on?'#3a7bd5':'#555';
+    b.style.color=on?'#fff':'#6f6f6f';
+    b.title=on?'Interactions on - click to turn off':'Interactions off - click to turn on';
+  }
   function setBtnActive(btn,on){ if(!btn)return; btn.style.background=on?'#1a4f7a':'#2d2d2d'; btn.style.borderColor=on?'#3a7bd5':'#555'; btn.style.color=on?'#fff':'#d4d4d4'; }
 
   function chargeOf(resn){ const r=normUpper(resn); if(r==='ARG'||r==='LYS')return 1; if(r==='ASP'||r==='GLU')return -1; return 0; }
   function updateStatusBar(){
     const residues=new Set(),chains=new Set(),ligs=new Set(); let charge=0; const seenRes=new Set();
-    atoms.forEach(a=>{ const rk=(a.chain||'')+':'+a.resi+':'+(a.resn||''); residues.add(rk); chains.add(a.chain||'?'); if(isLigand(a))ligs.add((a.chain||'')+':'+(a.resn||'')+':'+a.resi); if(!seenRes.has(rk)){ seenRes.add(rk); charge+=chargeOf(a.resn); } });
+    atoms.forEach(a=>{ const rk=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+(a.resn||''); residues.add(rk); chains.add(a.chain||'?'); if(isLigand(a))ligs.add((a._entryName||'')+':'+(a.chain||'')+':'+(a.resn||'')+':'+a.resi); if(!seenRes.has(rk)){ seenRes.add(rk); charge+=chargeOf(a.resn); } });
     const protChains=new Set(); atoms.forEach(a=>{ if(isProtein(a))protChains.add(a.chain||'?'); });
     const mols = protChains.size + ligs.size;
     $('stAtoms').textContent=atoms.length.toLocaleString();
     $('stChains').textContent=chains.size;
     $('stResidues').textContent=residues.size.toLocaleString();
-    $('stEntries').textContent=entries.length;
+    const includedCount=includedEntries().length;
+    $('stEntries').textContent=includedCount===entries.length?entries.length:(includedCount+'/'+entries.length);
     $('stMols').textContent=mols;
     $('stCharge').textContent=(charge>0?'+':'')+charge;
     $('stDisplayed').textContent=displayedCount.toLocaleString()+' of '+atoms.length.toLocaleString();
@@ -961,12 +1160,27 @@ function boot(){
       const row=document.createElement('div');
       const active=e.name===currentName;
       row.setAttribute('data-row','');
-      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr;align-items:center;height:22px;padding:0 8px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
+      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
-      const chk=document.createElement('input'); chk.type='radio'; chk.checked=active; chk.style.cssText='width:12px;height:12px;accent-color:#3a7bd5;pointer-events:none';
+      const chk=document.createElement('input'); chk.type='checkbox';
+      chk.checked=entryChecked[e.name]!==false;
+      const CHK_ON="border:1px solid #3a7bd5;background:#3a7bd5 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E\") center/10px no-repeat";
+      const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
+      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:3px;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
+      paintChk();
+      chk.onclick=function(ev){ ev.stopPropagation(); };
+      chk.onchange=function(){ setEntryIncluded(e,chk.checked); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
-      row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl);
-      row.onclick=function(){ if(e.name!==currentName)persistAndLoadEntry(e).catch(err=>setStatus('Load failed: '+err.message)); };
+      const del=document.createElement('button');
+      del.type='button';
+      del.textContent='\u00d7';
+      del.title='Delete entry';
+      del.style.cssText='width:17px;height:17px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:#9a9a9a;cursor:pointer;font-size:13px;line-height:1;padding:0';
+      del.onmouseenter=function(){ del.style.color='#fff'; del.style.borderColor='#555'; del.style.background='#3a1f1f'; };
+      del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
+      del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); deleteEntry(e); };
+      row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+      row.onclick=function(){ activateEntry(e); };
       el.appendChild(row);
     });
   }
@@ -990,7 +1204,8 @@ function boot(){
     arrow.className='tree-arrow';
     arrow.textContent='\u25be';
     head.appendChild(arrow);
-    head.appendChild(document.createTextNode(currentName||'\u2014'));
+    const shown=includedEntries();
+    head.appendChild(document.createTextNode((currentName||'\u2014')+(shown.length>1?' ('+shown.length+' shown)':'')));
     tree.appendChild(head);
     const counts={protein:0,ligands:0,solvents:0,other:0};
     atoms.forEach(a=>{ counts[atomCategory(a)]++; });
@@ -1019,12 +1234,13 @@ function boot(){
   function buildSequence(){
     const body=$('seqBody'); if(!body){ seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set(); return; } body.innerHTML=''; seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set();
     const byChain=new Map();
-    atoms.forEach(a=>{ if(!isProtein(a))return; const c=a.chain||'?'; if(!byChain.has(c))byChain.set(c,new Map()); const m=byChain.get(c); if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c}); });
+    atoms.forEach(a=>{ if(!isProtein(a))return; const entry=a._entryName||'',c=a.chain||'?',ck=entry+'\u0001'+c; if(!byChain.has(ck))byChain.set(ck,{entry,chain:c,residues:new Map()}); const m=byChain.get(ck).residues; if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c,entry}); });
     const chains=Array.from(byChain.keys()).sort();
-    chains.forEach(c=>{
-      const residues=Array.from(byChain.get(c).values()).sort((x,y)=>Number(x.resi)-Number(y.resi));
+    chains.forEach(ck=>{
+      const group=byChain.get(ck),c=group.chain,entry=group.entry;
+      const residues=Array.from(group.residues.values()).sort((x,y)=>Number(x.resi)-Number(y.resi));
       const rowWrap=document.createElement('div'); rowWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;white-space:nowrap';
-      const tag=document.createElement('span'); tag.textContent=c; tag.style.cssText='position:sticky;left:0;flex:none;width:16px;text-align:center;font-size:11px;font-weight:700;color:'+chainColor(c)+';background:#121212;z-index:1';
+      const tag=document.createElement('span'); tag.textContent=entries.length>1?(entry+':'+c):c; tag.style.cssText='position:sticky;left:0;flex:none;width:'+(entries.length>1?'74px':'16px')+';text-align:center;font-size:11px;font-weight:700;color:'+chainColor(c)+';background:#121212;z-index:1';
       rowWrap.appendChild(tag);
       const strip=document.createElement('span'); strip.style.cssText='font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;letter-spacing:1px';
       residues.forEach(r=>{
@@ -1032,11 +1248,11 @@ function boot(){
         const sp=document.createElement('span'); sp.setAttribute('data-seq',''); sp.textContent=code;
         sp.dataset.chain=c; sp.dataset.resi=r.resi;
         sp.style.cssText='display:inline-block;width:9px;text-align:center;color:#c8c8c8;cursor:pointer;border-radius:2px';
-        sp.onclick=function(e){ setSelection({chain:c,resi:Number(r.resi),resn:r.resn},{additive:e.shiftKey}); focus({chain:c,resi:Number(r.resi)}); };
-        sp.title=c+' '+r.resn+' '+r.resi;
+        sp.onclick=function(e){ const n=Number(r.resi),sel={_entryName:entry,chain:c,resi:Number.isFinite(n)?n:r.resi,resn:r.resn}; setSelection(sel,{additive:e.shiftKey}); focus(sel); };
+        sp.title=(entries.length>1?entry+' ':'')+c+' '+r.resn+' '+r.resi;
         strip.appendChild(sp);
-        const key=c+':'+Number(r.resi);
-        seqResidues.push({el:sp,chain:c,resi:Number(r.resi),key});
+        const key=entry+':'+c+':'+r.resi;
+        seqResidues.push({el:sp,chain:c,resi:r.resi,key});
         if(!seqResidueByKey.has(key))seqResidueByKey.set(key,[]);
         seqResidueByKey.get(key).push(sp);
       });
@@ -1065,9 +1281,27 @@ function boot(){
     const keymap={resi:'resi',resn:'resn',atom:'atom',chain:'chain',elem:'elem'};
     const key=keymap[type];
     const seen=new Set();
-    atoms.forEach(a=>{ let v = key==='elem'?atomElem(a):a[key]; if(v==null)return; if(matchScalar(v,(type==='resi'?(/^-?\d+(\s*-\s*-?\d+)?$/.test(q)?q:q):q),key)){ const rk=(a.chain||'')+':'+a.resi+':'+(a.atom||''); if(type==='atom'){ if(!seen.has(a.serial)){seen.add(a.serial); findMatches.push({sel:{serial:a.serial},label:(a.chain||'')+' '+(a.resn||'')+a.resi+' '+a.atom}); } } else { const gk=(a.chain||'')+':'+a.resi; if(!seen.has(gk)){ seen.add(gk); findMatches.push({sel:{chain:a.chain,resi:a.resi,resn:a.resn},label:(a.chain||'')+' '+(a.resn||'')+' '+a.resi}); } } } });
+    atoms.forEach(a=>{
+      let v = key==='elem'?atomElem(a):a[key];
+      if(v==null)return;
+      if(matchScalar(v,(type==='resi'?(/^-?\d+(\s*-\s*-?\d+)?$/.test(q)?q:q):q),key)){
+        const entry=a._entryName||'',prefix=entries.length>1?(a._entryTitle||entry)+' ':'';
+        if(type==='atom'){
+          if(!seen.has(a.serial)){
+            seen.add(a.serial);
+            findMatches.push({sel:{serial:a.serial},label:prefix+(a.chain||'')+' '+(a.resn||'')+a.resi+' '+a.atom});
+          }
+        }else{
+          const gk=entry+':'+(a.chain||'')+':'+a.resi;
+          if(!seen.has(gk)){
+            seen.add(gk);
+            findMatches.push({sel:{_entryName:entry,chain:a.chain,resi:a.resi,resn:a.resn},label:prefix+(a.chain||'')+' '+(a.resn||'')+' '+a.resi});
+          }
+        }
+      }
+    });
     $('findCount').textContent=findMatches.length+' match'+(findMatches.length===1?'':'es');
-    if(findMatches.length){ findIndex=0; gotoFindMatch(); } else { $('findSel').textContent=''; clearSelection(); }
+    if(findMatches.length){ findIndex=0; gotoFindMatch(); } else { $('findSel').textContent='No match; selection kept'; setStatus('Find: no matches'); }
   }
   function gotoFindMatch(){
     if(findIndex<0||findIndex>=findMatches.length)return;
@@ -1088,53 +1322,223 @@ function boot(){
   async function persistAndLoadEntry(e){
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
-    setStatus('Saving on server: '+e.name);
-    await saveLastStructure(e);
-    return loadEntry(e,{persist:false});
+    return loadEntry(e,{persist:true});
+  }
+  function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
+  function displayedStructureKey(list){
+    if(list.length===1)return structureCacheKey(list[0]);
+    return list.length?'multi-'+list.length+'-'+fnv1aHex(list.map(structureCacheKey).join('|')):'';
+  }
+  function resetSelectionState(){
+    state.selectionSel=null;
+    selectionAtoms=[];
+    state.rangeAnchor=null;
+    state.focusTarget=null;
+    state.selectionOptions=defaultSelectionOptions();
+  }
+  function resetDisplayRulesForStructure(){
+    state.styleRules=[];
+    state.hiddenRules=[];
+    state.interactionRules=[];
+    resetSelectionState();
+    state.visibility={protein:true,ligands:true,solvents:true,other:true};
+    state.chainVisible={};
+  }
+  function prepareDisplayedAtoms(entry,list,serialStart){
+    list.forEach(a=>{
+      a._entryName=entry.name;
+      a._entryTitle=entry.title;
+      a._sourceSerial=a.serial;
+      a.serial=serialStart++;
+    });
+    return serialStart;
+  }
+  function refreshAtomMaps(){
+    atomByIndex=new Map();
+    atomByEntryIndex=new Map();
+    atomBySerial=new Map();
+    atoms.forEach(a=>{
+      if(a.index!=null){
+        if(!atomByIndex.has(a.index))atomByIndex.set(a.index,a);
+        atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
+      }
+      if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
+    });
+  }
+  function finishStructureRefresh(visible,opts){
+    opts=opts||{};
+    currentStructureKey=displayedStructureKey(visible);
+    setupAtomEvents();
+    applyStylesFull(false);
+    if(opts.preserveView&&opts.view&&viewer&&viewer.setView){ try{ viewer.setView(opts.view); }catch(e){} }
+    else if(opts.zoom!==false) viewer.zoomTo();
+    viewer.render();
+    buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
+    showHover(null);
+    if(visible.length===1){
+      setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
+      startInteractionIndexBuild();
+    }else{
+      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      clearInteractionShapes();
+      updateInteractionSummary(0);
+      setStatus(visible.length?visible.length+' entries displayed \u00b7 interactions disabled for multi-entry view':'No entries displayed');
+    }
+  }
+  function rebuildDisplayedEntries(opts){
+    opts=opts||{};
+    if(!viewer)initViewer();
+    const view=opts.preserveView&&viewer&&viewer.getView?viewer.getView():null;
+    const visible=includedEntries();
+    if(currentName&&entryChecked[currentName]===false){
+      currentName=visible.length?visible[0].name:'';
+    }else if(!currentName&&visible.length){
+      currentName=visible[0].name;
+    }
+    viewer.clear();
+    if(wideLineLayer)wideLineLayer.clear();
+    interactionShapes=[]; interactionWideLines=[];
+    resetInteractionIndex('empty');
+    models=[]; model=null; atoms=[];
+    let nextSerial=1;
+    visible.forEach(e=>{
+      const m=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
+      const list=m.selectedAtoms({});
+      nextSerial=prepareDisplayedAtoms(e,list,nextSerial);
+      models.push({entry:e,model:m});
+      atoms=atoms.concat(list);
+    });
+    model=models.length?models[0].model:null;
+    refreshAtomMaps();
+    if(!model){
+      currentStructureKey='';
+      resetAtomLevelCache();
+      resetInteractionIndex('empty');
+      buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
+      showHover(null);
+      viewer.render();
+      updateInteractionSummary(0);
+      setStatus('No entries displayed');
+      return null;
+    }
+    finishStructureRefresh(visible,Object.assign({},opts,{view}));
+    return visible;
+  }
+  function setEntryIncluded(entry,on){
+    entryChecked[entry.name]=!!on;
+    resetSelectionState();
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    saveViewerSession();
+  }
+  function deleteEntry(entry){
+    const idx=entries.findIndex(e=>e.name===entry.name);
+    if(idx<0)return null;
+    entries.splice(idx,1);
+    delete entryChecked[entry.name];
+    if(currentName===entry.name){
+      const nextActive=entries.find(e=>entryChecked[e.name]!==false) || entries[0];
+      currentName=nextActive?nextActive.name:'';
+    }
+    resetDisplayRulesForStructure();
+    if(entries.length&&includedEntries().length===0)entryChecked[entries[0].name]=true;
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    saveViewerSession();
+    setStatus('Deleted entry: '+entry.title);
+    return entry;
+  }
+  function entryByIdentifier(value){
+    if(value&&typeof value==='object')value=value.name||value.title||value.pdbId||value.entry||'';
+    const key=normText(value);
+    return entries.find(e=>e.name===key||e.title===key||e.pdbId===key)||null;
+  }
+  function removeEntry(value){
+    const entry=entryByIdentifier(value);
+    if(!entry)throw new Error('Entry not found: '+normText(value||''));
+    const removed=deleteEntry(entry);
+    return removed?{name:removed.name,title:removed.title,pdbId:removed.pdbId,fmt:removed.fmt}:null;
+  }
+  function activateEntry(entry){
+    const wasIncluded=entryChecked[entry.name]!==false;
+    currentName=entry.name;
+    if(!wasIncluded)entryChecked[entry.name]=true;
+    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); saveViewerSession(); }
+    else{ resetSelectionState(); rebuildDisplayedEntries({preserveView:true,zoom:false}); saveViewerSession(); }
   }
   function loadEntry(e,opts){
     opts=opts||{};
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
-    currentStructureKey=structureCacheKey(e);
     if(!viewer)initViewer();
     const existingEntry=entries.findIndex(x=>x.name===e.name);
     if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
-    viewer.clear();
-    if(wideLineLayer)wideLineLayer.clear();
-    interactionShapes=[]; interactionWideLines=[];
-    resetInteractionIndex('empty');
-    model=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
-    atoms=model.selectedAtoms({});
-    atomByIndex=new Map();
-    atomBySerial=new Map();
-    atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); if(a.serial!=null)atomBySerial.set(Number(a.serial),a); });
     currentName=e.name;
-    state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;selectionAtoms=[];state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
-    state.visibility={protein:true,ligands:true,solvents:true,other:true}; state.chainVisible={};
-    setupAtomEvents();
-    applyStylesFull(false);
-    viewer.zoomTo(); viewer.render();
-    buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
-    showHover(null);
-    setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
-    startInteractionIndexBuild();
-    if(opts.persist!==false)saveLastStructure(e);
+    entryChecked[e.name]=true;
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries({zoom:true});
+    if(opts.persist!==false)saveViewerSession();
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   async function loadInitialStructure(){
-    const saved=await loadLastStructure();
+    const saved=(await loadViewerSession()) || (await loadLastStructure());
     if(saved){
-      try{ loadEntry(saved,{persist:false}); return; }catch(err){}
+      try{ restoreViewerSession(saved); return; }catch(err){}
     }
     return loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY');
   }
 
+  const CLIP_MIN=-200, CLIP_MAX=200, CLIP_GAP=2;
+  const clip={near:-100, far:100};
+  function clipPct(v){ return (v-CLIP_MIN)/(CLIP_MAX-CLIP_MIN)*100; }
+  function renderClipUI(){
+    const nh=$('clipNearH'),fh=$('clipFarH'),rg=$('clipRange'),val=$('clipVal'),cap=document.querySelector('#clipControl .clip-cap'),ctrl=$('clipControl');
+    if(!nh||!fh)return;
+    const np=clipPct(clip.near),fp=clipPct(clip.far);
+    const active=clip.near!==-100||clip.far!==100;
+    nh.style.left=np+'%'; fh.style.left=fp+'%';
+    if(rg){ rg.style.left=np+'%'; rg.style.width=Math.max(0,fp-np)+'%'; }
+    if(val)val.textContent=Math.round(clip.near)+' / '+Math.round(clip.far);
+    if(cap)cap.textContent=active?'Clip active':'Clip off';
+    if(ctrl)ctrl.classList.toggle('is-active',active);
+  }
   function applyClip(){
-    if(!viewer)return; const near=Number($('clipNear').value),far=Number($('clipFar').value);
-    $('nearVal').textContent=String(near); $('farVal').textContent=String(far);
+    renderClipUI();
+    if(!viewer)return;
+    const near=clip.near,far=clip.far;
     try{ if(viewer.setSlab)viewer.setSlab(near,far); else { if(viewer.setSlabNear)viewer.setSlabNear(near); if(viewer.setSlabFar)viewer.setSlabFar(far); } viewer.render(); }catch(e){}
+  }
+  function setClipValue(which,v){
+    v=Math.max(CLIP_MIN,Math.min(CLIP_MAX,v));
+    if(which==='near')clip.near=Math.min(v,clip.far-CLIP_GAP);
+    else clip.far=Math.max(v,clip.near+CLIP_GAP);
+    applyClip();
+  }
+  function clipValueFromEvent(ev){
+    const bar=$('clipBar'); if(!bar)return null;
+    const r=bar.getBoundingClientRect(); if(!r.width)return null;
+    const pct=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));
+    return CLIP_MIN+pct*(CLIP_MAX-CLIP_MIN);
+  }
+  function bindClipHandle(id,which){
+    const h=$(id); if(!h)return;
+    h.addEventListener('pointerdown',function(e){
+      e.preventDefault(); e.stopPropagation();
+      try{ h.setPointerCapture(e.pointerId); }catch(_){}
+      function move(ev){ const v=clipValueFromEvent(ev); if(v!=null)setClipValue(which,v); }
+      function up(){ try{ h.releasePointerCapture(e.pointerId); }catch(_){} window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); }
+      window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
+    });
+  }
+  function bindClipControl(){
+    bindClipHandle('clipNearH','near'); bindClipHandle('clipFarH','far');
+    const bar=$('clipBar');
+    if(bar)bar.addEventListener('pointerdown',function(e){
+      if(e.target&&e.target.classList&&e.target.classList.contains('clip-handle'))return;
+      const v=clipValueFromEvent(e); if(v==null)return;
+      const which=Math.abs(v-clip.near)<=Math.abs(v-clip.far)?'near':'far';
+      setClipValue(which,v);
+    });
+    renderClipUI();
   }
 
   // ---------- Navigator thumbnail ----------
@@ -1157,7 +1561,7 @@ function boot(){
   function normalizedPageRect(a,b){ const bd=viewerPageBounds(); return {left:Math.max(bd.left,Math.min(a.x,b.x)),right:Math.min(bd.right,Math.max(a.x,b.x)),top:Math.max(bd.top,Math.min(a.y,b.y)),bottom:Math.min(bd.bottom,Math.max(a.y,b.y))}; }
   function updateDragSelectBox(a,b){ const r=normalizedPageRect(a,b),bd=viewerPageBounds(); dragSelectBoxEl.style.left=(r.left-bd.left)+'px'; dragSelectBoxEl.style.top=(r.top-bd.top)+'px'; dragSelectBoxEl.style.width=Math.max(0,r.right-r.left)+'px'; dragSelectBoxEl.style.height=Math.max(0,r.bottom-r.top)+'px'; dragSelectBoxEl.style.display='block'; }
   function hideDragSelectBox(){ dragSelectBoxEl.style.display='none'; }
-  function atomResidueKey(a){ return (a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
+  function atomResidueKey(a){ return (a._entryName||'')+'\u0001'+(a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
   function serialSelectorForAtoms(list){ const ser=[],seen=new Set(); for(const a of list){ if(a.serial==null||seen.has(a.serial))continue; seen.add(a.serial); ser.push(a.serial); } return ser.length?{serial:ser}:null; }
   function atomsInPageRect(rect){ if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return []; let pts=[]; try{ pts=viewer.modelToScreen(atoms); }catch(e){ return []; } const out=[]; for(let i=0;i<atoms.length;i++){ const p=pts[i]; if(!p||!Number.isFinite(p.x))continue; if(p.x>=rect.left&&p.x<=rect.right&&p.y>=rect.top&&p.y<=rect.bottom)out.push(atoms[i]); } return out; }
   function atomAtPagePoint(pt,maxDist){
@@ -1171,7 +1575,20 @@ function boot(){
     }
     return best;
   }
-  function selectorFromDragHits(hits){ if(!hits.length||state.selectionMode==='off')return null; if(state.selectionMode==='model')return {}; if(state.selectionMode==='atom')return serialSelectorForAtoms(hits); if(state.selectionMode==='chain'){ const ch=new Set(hits.map(a=>a.chain||'')); return serialSelectorForAtoms(atoms.filter(a=>ch.has(a.chain||''))); } const res=new Set(hits.map(atomResidueKey)); return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a)))); }
+  function selectorFromDragHits(hits){
+    if(!hits.length||state.selectionMode==='off')return null;
+    if(state.selectionMode==='model'){
+      const entriesHit=new Set(hits.map(a=>a._entryName||''));
+      return serialSelectorForAtoms(atoms.filter(a=>entriesHit.has(a._entryName||'')));
+    }
+    if(state.selectionMode==='atom')return serialSelectorForAtoms(hits);
+    if(state.selectionMode==='chain'){
+      const ch=new Set(hits.map(a=>(a._entryName||'')+'\u0001'+(a.chain||'')));
+      return serialSelectorForAtoms(atoms.filter(a=>ch.has((a._entryName||'')+'\u0001'+(a.chain||''))));
+    }
+    const res=new Set(hits.map(atomResidueKey));
+    return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a))));
+  }
   function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ clearSelection(); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
   function isCustomMousePreset(){ return !(mousePresets[state.mousePreset]&&mousePresets[state.mousePreset].passThrough); }
   function showViewer(){ if(!viewer)return; if(viewer.show)viewer.show(); else viewer.render(); }
@@ -1272,7 +1689,7 @@ function installFrameSyncedMotion(targetViewer){
     viewerEl.addEventListener('contextmenu',function(e){ if(isCustomMousePreset())stopMouseEvent(e); },{capture:true,passive:false});
     window.addEventListener('blur',resetDrag);
   }
-  function overUiPanel(e){ const t=e&&e.target; return !!(t&&t.closest&&t.closest('#interPanel,#stylePopover')); }
+  function overUiPanel(e){ const t=e&&e.target; return !!(t&&t.closest&&t.closest('#interPanel,#settingsOverlay')); }
   function bindWheelZoom(){ viewerEl.addEventListener('wheel',function(e){ if(overUiPanel(e))return; if(!viewer||state.locked)return; if(!isCustomMousePreset())return; if(settings.mouse.wheel!=='zoom')return; stopMouseEvent(e); const delta=e.deltaY||-e.wheelDelta||1,amount=Math.max(1,Math.min(4,Math.abs(delta)/100)),step=Math.pow(1.12,amount); viewer.zoom(delta<0?step:1/step); },{capture:true,passive:false}); }
 
   function startFpsOverlay(){ const fpsEl=$('fpsOverlay'); let frames=0,last=performance.now(); function tick(){ frames++; requestAnimationFrame(tick); } function update(){ if(document.hidden){ fpsEl.textContent='FPS --'; frames=0; last=performance.now(); return; } const now=performance.now(),el=now-last; fpsEl.textContent='FPS '+Math.round(frames*1000/el); frames=0; last=now; } setInterval(update,500); requestAnimationFrame(tick); }
@@ -1316,6 +1733,8 @@ function installFrameSyncedMotion(targetViewer){
   // button swaps them, so no action is ever assigned to two buttons. (Wheel is fixed to zoom.)
   const MOUSE_ACTIONS=[['rotate','Rotate'],['pan','Pan'],['zoom','Zoom'],['select','Select']];
   const MOUSE_BTNS=[['left','Left'],['right','Right'],['middle','Middle']];
+  const MOUSE_ACTION_VALUES=new Set(MOUSE_ACTIONS.map(a=>a[0]).concat(['none']));
+  const WHEEL_ACTION_VALUES=new Set(['zoom','none']);
   function setMouseAction(btn,action){
     const cur=settings.mouse.buttons; if(cur[btn]===action){ buildMouseMatrix(); return; }
     const prev=cur[btn];
@@ -1325,6 +1744,7 @@ function installFrameSyncedMotion(targetViewer){
   }
   function buildMouseMatrix(){
     const wrap=$('mouseMatrix'); if(!wrap)return; wrap.innerHTML='';
+    updateMousePresetButtons();
     const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:84px repeat(4,1fr);gap:9px 8px;align-items:center';
     grid.appendChild(document.createElement('span'));
     MOUSE_ACTIONS.forEach(a=>{ const h=document.createElement('span'); h.textContent=a[1]; h.style.cssText='font-size:11px;color:#8f8f8f;text-align:center'; grid.appendChild(h); });
@@ -1340,6 +1760,12 @@ function installFrameSyncedMotion(targetViewer){
       });
     });
     wrap.appendChild(grid);
+  }
+  function updateMousePresetButtons(){
+    document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{
+      const on=btn.getAttribute('data-mouse-preset')===state.mousePreset;
+      btn.classList.toggle('is-active',on);
+    });
   }
   function openSettings(){
     buildMouseMatrix();
@@ -1366,16 +1792,38 @@ function installFrameSyncedMotion(targetViewer){
     if(next==='select-left'){ settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel=mousePresets['select-left'].wheel; }
     resetMouseDrag();
     buildMouseMatrix();
+    updateMousePresetButtons();
     setStatus('Mouse preset: '+next);
     return next;
   }
   function setMouseActions(actions){
-    const next=actions||{}, buttons=next.buttons||next;
-    ['left','right','middle'].forEach(btn=>{ if(buttons[btn]!=null)settings.mouse.buttons[btn]=normText(buttons[btn]).toLowerCase(); });
-    if(next.wheel!=null||next.wheelAction!=null)settings.mouse.wheel=normText(next.wheel!=null?next.wheel:next.wheelAction).toLowerCase();
+    if(!actions||typeof actions!=='object'||Array.isArray(actions))throw new Error('Mouse actions must be an object.');
+    const next=actions, buttons=next.buttons||next, nextButtons=Object.assign({},settings.mouse.buttons);
+    ['left','right','middle'].forEach(btn=>{
+      if(buttons[btn]==null)return;
+      const action=normText(buttons[btn]).toLowerCase();
+      if(!MOUSE_ACTION_VALUES.has(action))throw new Error('Unsupported mouse action for '+btn+': '+action);
+      nextButtons[btn]=action;
+    });
+    const used=new Set();
+    ['left','right','middle'].forEach(btn=>{
+      const action=nextButtons[btn];
+      if(action==='none')return;
+      if(used.has(action))throw new Error('Mouse button actions must be distinct: '+action);
+      used.add(action);
+    });
+    const wheelValue=next.wheel!=null?next.wheel:next.wheelAction;
+    let nextWheel=settings.mouse.wheel;
+    if(wheelValue!=null){
+      nextWheel=normText(wheelValue).toLowerCase();
+      if(!WHEEL_ACTION_VALUES.has(nextWheel))throw new Error('Unsupported wheel action: '+nextWheel);
+    }
+    settings.mouse.buttons=nextButtons;
+    settings.mouse.wheel=nextWheel;
     state.mousePreset='custom';
     resetMouseDrag();
     buildMouseMatrix();
+    updateMousePresetButtons();
     setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
     return cloneMouseSettings();
   }
@@ -1384,7 +1832,7 @@ function installFrameSyncedMotion(targetViewer){
     let rep=normText(representation||'cartoon').toLowerCase();
     if(rep==='hide')rep='off';
     state.baseProtein=(rep==='tube'||rep==='off')?rep:'cartoon';
-    if($('proteinStyle'))$('proteinStyle').value=state.baseProtein;
+    if($('repBackbone'))$('repBackbone').value=state.baseProtein;
     applyStylesFull(true);
     return state.baseProtein;
   }
@@ -1392,7 +1840,7 @@ function installFrameSyncedMotion(targetViewer){
     let rep=normText(representation||'off').toLowerCase();
     if(rep==='hide')rep='off';
     state.proteinAtoms=ATOM_REPS.has(rep)?rep:'off';
-    if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms;
+    if($('repProtein'))$('repProtein').value=state.proteinAtoms;
     applyStylesFull(true);
     return state.proteinAtoms;
   }
@@ -1401,7 +1849,9 @@ function installFrameSyncedMotion(targetViewer){
     if(ATOM_REPS.has(rep))return setProteinAtomStyle(rep);
     return setProteinBackboneStyle(rep);
   }
-  function setLigandStyle(representation){ state.ligand=normText(representation||'stick').toLowerCase(); if($('ligandStyle'))$('ligandStyle').value=state.ligand; applyStylesFull(true); }
+  function setLigandStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.ligand=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repLigand'))$('repLigand').value=state.ligand; applyStylesFull(true); return state.ligand; }
+  function setSolventStyle(representation){ let rep=normText(representation||'off').toLowerCase(); if(rep==='hide')rep='off'; state.solvent=(rep==='off'||ATOM_REPS.has(rep))?rep:'off'; if($('repSolvent'))$('repSolvent').value=state.solvent; applyStylesFull(true); return state.solvent; }
+  function setOtherStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.other=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repOther'))$('repOther').value=state.other; applyStylesFull(true); return state.other; }
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
     const type=normText(command.type||command.action).toLowerCase();
@@ -1410,51 +1860,54 @@ function installFrameSyncedMotion(targetViewer){
     if(type==='focus')return focus(command.selector||command.target||state.selectionSel);
     if(type==='style'){ state.styleRules.push({selector:command.selector||command.target||{},representation:command.representation||command.style||'cartoon',options:command.options||command}); applyStylesFull(true); return state.styleRules[state.styleRules.length-1]; }
     if(type==='hide'){ state.hiddenRules.push({selector:command.selector||command.target||{},representation:'hide',options:command.options||command}); applyStylesFull(true); return state.hiddenRules[state.hiddenRules.length-1]; }
+    if(type==='removeentry'||type==='deleteentry')return removeEntry(command.name||command.entry||command.target);
     throw new Error('Unsupported run() command type: '+(type||'-'));
   }
   window.molAgent={
     setSelection, setSelectionHighlight, clearSelection, focus,
     style:function(selector,representation,options){ const rule={selector:selector||{},representation:representation||'cartoon',options:options||{}}; state.styleRules.push(rule); applyStylesFull(true); return rule; },
-    clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle,
+    clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle, setSolventStyle, setOtherStyle,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
-    getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {file:currentName,entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false,active:e.name===currentName})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,elapsedMs:interactionIndex.elapsedMs,atoms:interactionIndex.atoms,rings:interactionIndex.rings,error:interactionIndex.error}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }
+    loadUrl, removeEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------
   $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; state.rangeAnchor=null; setStatus('Selection level: '+state.selectionMode); };
-  $('qsP').onclick=function(){ setSelection({predicateName:'protein',not:{hetflag:true}},{}); setSelection({hetflag:false},{}); focus({hetflag:false}); };
-  $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel){ setSelection(sel,{}); focus(sel); } else setStatus('No ligand'); };
+  $('qsP').onclick=function(){ setSelection({hetflag:false},{}); };
+  $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel)setSelection(sel,{}); else setStatus('No ligand'); };
   $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
-  $('qsAll').onclick=function(){ setSelection({},{}); focus({}); };
+  $('qsAll').onclick=function(){ setSelection({},{}); };
   $('interBtn').onclick=toggleInterPanel;
+  $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
   $('btnFit').onclick=function(){ if(viewer){ viewer.zoomTo(); viewer.render(); } };
   $('btnFocus').onclick=function(){ focus(state.selectionSel); };
   $('btnClear').onclick=clearSelection;
-  $('styleBtn').onclick=function(){ const p=$('stylePopover'); p.hidden=!p.hidden; };
-  $('styleClose').onclick=function(){ $('stylePopover').hidden=true; };
-  $('proteinStyle').onchange=function(){ state.baseProtein=$('proteinStyle').value; applyStylesFull(true); };
-  $('proteinAtomStyle').onchange=function(){ state.proteinAtoms=$('proteinAtomStyle').value; applyStylesFull(true); };
-  $('ligandStyle').onchange=function(){ state.ligand=$('ligandStyle').value; applyStylesFull(true); };
-  $('clipNear').oninput=applyClip; $('clipFar').oninput=applyClip;
-  $('resetClip').onclick=function(){ $('clipNear').value=-100; $('clipFar').value=100; applyClip(); };
+  $('repBackbone').onchange=function(){ setProteinBackboneStyle($('repBackbone').value); };
+  $('repProtein').onchange=function(){ setProteinAtomStyle($('repProtein').value); };
+  $('repLigand').onchange=function(){ setLigandStyle($('repLigand').value); };
+  $('repSolvent').onchange=function(){ setSolventStyle($('repSolvent').value); buildHierarchy(); };
+  $('repOther').onchange=function(){ setOtherStyle($('repOther').value); buildHierarchy(); };
+  bindClipControl();
+  $('clipReset').onclick=function(){ clip.near=-100; clip.far=100; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
+  document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{ btn.onclick=function(){ setMousePreset(btn.getAttribute('data-mouse-preset')); }; });
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); };
   $('setHbond').oninput=function(){ state.hbondCutoff=Number($('setHbond').value); $('hbondVal').textContent=state.hbondCutoff.toFixed(2); redrawInteractions(true); };
   $('setSalt').oninput=function(){ state.saltCutoff=Number($('setSalt').value); $('saltVal').textContent=state.saltCutoff.toFixed(1); redrawInteractions(true); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; if($('proteinStyle'))$('proteinStyle').value=state.baseProtein; if($('proteinAtomStyle'))$('proteinAtomStyle').value=state.proteinAtoms; if($('ligandStyle'))$('ligandStyle').value=state.ligand; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
@@ -1469,20 +1922,29 @@ function installFrameSyncedMotion(targetViewer){
   $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; persistAndLoadEntry(e2).catch(err=>setStatus('Load failed: '+err.message)); e.target.value=''; };
 
   window.addEventListener('keydown',function(e){
-    const tag=document.activeElement&&document.activeElement.tagName;
-    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'){ return; }
-    if(e.key==='z'||e.key==='Z'){ if(!e.repeat)toggleFocus(); }
-    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('stylePopover').hidden){ $('stylePopover').hidden=true; } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
+    const ae=document.activeElement;
+    const tag=ae&&ae.tagName;
+    if(e.key==='z'||e.key==='Z'){
+      if(ae&&ae.closest&&ae.closest('#findGo,#findPrev,#findNext,#findClear,#findType'))return;
+      if(ae&&ae.id==='findInput')e.preventDefault();
+      else if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+      if(!e.repeat)toggleFocus();
+      return;
+    }
+    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
 
-  $('stylePopover').hidden=true;
   $('interPanel').hidden=true;
   buildInterPanel();
+  updateInterToggle();
   initViewer();
   startFpsOverlay();
   $('selLevel').value=state.selectionMode;
   loadVisualConfig().then(function(){
     return loadInitialStructure();
+  }).then(function(){
+    startSessionSync();
   }).catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
 }
 function waitFor3Dmol(){
