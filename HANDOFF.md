@@ -44,6 +44,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
+- Entry row `X` buttons delete entries and must update the server-side session so deleted entries do not reappear after refresh.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
 - Loading/displaying exactly one entry starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching back to a previously loaded single entry does not recompute interactions.
 - When multiple entries are displayed, nonbonded interaction indexing/rendering is disabled to avoid accidental cross-entry interactions.

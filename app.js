@@ -161,7 +161,7 @@ function boot(){
   }
   function saveViewerSession(){
     const payload=viewerSessionPayload();
-    if(!payload)return Promise.resolve(false);
+    if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok).catch(()=>false);
     return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
   }
   function loadViewerSession(){
@@ -1107,7 +1107,7 @@ function boot(){
       const row=document.createElement('div');
       const active=e.name===currentName;
       row.setAttribute('data-row','');
-      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
+      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
       const chk=document.createElement('input'); chk.type='checkbox';
       chk.checked=entryChecked[e.name]!==false;
@@ -1118,7 +1118,15 @@ function boot(){
       chk.onclick=function(ev){ ev.stopPropagation(); };
       chk.onchange=function(){ setEntryIncluded(e,chk.checked); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
-      row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl);
+      const del=document.createElement('button');
+      del.type='button';
+      del.textContent='\u00d7';
+      del.title='Delete entry';
+      del.style.cssText='width:17px;height:17px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:#9a9a9a;cursor:pointer;font-size:13px;line-height:1;padding:0';
+      del.onmouseenter=function(){ del.style.color='#fff'; del.style.borderColor='#555'; del.style.background='#3a1f1f'; };
+      del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
+      del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); deleteEntry(e); };
+      row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
       row.onclick=function(){ activateEntry(e); };
       el.appendChild(row);
     });
@@ -1368,6 +1376,21 @@ function boot(){
     resetSelectionState();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
     saveViewerSession();
+  }
+  function deleteEntry(entry){
+    const idx=entries.findIndex(e=>e.name===entry.name);
+    if(idx<0)return;
+    entries.splice(idx,1);
+    delete entryChecked[entry.name];
+    if(currentName===entry.name){
+      const nextActive=entries.find(e=>entryChecked[e.name]!==false) || entries[0];
+      currentName=nextActive?nextActive.name:'';
+    }
+    resetDisplayRulesForStructure();
+    if(entries.length&&includedEntries().length===0)entryChecked[entries[0].name]=true;
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    saveViewerSession();
+    setStatus('Deleted entry: '+entry.title);
   }
   function activateEntry(entry){
     const wasIncluded=entryChecked[entry.name]!==false;

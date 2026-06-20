@@ -444,7 +444,7 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
-Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others.
+Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry and updates the persisted server session.
 
 When exactly one entry is displayed, the viewer starts background interaction indexing for that entry. When multiple entries are displayed, interaction rendering is disabled until the displayed set is reduced to one entry.
 

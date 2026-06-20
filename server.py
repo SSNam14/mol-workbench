@@ -116,6 +116,14 @@ def write_session(session):
         write_json_atomic(LAST_STRUCTURE_PATH, {"entry": active})
 
 
+def clear_session():
+    for path in (SESSION_PATH, LAST_STRUCTURE_PATH):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def upsert_session_entry(entry):
     session = load_session_or_legacy()
     if not session:
@@ -186,6 +194,14 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/interaction-index/"):
             self.handle_put_interaction_index(path.rsplit("/", 1)[-1])
+            return
+        self.send_error(404)
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path == "/api/session":
+            clear_session()
+            self.send_json(200, {"ok": True})
             return
         self.send_error(404)
 
