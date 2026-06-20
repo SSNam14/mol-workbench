@@ -115,7 +115,7 @@ function boot(){
     const r=state.baseProtein;
     if(r==='off'||r==='hide')return {};
     if(r==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:0.45,colorfunc:chainRibbonColor}};
-    return {cartoon:{colorfunc:chainRibbonColor}};
+    return {cartoon:{colorfunc:chainRibbonColor,thickness:0.15}};
   }
   function proteinAtomStyleSpec(){
     const r=state.proteinAtoms;
