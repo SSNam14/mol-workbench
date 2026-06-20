@@ -7,6 +7,7 @@ Runtime layout:
 - `index.html`: DOM structure
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
+- `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
 ## Purpose Of This Manual
@@ -292,7 +293,12 @@ Common style options:
 - `radius`: stick radius
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
-- `linewidth`: line width where supported by the browser/WebGL stack
+- `linewidth`: line width in screen pixels for app-managed `line` render paths
+
+Line rendering note:
+
+- App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to camera-facing mesh quads in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
+- Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
 
 ## Mouse Action Commands
 
