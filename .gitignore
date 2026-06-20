@@ -1,5 +1,6 @@
 server_*.log
 server_*.pid
+.cpu_prj.code-workspace
 *.backup
 *.bak
 *.tmp
