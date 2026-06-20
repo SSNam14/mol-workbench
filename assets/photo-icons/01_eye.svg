@@ -17,6 +17,7 @@
     <clipPath id="irisClip"><circle cx="64" cy="61" r="26"/></clipPath>
   </defs>
   <g filter="url(#softShadow)">
+    <path d="M13 61 C27 40 44 30 64 30 C84 30 101 40 115 61 C101 82 84 92 64 92 C44 92 27 82 13 61 Z" fill="#87ceeb"/>
     <g fill="none" stroke="url(#eyeBlue)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
       <path d="M13 61 C27 40 44 30 64 30 C84 30 101 40 115 61 C101 82 84 92 64 92 C44 92 27 82 13 61 Z"/>
       <path d="M25 98 L18 110"/>
