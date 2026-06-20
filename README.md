@@ -390,6 +390,8 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
 
+The viewer stores the last loaded structure in browser storage. A browser refresh restores that structure first; `data/8UCD.pdb` is only used when no saved structure exists.
+
 ## `molAgent.run` Compatibility Commands
 
 Use `molAgent.run(...)` only for structured compatibility objects.

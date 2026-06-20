@@ -7,10 +7,10 @@
       "selection": 0.145
     },
     "sphereScale": {
-      "default": 0.22,
-      "protein": 0.2,
-      "ligand": 0.26,
-      "selection": 0.28
+      "default": 0.132,
+      "protein": 0.12,
+      "ligand": 0.156,
+      "selection": 0.168
     },
     "vdwRadii": {
       "H": 1.2,

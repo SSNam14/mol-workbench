@@ -48,7 +48,8 @@ http://10.36.102.65:8704/
 
 ## Must-Have Behavior
 
-- Initial load opens local `data/8UCD.pdb`.
+- Initial load restores the last loaded structure from browser storage when available; otherwise it opens local `data/8UCD.pdb`.
+- Loading a structure from the UI or `molAgent.loadUrl(...)` updates that persisted last-structure cache so browser refresh keeps the same molecule.
 - `+ Pred` loads local `data/steap1_complex_seed2.pdb`.
 - Default mouse preset is `select-left`:
   - left click selects
