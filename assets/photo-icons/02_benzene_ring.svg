@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Benzene ring icon">
+<!-- Pure vector SVG generated from the uploaded high-resolution reference. Transparent background, 128x128 viewBox. -->
+  <defs>
+    <linearGradient id="orangeStroke" x1="22" y1="22" x2="106" y2="106" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f3a33a"/>
+      <stop offset="0.5" stop-color="#d9821a"/>
+      <stop offset="1" stop-color="#a45b13"/>
+    </linearGradient>
+    <filter id="ringShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2" flood-color="#000000" flood-opacity="0.48"/>
+    </filter>
+  </defs>
+  <g filter="url(#ringShadow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 15 L106 39 L106 89 L64 113 L22 89 L22 39 Z" stroke="#5b3511" stroke-width="10" opacity="0.55"/>
+    <path d="M64 15 L106 39 L106 89 L64 113 L22 89 L22 39 Z" stroke="url(#orangeStroke)" stroke-width="7"/>
+    <path d="M65 29 L91 44" stroke="url(#orangeStroke)" stroke-width="5.5"/>
+    <path d="M36 47 L36 78" stroke="url(#orangeStroke)" stroke-width="5.5"/>
+    <path d="M91 84 L65 99" stroke="url(#orangeStroke)" stroke-width="5.5"/>
+  </g>
+</svg>

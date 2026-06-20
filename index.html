@@ -56,13 +56,14 @@
         <select id="repOther" class="rep-sel"><option value="stick">stick</option><option value="line">line</option><option value="sphere">sphere</option><option value="cpk">cpk</option><option value="off">off</option></select>
       </div>
     </div>
-    <div class="u-013">
-      <button id="btnFit" data-btn class="u-017">Fit</button>
-      <button id="btnFocus" data-btn class="u-017">Focus</button>
-      <button id="btnClear" data-btn class="u-017">Clear</button>
-      <button id="saveView" data-btn class="u-017">Save view</button>
-      <button id="restoreView" data-btn class="u-017">Restore</button>
-      <button id="lockView" data-btn class="u-017">Lock</button>
+    <div class="svg-icon-strip" aria-label="Selected atom actions">
+      <button type="button" class="svg-icon-chip" data-selection-action="hide" title="Hide selected atoms"><img src="assets/photo-icons/01_eye.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="show" title="Show selected atoms"><img src="assets/photo-icons/06_open_eye.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="heavy" title="Show selected heavy atoms and polar H"><img src="assets/photo-icons/07_open_eye_h.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="line" title="Set selected atoms to line"><img src="assets/photo-icons/02_benzene_ring.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="stick" title="Set selected atoms to stick"><img src="assets/photo-icons/03_soft_medium_hexagon.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="cpk" title="Set selected atoms to CPK"><img src="assets/photo-icons/04_cpk_ball_stick_6.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="sphere" title="Set selected atoms to sphere"><img src="assets/photo-icons/05_space_filling_6_spheres.svg" alt=""></button>
     </div>
     <div class="u-018"></div>
     <div id="clipControl" class="clip-control">
@@ -97,6 +98,14 @@
     <button id="findNext" data-btn class="u-026" title="Next match"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 5.5l7 6.5-7 6.5z"></path></svg></button>
     <span id="findCount" class="u-020">0 matches</span>
     <span id="findSel" class="u-027"></span>
+    <div class="find-view-controls">
+      <button id="btnFit" data-btn class="u-017">Fit</button>
+      <button id="btnFocus" data-btn class="u-017">Focus</button>
+      <button id="btnClear" data-btn class="u-017">Clear</button>
+      <button id="saveView" data-btn class="u-017">Save view</button>
+      <button id="restoreView" data-btn class="u-017">Restore</button>
+      <button id="lockView" data-btn class="u-017">Lock</button>
+    </div>
     <div class="u-018"></div>
   </div>
 
