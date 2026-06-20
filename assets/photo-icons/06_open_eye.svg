@@ -23,7 +23,7 @@
     <circle cx="64" cy="61" r="26" fill="url(#irisBlue)"/>
     <g clip-path="url(#irisClip)">
       <path d="M64 38 C50 38 39 48 39 62 C39 77 50 87 65 87 C77 87 86 81 90 69 C84 72 76 69 74 61 C72 53 77 46 84 45 C79 40 72 38 64 38 Z" fill="#2d3334"/>
-      <circle cx="64" cy="61" r="10.5" fill="#111517"/>
+      <circle cx="64" cy="61" r="11.5" fill="#87ceeb"/>
       <circle cx="75" cy="47" r="8.5" fill="#83adc8"/>
     </g>
   </g>
