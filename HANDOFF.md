@@ -1,6 +1,6 @@
 # Test Visualizer Handoff
 
-Last updated: 2026-06-19 KST
+Last updated: 2026-06-20 KST
 
 ## Current State
 
@@ -41,6 +41,8 @@ Tracked source/runtime files:
 README.md
 HANDOFF.md
 index.html
+styles.css
+app.js
 assets/3Dmol-min.js
 data/8UCD.pdb
 data/steap1_complex_seed2.pdb
@@ -91,7 +93,7 @@ curl -sI http://127.0.0.1:8704/ | head
 
 ## Implemented Behavior
 
-- Static single-page molecular viewer in `index.html`.
+- Static single-page molecular viewer split across `index.html`, `styles.css`, and `app.js`.
 - Uses local `assets/3Dmol-min.js`.
 - Loads:
   - `data/8UCD.pdb`
@@ -100,7 +102,6 @@ curl -sI http://127.0.0.1:8704/ | head
 - Chain-specific default coloring for protein carbon atoms.
 - Command-line/natural-language UI was removed.
 - Main control surface is now the structured browser API `window.molAgent`.
-- Named regions are never auto-created. CDR is not inferred. Regions only exist after explicit `molAgent.setRegions(...)`.
 - Mouse controls are selectable from the topbar `Settings` panel or `molAgent.setMousePreset(...)` / `molAgent.setMouseActions(...)`.
 - Current app default preset is `select-left`:
   - left click: selection only
@@ -149,20 +150,11 @@ molAgent.setSelection(
   {representation: 'stick', color: '#fdd835'}
 );
 
-molAgent.showInteractions({
-  kind: 'hbond',
-  between: [{chain: 'A'}, {not: {chain: 'A'}}],
-  limit: 2000
-});
-
-molAgent.setRegions({
-  MY_REGION: [{chain: 'H', resi: '30-35'}]
-});
-
-molAgent.style({region: 'MY_REGION'}, 'tube', {color: '#fdd835'});
 molAgent.clearSelection();
 molAgent.clearStyles();
-molAgent.clearInteractions();
+molAgent.setMousePreset('select-left');
+molAgent.setMouseActions({buttons: {left: 'select', right: 'rotate', middle: 'pan'}, wheel: 'zoom'});
+molAgent.loadUrl('data/steap1_complex_seed2.pdb', 'pdb', 'steap1_complex_seed2');
 ```
 
 String commands are intentionally disabled. Use structured objects only.
@@ -174,17 +166,10 @@ Run after edits:
 ```bash
 cd /home/nam114/test_visualizer
 
-python3 - <<'PY'
-from pathlib import Path
-import re
-html = Path('index.html').read_text()
-scripts = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>', html, re.I)
-Path('/tmp/test_visualizer_inline.js').write_text('\n'.join(scripts))
-print('scripts', len(scripts), 'bytes', sum(map(len, scripts)))
-PY
-
-node --check /tmp/test_visualizer_inline.js
+node --check app.js
 curl -sI http://127.0.0.1:8704/ | head
+curl -sI http://127.0.0.1:8704/styles.css | head
+curl -sI http://127.0.0.1:8704/app.js | head
 git status --short
 ```
 
