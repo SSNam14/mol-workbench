@@ -151,7 +151,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-100 svg{width:13px;height:13px;display:block}
 
 /* Temporary imported SVG preview strip in the top toolbar. */
-.svg-icon-strip{display:flex;align-items:center;gap:4px;flex:0 0 364px;height:38px;padding:0 8px 0 0;border-right:1px solid #2a2a2a;overflow:hidden}
+.svg-icon-strip{display:flex;align-items:center;gap:4px;flex:0 0 184px;height:38px;padding:0 8px 0 0;border-right:1px solid #2a2a2a;overflow:hidden}
 .svg-icon-chip{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;border:1px solid #555;border-radius:5px;background:#2d2d2d}
 .svg-icon-chip img{display:block;width:24px;height:24px;object-fit:contain}
 

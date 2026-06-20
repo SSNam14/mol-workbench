@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Six thick orange spheres icon">
+<!-- Pure vector SVG generated from the uploaded high-resolution reference. Transparent background, 128x128 viewBox. -->
+  <defs>
+    <radialGradient id="sphereGrad" cx="34%" cy="27%" r="74%">
+      <stop offset="0" stop-color="#ffc970"/>
+      <stop offset="0.28" stop-color="#efa43b"/>
+      <stop offset="0.58" stop-color="#e58a13"/>
+      <stop offset="1" stop-color="#9b5609"/>
+    </radialGradient>
+    <filter id="sphereShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2.4" flood-color="#000000" flood-opacity="0.48"/>
+    </filter>
+  </defs>
+  <g filter="url(#sphereShadow)">
+    <g>
+      <circle cx="50" cy="37" r="24.5" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="50" cy="35" r="23" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="43" cy="26" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g><g>
+      <circle cx="78" cy="39" r="24.5" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="78" cy="37" r="23" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="71" cy="28" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g><g>
+      <circle cx="34" cy="65" r="24.0" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="34" cy="63" r="22.5" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="27" cy="54" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g><g>
+      <circle cx="94" cy="64" r="24.0" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="94" cy="62" r="22.5" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="87" cy="53" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g><g>
+      <circle cx="50" cy="92" r="24.5" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="50" cy="90" r="23" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="43" cy="81" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g><g>
+      <circle cx="78" cy="90" r="24.5" fill="#6f3a07" opacity="0.64"/>
+      <circle cx="78" cy="88" r="23" fill="url(#sphereGrad)" stroke="#9a560a" stroke-width="3.5"/>
+      <circle cx="71" cy="79" r="5.5" fill="#ffd182" opacity="0.62"/>
+    </g>
+  </g>
+</svg>

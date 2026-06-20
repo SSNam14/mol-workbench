@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Medium thick rounded hexagon ring icon">
+<!-- Pure vector SVG generated from the uploaded high-resolution reference. Transparent background, 128x128 viewBox. -->
+  <defs>
+    <linearGradient id="hexFace" x1="24" y1="20" x2="104" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffb23f"/>
+      <stop offset="0.42" stop-color="#f59a18"/>
+      <stop offset="1" stop-color="#c0690e"/>
+    </linearGradient>
+    <linearGradient id="hexHighlight" x1="29" y1="25" x2="96" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd27a" stop-opacity="0.88"/>
+      <stop offset="1" stop-color="#ffd27a" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="hexShadow" x="-28%" y="-28%" width="156%" height="156%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.2" flood-color="#000000" flood-opacity="0.50"/>
+    </filter>
+  </defs>
+  <g filter="url(#hexShadow)" fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M64 16 L105.6 40 L105.6 88 L64 112 L22.4 88 L22.4 40 Z" stroke="#6a3b0b" stroke-width="23" opacity="0.58"/>
+    <path d="M64 16 L105.6 40 L105.6 88 L64 112 L22.4 88 L22.4 40 Z" stroke="url(#hexFace)" stroke-width="18"/>
+    <path d="M32 42 L64 23 L96 42" stroke="url(#hexHighlight)" stroke-width="7"/>
+  </g>
+</svg>

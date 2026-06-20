@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Six orange balls connected by lines icon">
+<!-- Pure vector SVG generated from the uploaded high-resolution reference. Transparent background, 128x128 viewBox. -->
+  <defs>
+    <radialGradient id="ballGrad" cx="35%" cy="28%" r="72%">
+      <stop offset="0" stop-color="#ffc160"/>
+      <stop offset="0.34" stop-color="#f49a18"/>
+      <stop offset="0.72" stop-color="#d47b10"/>
+      <stop offset="1" stop-color="#9d5709"/>
+    </radialGradient>
+    <filter id="cpkShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2" flood-color="#000000" flood-opacity="0.48"/>
+    </filter>
+  </defs>
+  <g filter="url(#cpkShadow)">
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <g stroke="#6a3908" stroke-width="12" opacity="0.72">
+        <line x1="64.0" y1="23.0" x2="99.5" y2="43.5"/> <line x1="99.5" y1="43.5" x2="99.5" y2="84.5"/> <line x1="99.5" y1="84.5" x2="64.0" y2="105.0"/> <line x1="64.0" y1="105.0" x2="28.5" y2="84.5"/> <line x1="28.5" y1="84.5" x2="28.5" y2="43.5"/> <line x1="28.5" y1="43.5" x2="64.0" y2="23.0"/>
+      </g>
+      <g stroke="#d87a0e" stroke-width="7" opacity="0.95">
+        <line x1="64.0" y1="23.0" x2="99.5" y2="43.5"/> <line x1="99.5" y1="43.5" x2="99.5" y2="84.5"/> <line x1="99.5" y1="84.5" x2="64.0" y2="105.0"/> <line x1="64.0" y1="105.0" x2="28.5" y2="84.5"/> <line x1="28.5" y1="84.5" x2="28.5" y2="43.5"/> <line x1="28.5" y1="43.5" x2="64.0" y2="23.0"/>
+      </g>
+    </g>
+    <g>
+      <circle cx="64.0" cy="23.0" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="64.0" cy="23.0" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="59.0" cy="17.0" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g><g>
+      <circle cx="99.5" cy="43.5" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="99.5" cy="43.5" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="94.5" cy="37.5" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g><g>
+      <circle cx="99.5" cy="84.5" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="99.5" cy="84.5" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="94.5" cy="78.5" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g><g>
+      <circle cx="64.0" cy="105.0" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="64.0" cy="105.0" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="59.0" cy="99.0" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g><g>
+      <circle cx="28.5" cy="84.5" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="28.5" cy="84.5" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="23.5" cy="78.5" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g><g>
+      <circle cx="28.5" cy="43.5" r="17.5" fill="#7b4208" opacity="0.76" transform="translate(0 2)"/>
+      <circle cx="28.5" cy="43.5" r="16.2" fill="url(#ballGrad)" stroke="#8b4a08" stroke-width="3"/>
+      <circle cx="23.5" cy="37.5" r="4.2" fill="#ffd07a" opacity="0.72"/>
+    </g>
+  </g>
+</svg>
