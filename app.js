@@ -1345,6 +1345,25 @@ function boot(){
     });
     return Array.from(by.values()).sort(compareHierarchyGroups);
   }
+  function groupsByEntry(groups){
+    const by=new Map();
+    groups.forEach(g=>{
+      const key=g.entry||'';
+      if(!by.has(key))by.set(key,{entry:g.entry,entryTitle:g.entryTitle||g.entry,groups:[]});
+      by.get(key).groups.push(g);
+    });
+    return Array.from(by.values()).sort((a,b)=>normText(a.entryTitle||a.entry)<normText(b.entryTitle||b.entry)?-1:(normText(a.entryTitle||a.entry)>normText(b.entryTitle||b.entry)?1:0));
+  }
+  function appendEntryGroupedRows(tree,groups,baseIndent,multiEntry,makeRow){
+    if(!multiEntry){
+      groups.forEach(g=>tree.appendChild(makeRow(g,baseIndent)));
+      return;
+    }
+    groupsByEntry(groups).forEach(entryGroup=>{
+      tree.appendChild(hierarchySubhead(entryGroup.entryTitle||entryGroup.entry,baseIndent));
+      entryGroup.groups.forEach(g=>tree.appendChild(makeRow(g,baseIndent+12)));
+    });
+  }
   function buildHierarchy(){
     const tree=$('hierarchyTree'); tree.innerHTML='';
     updateSelectionStatus();
@@ -1362,9 +1381,9 @@ function boot(){
     const multiEntry=shown.length>1;
 
     tree.appendChild(catRow('Ligands','ligands','#FF8A65',counts.ligands));
-    groupedResidues(atoms.filter(isLigand)).forEach(g=>{
+    appendEntryGroupedRows(tree,groupedResidues(atoms.filter(isLigand)),34,multiEntry,function(g,indent){
       const sel=serialSelectorForAtoms(g.atoms);
-      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+      return hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent,onselect:function(e){ hierarchySelect(sel,e); }});
     });
 
     const proteinAtoms=atoms.filter(isProtein);
@@ -1378,32 +1397,32 @@ function boot(){
     const chains=Array.from(byChain.values()).sort(compareHierarchyGroups);
     if(chains.length){
       tree.appendChild(hierarchySubhead('Chains',34));
-      chains.forEach(g=>{
+      appendEntryGroupedRows(tree,chains,46,multiEntry,function(g,indent){
         const sel=serialSelectorForAtoms(g.atoms);
-        tree.appendChild(hierarchyChildRow({
-          label:hierarchyPrefix(g,multiEntry)+'Chain '+g.chain,
+        return hierarchyChildRow({
+          label:'Chain '+g.chain,
           title:hierarchyPrefix(g,multiEntry)+'Chain '+g.chain,
           count:g.atoms.length,
           color:chainColor(g.chain),
-          indent:46,
+          indent,
           checkbox:true,
           checked:chainVisibilityValue(g.entry,g.chain),
           oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyStylesFull(true); },
           onselect:function(e){ hierarchySelect(sel,e); }
-        }));
+        });
       });
     }
 
     tree.appendChild(catRow('Solvents','solvents','#4DD0E1',counts.solvents));
-    groupedResidues(atoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
+    appendEntryGroupedRows(tree,groupedResidues(atoms.filter(a=>atomCategory(a)==='solvents')),34,multiEntry,function(g,indent){
       const sel=serialSelectorForAtoms(g.atoms);
-      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+      return hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent,onselect:function(e){ hierarchySelect(sel,e); }});
     });
 
     tree.appendChild(catRow('Other','other','#CE93D8',counts.other));
-    groupedResidues(atoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
+    appendEntryGroupedRows(tree,groupedResidues(atoms.filter(a=>atomCategory(a)==='other')),34,multiEntry,function(g,indent){
       const sel=serialSelectorForAtoms(g.atoms);
-      tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,multiEntry),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+      return hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent,onselect:function(e){ hierarchySelect(sel,e); }});
     });
   }
 
