@@ -66,13 +66,13 @@ http://10.36.102.65:8704/
 - Pressing `z` toggles between focusing the current selection and overview.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z`/Focus.
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.
-- With protein atom display `off`, selected protein atoms are highlighted as app-managed wide lines over the cartoon. If selected atoms are already displayed as atom-level `line`, `stick`, or `sphere`, selection follows that visible representation using the selection color.
+- With protein atom display `off`, selected protein atoms are highlighted as app-managed wide lines over the cartoon. If selected atoms are already displayed as atom-level `line`, `stick`, `sphere`, or `cpk`, selection follows that visible representation using the selection color.
 - Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.
-- Selection changes must stay incremental. Default line selection uses the `wide-lines.js` selection collection for atom-level `none`/`line` groups and temporary 3Dmol style overlays for visible stick/sphere groups. Explicit non-line highlight modes may still use removable shapes for small selections and a temporary style overlay for large selections. Do not trigger full protein/ligand restyling on every selection event.
+- Selection changes must stay incremental. Default line selection uses the `wide-lines.js` selection collection for atom-level `none`/`line` groups and temporary 3Dmol style overlays for visible stick/sphere/cpk groups. Explicit non-line highlight modes may still use removable shapes for small selections and a temporary style overlay for large selections. Do not trigger full protein/ligand restyling on every selection event.
 - Large range selections must avoid O(atom count * selector size) matching. Large `serial: [...]` selectors use cached Set lookup and reuse the selected atom list for highlight/status updates.
 - `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to camera-facing mesh quads inside the 3Dmol scene, so they keep pixel-like width while participating in depth testing. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
 - The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
-- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`.
+- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
 
 ## API Contract

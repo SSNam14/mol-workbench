@@ -124,7 +124,7 @@ Useful `getState()` fields:
 - `file`: current structure name
 - `atoms`: total loaded atom count
 - `proteinBackbone`: protein backbone representation, usually `cartoon`, `tube`, or `off`
-- `proteinAtoms`: protein atom-level representation, usually `off`, `line`, `stick`, or `sphere`
+- `proteinAtoms`: protein atom-level representation, usually `off`, `line`, `stick`, `sphere`, or `cpk`
 - `ligand`: ligand representation
 - `mousePreset`: current mouse preset name
 - `mouseActions`: current button/wheel assignment
@@ -170,7 +170,7 @@ molAgent.clearSelection();
 
 Selection options currently used by `setSelection`:
 
-- `representation`: `stick`, `line`, `tube`, `sphere`, or `off`
+- `representation`: `stick`, `line`, `tube`, `sphere`, `cpk`, or `off`
 - `additive` / `add`: add to existing selection
 - `focus`: focus after setting selection
 - `color`, `opacity`, `radius`, `scale`, `thickness`, `linewidth`: optional selection highlight overrides
@@ -257,6 +257,7 @@ molAgent.setProteinAtomStyle("off");
 molAgent.setProteinAtomStyle("line");
 molAgent.setProteinAtomStyle("stick");
 molAgent.setProteinAtomStyle("sphere");
+molAgent.setProteinAtomStyle("cpk");
 ```
 
 Change ligand representation:
@@ -265,6 +266,7 @@ Change ligand representation:
 molAgent.setLigandStyle("stick");
 molAgent.setLigandStyle("line");
 molAgent.setLigandStyle("sphere");
+molAgent.setLigandStyle("cpk");
 ```
 
 Supported representations:
@@ -273,14 +275,15 @@ Supported representations:
 - `line`
 - `stick`
 - `sphere`
+- `cpk`
 - `tube`
 - `hide` / `off`
 
 Representation scope:
 
 - Protein backbone GUI/API supports `cartoon`, `tube`, and `off`.
-- Protein atom GUI/API supports `off`, `line`, `stick`, and `sphere`.
-- Ligand GUI/API supports `stick`, `line`, and `sphere`.
+- Protein atom GUI/API supports `off`, `line`, `stick`, `sphere`, and `cpk`.
+- Ligand GUI/API supports `stick`, `line`, `sphere`, and `cpk`.
 - `molAgent.style(...)` can still apply supported representations to any selector as a persistent style rule.
 
 Common style options:
@@ -291,6 +294,7 @@ Common style options:
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
 - `linewidth`: line width in screen pixels for app-managed `line` render paths
+- For `cpk`, `radius` controls stick radius and `scale` controls sphere scale.
 
 Line rendering note:
 

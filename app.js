@@ -76,6 +76,7 @@ function boot(){
     if(rep==='line')return {};
     if(rep==='stick')return {stick:{radius:o.radius||0.17,colorfunc:ac,opacity:op}};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.3,colorfunc:ac,opacity:op}};
+    if(rep==='cpk')return {stick:{radius:o.radius||0.12,colorfunc:ac,opacity:op},sphere:{scale:o.scale||0.25,colorfunc:ac,opacity:op}};
     if(rep==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:o.thickness||0.45,colorfunc:rc,opacity:op}};
     return {cartoon:{colorfunc:rc,opacity:op}};
   }
@@ -122,9 +123,10 @@ function boot(){
     if(r==='line')return {};
     if(r==='stick')return {stick:{radius:0.14,colorfunc:chainAwareAtomColor}};
     if(r==='sphere')return {sphere:{scale:0.28,colorfunc:chainAwareAtomColor}};
+    if(r==='cpk')return {stick:{radius:0.1,colorfunc:chainAwareAtomColor},sphere:{scale:0.23,colorfunc:chainAwareAtomColor}};
     return {};
   }
-  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; return {stick:{radius:0.2,colorfunc:elementColor}}; }
+  function ligandStyleSpec(){ const r=state.ligand; if(r==='line')return {}; if(r==='sphere')return {sphere:{scale:0.36,colorfunc:elementColor}}; if(r==='cpk')return {stick:{radius:0.13,colorfunc:elementColor},sphere:{scale:0.3,colorfunc:elementColor}}; return {stick:{radius:0.2,colorfunc:elementColor}}; }
 
   function matchScalar(av,want,key){
     if(want==null)return true;
@@ -237,6 +239,7 @@ function boot(){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.18,colorfunc,opacity}};
     if(rep==='line')return {};
+    if(rep==='cpk')return {stick:{radius:o.radius||0.06,colorfunc,opacity},sphere:{scale:o.scale||0.18,colorfunc,opacity}};
     return {stick:{radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),colorfunc,opacity}};
   }
   function applyLargeSelectionStyle(selected,rep,opts){
@@ -250,6 +253,7 @@ function boot(){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity),colorfunc=function(){return color;};
     if(rep==='sphere')return {sphere:{scale:o.scale||0.32,colorfunc,opacity}};
     if(rep==='stick')return {stick:{radius:o.radius||0.16,colorfunc,opacity}};
+    if(rep==='cpk')return {stick:{radius:o.radius||0.16,colorfunc,opacity},sphere:{scale:o.scale||0.32,colorfunc,opacity}};
     return selectionStyleSpec(rep,o);
   }
   function applySelectionStyleOverlay(selected,rep,opts){
@@ -324,7 +328,7 @@ function boot(){
     return ATOM_REPS.has(base)?base:'none';
   }
   function partitionSelectionByDisplay(selected){
-    const groups={none:[],line:[],stick:[],sphere:[]};
+    const groups={none:[],line:[],stick:[],sphere:[],cpk:[]};
     selected.forEach(a=>{
       const rep=atomDisplayRepresentation(a);
       if(groups[rep])groups[rep].push(a);
@@ -334,7 +338,7 @@ function boot(){
   }
   function drawSelectionRepGroup(selected,rep,opts,job){
     if(!selected.length)return;
-    if((rep==='stick'||rep==='sphere')&&applySelectionStyleOverlay(selected,rep,opts))return;
+    if((rep==='stick'||rep==='sphere'||rep==='cpk')&&applySelectionStyleOverlay(selected,rep,opts))return;
     if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
     const shape=viewer.addShape(selectionShapeStyle(opts));
     pushSelectionShape(shape);
@@ -352,7 +356,8 @@ function boot(){
     if(lines.length||points.length)wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
     drawSelectionRepGroup(groups.stick,'stick',o,job);
     drawSelectionRepGroup(groups.sphere,'sphere',o,job);
-    return !!(lines.length||points.length||groups.stick.length||groups.sphere.length);
+    drawSelectionRepGroup(groups.cpk,'cpk',o,job);
+    return !!(lines.length||points.length||groups.stick.length||groups.sphere.length||groups.cpk.length);
   }
   function addWideStyleAtoms(lines,points,sel,o,defaultColorFn,widthDefault,dashed){
     const selected=filterAtoms(sel).filter(isAtomVisibleNow);
@@ -401,6 +406,7 @@ function boot(){
     if(!selected.length)return;
     const job=selectionHighlightJob;
     if(rep==='line'&&drawAdaptiveLineSelection(selected,opts,job))return;
+    if(rep==='cpk'&&applySelectionStyleOverlay(selected,rep,opts))return;
     if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
     const shape=viewer.addShape(selectionShapeStyle(opts));
     pushSelectionShape(shape);
@@ -539,11 +545,11 @@ function boot(){
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
-  const ATOM_REPS=new Set(['line','stick','sphere']);
+  const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
   let _lvlCache=null;
   function hiddenByRules(a){ for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector)))return true; }catch(e){} } return false; }
   function isAtomVisibleNow(a){ const c=atomCategory(a); if(state.visibility[c]===false)return false; if(c==='protein'&&state.chainVisible[a.chain]===false)return false; if(isWaterAtom(a))return false; if(hiddenByRules(a))return false; return true; }
-  // "Visualized atoms" = atoms currently shown at the ATOM level (line/stick/sphere) by the display
+  // "Visualized atoms" = atoms currently shown at the ATOM level by the display
   // settings. This is independent of the (yellow) selection, so the Interactions button behaves the
   // same way regardless of what is selected.
   function isAtomLevelShown(a){
