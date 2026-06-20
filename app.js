@@ -25,7 +25,7 @@ function boot(){
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:1.8}; }
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
-  const LARGE_SELECTION_BOND_LIMIT = 700;
+  const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick',
@@ -41,6 +41,7 @@ function boot(){
   let findMatches = [], findIndex = -1;
   let seqResidues = [], seqResidueByKey = new Map(), activeSeqKeys = new Set();
   let selectionAtoms = [];
+  let selectionStyleActive = false;
   let selectionShapes = [];
   let selectionHighlightJob = 0;
   let resetMouseDrag = function(){};
@@ -206,11 +207,18 @@ function boot(){
   }
   function clearSelectionHighlight(){
     selectionHighlightJob++;
+    if(selectionStyleActive){
+      selectionStyleActive=false;
+      if(viewer&&model)applyStylesFull(false,{skipSelection:true,skipStatus:true,skipInteractions:true});
+    }
     if(!viewer||!selectionShapes.length){ selectionShapes=[]; return; }
     selectionShapes.forEach(s=>{ try{ viewer.removeShape(s); }catch(e){} });
     selectionShapes=[];
   }
   function pushSelectionShape(shape){ if(shape)selectionShapes.push(shape); }
+  function selectionShapeStyle(o){
+    return {color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:o.linewidth||2};
+  }
   function drawSelectionAtom(shape,a,o){
     const radius=Number(o.scale||Math.max((o.radius||0.06)*2.2,0.12));
     shape.addSphere({center:point(a),radius,color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity)});
@@ -219,6 +227,19 @@ function boot(){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
     if(rep==='line')shape.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||2});
     else shape.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1});
+  }
+  function selectionStyleSpec(rep,o){
+    const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
+    if(rep==='sphere')return {sphere:{scale:o.scale||0.18,color,opacity}};
+    if(rep==='line')return {line:{linewidth:o.linewidth||2,color,opacity}};
+    return {stick:{radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity}};
+  }
+  function applyLargeSelectionStyle(selected,rep,opts){
+    const sel=serialSelectorForAtoms(selected);
+    if(!sel)return false;
+    viewer.addStyle(sel,selectionStyleSpec(rep,opts));
+    selectionStyleActive=true;
+    return true;
   }
   function selectionBondData(selected){
     const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set(),bonds=[];
@@ -264,7 +285,8 @@ function boot(){
     if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
     const rep=normText(state.selectionRepresentation||'stick').toLowerCase(),opts=state.selectionOptions||{},selected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel);
     if(!selected.length)return;
-    const shape=viewer.addShape({});
+    if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
+    const shape=viewer.addShape(selectionShapeStyle(opts));
     const job=selectionHighlightJob;
     pushSelectionShape(shape);
     if(rep==='sphere'){
@@ -272,8 +294,7 @@ function boot(){
       return;
     }
     const data=selectionBondData(selected);
-    const effectiveRep=data.bonds.length>LARGE_SELECTION_BOND_LIMIT?'line':rep;
-    drawSelectionChunks(shape,data.bonds,data.looseAtoms,effectiveRep,opts,job);
+    drawSelectionChunks(shape,data.bonds,data.looseAtoms,rep,opts,job);
   }
   function renderSelectionHighlight(render,selectedAtomsOverride){
     if(!viewer||!model)return;
@@ -283,6 +304,7 @@ function boot(){
   function applyStylesFull(render,opts){
     if(!viewer||!model)return;
     opts=opts||{};
+    selectionStyleActive=false;
     viewer.setStyle({},{});
     viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
     if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
@@ -292,8 +314,10 @@ function boot(){
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
     if(!opts.skipInteractions)redrawInteractions(false);
-    selectionAtoms=selectedAtomsForSelector(state.selectionSel);
-    applySelectionHighlight(selectionAtoms);
+    if(!opts.skipSelection){
+      selectionAtoms=selectedAtomsForSelector(state.selectionSel);
+      applySelectionHighlight(selectionAtoms);
+    }
     if(!opts.skipStatus)updateStatusBar();
     if(render!==false)viewer.render();
   }
