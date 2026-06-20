@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+<title>Dropdown arrow icon</title>
+<desc>A grey downward-facing triangle.</desc>
+<defs>
+  <linearGradient id="grayGrad" x1="0" y1="38" x2="0" y2="92" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#F2F2F2"/>
+    <stop offset="1" stop-color="#BFC0C2"/>
+  </linearGradient>
+</defs>
+<path d="M25 45h78L64 87 25 45Z" fill="url(#grayGrad)"/>
+</svg>

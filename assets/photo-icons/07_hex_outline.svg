@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+<title>Hexagon outline icon</title>
+<desc>A simple orange hexagonal outline.</desc>
+<defs>
+  <linearGradient id="hexOrange" x1="0" y1="23" x2="0" y2="105" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFAA1F"/>
+    <stop offset="1" stop-color="#F7941D"/>
+  </linearGradient>
+</defs>
+<path d="M64 24 99 44v40L64 104 29 84V44L64 24Z" fill="none" stroke="url(#hexOrange)" stroke-width="10" stroke-linejoin="round"/>
+</svg>

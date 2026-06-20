@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+<title>Brain cluster icon</title>
+<desc>An orange clustered lobe icon similar to a simplified brain.</desc>
+<defs>
+  <linearGradient id="brainOrange" x1="0" y1="24" x2="0" y2="106" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFAA1F"/>
+    <stop offset="1" stop-color="#F7941D"/>
+  </linearGradient>
+</defs>
+<g fill="url(#brainOrange)">
+  <circle cx="47" cy="44" r="18"/>
+  <circle cx="68" cy="40" r="20"/>
+  <circle cx="88" cy="52" r="18"/>
+  <circle cx="41" cy="70" r="21"/>
+  <circle cx="65" cy="72" r="24"/>
+  <circle cx="91" cy="77" r="20"/>
+  <circle cx="57" cy="94" r="17"/>
+  <circle cx="80" cy="96" r="17"/>
+</g>
+<g fill="none" stroke="#FFB13A" stroke-width="4" stroke-linecap="round" opacity=".55">
+  <path d="M49 29c12 4 17 12 16 25"/>
+  <path d="M84 39c-12 5-18 13-17 26"/>
+  <path d="M42 60c15-2 25 3 31 16"/>
+  <path d="M87 67c-16-2-26 4-30 18"/>
+  <path d="M56 92c8-7 16-8 27-2"/>
+</g>
+</svg>

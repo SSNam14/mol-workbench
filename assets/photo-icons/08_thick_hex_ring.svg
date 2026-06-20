@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+<title>Thick hex ring icon</title>
+<desc>A thick orange hexagonal ring with a dark center cutout.</desc>
+<defs>
+  <linearGradient id="thickOrange" x1="0" y1="18" x2="0" y2="110" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#FFAA1F"/>
+    <stop offset="1" stop-color="#F7941D"/>
+  </linearGradient>
+</defs>
+<path fill="url(#thickOrange)" fill-rule="evenodd" d="M64 18 106 42v44l-42 24-42-24V42L64 18Zm0 31 16 9v18l-16 9-16-9V58l16-9Z"/>
+</svg>
