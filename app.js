@@ -1685,6 +1685,13 @@ function boot(){
     const serials=serialTextSet(selected);
     state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
   }
+  function ensureSelectionToolbarDefaultLine(selected){
+    const targets=(selected||[]).filter(a=>isAtomVisibleNow(a)&&!isAtomLevelShown(a)), sel=serialSelectorForAtoms(targets);
+    if(!sel)return 0;
+    state.styleRules=removeSerialsFromDirectRules(state.styleRules,serialTextSet(targets));
+    state.styleRules.push({selector:sel,representation:'line',options:{source:'selection-toolbar',atomLevel:true,defaultVisible:true}});
+    return targets.length;
+  }
   function hideSelectionToolbarAtoms(){
     const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
     if(!sel)return;
@@ -1698,15 +1705,17 @@ function boot(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
     showSelectionToolbarAtoms(selected);
+    const defaulted=ensureSelectionToolbarDefaultLine(selected);
     applyStylesFull(true);
-    setStatus('Shown selected atoms: '+selected.length.toLocaleString());
+    setStatus('Shown selected atoms: '+selected.length.toLocaleString()+(defaulted?' (default line: '+defaulted.toLocaleString()+')':''));
   }
   function showSelectionToolbarHeavyOnly(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
     showSelectionToolbarAtoms(selected);
-    const hydrogens=selected.filter(a=>atomElem(a)==='H'), hsel=serialSelectorForAtoms(hydrogens);
+    const hydrogens=selected.filter(a=>atomElem(a)==='H'), heavy=selected.filter(a=>atomElem(a)!=='H'), hsel=serialSelectorForAtoms(hydrogens);
     if(hsel)state.hiddenRules.push({selector:hsel,representation:'hide',options:{source:'selection-toolbar',atomLevel:true}});
+    ensureSelectionToolbarDefaultLine(heavy);
     applyStylesFull(true);
     setStatus('Selected heavy atoms visible: '+(selected.length-hydrogens.length).toLocaleString()+' / '+selected.length.toLocaleString());
   }
