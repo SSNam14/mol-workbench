@@ -108,6 +108,42 @@ def load_session_or_legacy():
     return legacy_last_structure_session()
 
 
+def file_revision(path):
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return f"{stat.st_mtime_ns}-{stat.st_size}"
+
+
+def session_revision():
+    current = file_revision(SESSION_PATH)
+    if current:
+        return current
+    legacy = file_revision(LAST_STRUCTURE_PATH)
+    return f"legacy-{legacy}" if legacy else "empty"
+
+
+def session_meta(session=None):
+    session = session or None
+    entries = session.get("entries", []) if session else []
+    return {
+        "schema": SESSION_SCHEMA,
+        "revision": session_revision(),
+        "entries": [
+            {
+                "name": entry.get("name", ""),
+                "title": entry.get("title", entry.get("name", "")),
+                "pdbId": entry.get("pdbId", ""),
+                "fmt": entry.get("fmt", ""),
+            }
+            for entry in entries
+        ],
+        "includedEntries": session.get("includedEntries", []) if session else [],
+        "activeEntry": session.get("activeEntry", "") if session else "",
+    }
+
+
 def write_session(session):
     write_json_atomic(SESSION_PATH, session)
     active_name = session.get("activeEntry")
@@ -160,6 +196,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/session-meta":
+            self.handle_get_session_meta()
+            return
         if path == "/api/session":
             self.handle_get_session()
             return
@@ -201,7 +240,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/session":
             clear_session()
-            self.send_json(200, {"ok": True})
+            self.send_json(200, {"ok": True, "session": session_meta(None)})
             return
         self.send_error(404)
 
@@ -230,7 +269,16 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not session:
             self.send_json(404, {"error": "not_found"})
             return
+        session["revision"] = session_revision()
         self.send_json(200, session)
+
+    def handle_get_session_meta(self):
+        try:
+            session = load_session_or_legacy()
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_read_failed"})
+            return
+        self.send_json(200, session_meta(session))
 
     def handle_put_session(self):
         payload = self.read_json_body(MAX_SESSION_BYTES)
@@ -241,7 +289,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_session"})
             return
         write_session(session)
-        self.send_json(200, {"ok": True, "entries": len(session["entries"])})
+        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_get_last_structure(self):
         try:
@@ -270,7 +318,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_structure"})
             return
         session = upsert_session_entry(entry)
-        self.send_json(200, {"ok": True, "entries": len(session["entries"])})
+        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def interaction_index_path(self, key):
         if not key or not all(ch.isalnum() or ch in "._-" for ch in key):

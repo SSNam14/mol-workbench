@@ -10,6 +10,7 @@ function boot(){
   const entries = [];
   const entryChecked = Object.create(null);
   let displayedCount = 0;
+  let lastSessionRevision = null, sessionSyncTimer = null, sessionSyncInFlight = false, suppressSessionPollUntil = 0;
 
   const waterNames = new Set(['HOH','WAT','DOD','H2O']);
   const ionNames = new Set(['NA','CL','K','MG','CA','ZN','MN','FE','CU','CO','NI','CD','HG','SR','BA','CS','RB','LI','AL','IOD','BR']);
@@ -35,6 +36,7 @@ function boot(){
     contact:{maxDistance:4.8,minDistance:2.0,goodCutoffRatio:1.3,badCutoffRatio:0.89,uglyCutoffRatio:0.75,maxInteractions:12000}
   };
   const VIEWER_SESSION_API = 'api/session';
+  const VIEWER_SESSION_META_API = 'api/session-meta';
   const LAST_STRUCTURE_API = 'api/last-structure';
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
@@ -150,6 +152,20 @@ function boot(){
     if(!names.has(active))active=included[0]||out[0].name;
     return {entries:out,includedEntries:included,activeEntry:active};
   }
+  function rememberSessionMeta(meta){
+    if(meta&&meta.revision!=null)lastSessionRevision=String(meta.revision);
+  }
+  function rememberSessionResponse(payload){
+    if(!payload||typeof payload!=='object')return;
+    if(payload.revision!=null)rememberSessionMeta(payload);
+    else if(payload.session)rememberSessionMeta(payload.session);
+  }
+  function loadSessionMeta(){
+    return fetch(VIEWER_SESSION_META_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).catch(()=>null);
+  }
   function viewerSessionPayload(){
     const clean=entries.map(normalizeStructureEntry).filter(Boolean);
     if(!clean.length)return null;
@@ -161,14 +177,15 @@ function boot(){
   }
   function saveViewerSession(){
     const payload=viewerSessionPayload();
-    if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok).catch(()=>false);
-    return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
+    suppressSessionPollUntil=Date.now()+1500;
+    if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+    return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
   }
   function loadViewerSession(){
     return fetch(VIEWER_SESSION_API,{cache:'no-store'}).then(res=>{
       if(!res.ok)return null;
       return res.json();
-    }).then(payload=>normalizeViewerSession(payload)).catch(()=>null);
+    }).then(payload=>{ rememberSessionResponse(payload); return normalizeViewerSession(payload); }).catch(()=>null);
   }
   function loadLastStructure(){
     return fetch(LAST_STRUCTURE_API,{cache:'no-store'}).then(res=>{
@@ -179,9 +196,10 @@ function boot(){
       return entry?{entries:[entry],includedEntries:[entry.name],activeEntry:entry.name}:null;
     }).catch(()=>null);
   }
-  function restoreViewerSession(session){
+  function restoreViewerSession(session,opts){
     session=normalizeViewerSession(session);
     if(!session)throw new Error('Invalid viewer session');
+    opts=opts||{};
     if(!viewer)initViewer();
     entries.splice(0,entries.length);
     session.entries.forEach(e=>entries.push(e));
@@ -189,8 +207,43 @@ function boot(){
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
     currentName=session.activeEntry;
     resetDisplayRulesForStructure();
-    rebuildDisplayedEntries({zoom:true});
+    rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
     return session;
+  }
+  function restoreEmptyViewerSession(){
+    entries.splice(0,entries.length);
+    Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    currentName='';
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+  }
+  async function pollViewerSession(){
+    if(sessionSyncInFlight||Date.now()<suppressSessionPollUntil)return;
+    sessionSyncInFlight=true;
+    try{
+      const meta=await loadSessionMeta();
+      if(!meta||meta.revision==null)return;
+      const revision=String(meta.revision);
+      if(lastSessionRevision==null){ lastSessionRevision=revision; return; }
+      if(revision===lastSessionRevision)return;
+      lastSessionRevision=revision;
+      if(!Array.isArray(meta.entries)||!meta.entries.length){
+        restoreEmptyViewerSession();
+        setStatus('Viewer session cleared on server');
+        return;
+      }
+      const session=await loadViewerSession();
+      if(session){
+        restoreViewerSession(session,{realtime:true});
+        setStatus('Viewer session updated from server');
+      }
+    }finally{
+      sessionSyncInFlight=false;
+    }
+  }
+  function startSessionSync(){
+    if(sessionSyncTimer)return;
+    sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
@@ -1877,6 +1930,8 @@ function installFrameSyncedMotion(targetViewer){
   $('selLevel').value=state.selectionMode;
   loadVisualConfig().then(function(){
     return loadInitialStructure();
+  }).then(function(){
+    startSessionSync();
   }).catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
 }
 function waitFor3Dmol(){

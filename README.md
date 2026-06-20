@@ -450,6 +450,8 @@ When exactly one entry is displayed, the viewer starts background interaction in
 
 The viewer stores the loaded entry list, included-entry state, and active entry on the server through `/api/session`. A browser refresh restores that full session first; the bundled sample structure is only used when no saved session exists.
 
+Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
+
 `/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
 
 Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files.
