@@ -52,7 +52,7 @@ function boot(){
     styleRules:[], hiddenRules:[], interactionRules:[],
     selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
     focusTarget:null, mousePreset:'select-left',
-    visibility:{protein:true,ligands:true,solvents:true,other:true}, chainVisible:{},
+    visibility:{protein:true,ligands:true,solvents:true,other:true}, chainVisible:{}, groupVisible:{},
     bgColor:'#000000', carbonByChain:true, hbondCutoff:2.8, saltCutoff:5.0,
     locked:false
   };
@@ -486,6 +486,7 @@ function boot(){
       const c=atomCategory(a);
       if(!state.visibility[c]){off.push(a.serial);continue;}
       if(c==='protein'&&!isChainVisible(a)){off.push(a.serial);continue;}
+      if(c!=='protein'&&!isGroupVisible(a)){off.push(a.serial);continue;}
       if(c==='solvents'&&state.solvent==='off'){off.push(a.serial);continue;}
       if(c==='other'&&state.other==='off')off.push(a.serial);
     }
@@ -853,6 +854,7 @@ function boot(){
     const c=atomCategory(a);
     if(state.visibility[c]===false)return false;
     if(c==='protein'&&!isChainVisible(a))return false;
+    if(c!=='protein'&&!isGroupVisible(a))return false;
     if(c==='solvents'&&state.solvent==='off')return false;
     if(c==='other'&&state.other==='off')return false;
     if(hiddenByRules(a))return false;
@@ -1278,6 +1280,76 @@ function boot(){
     state.chainVisible[chainVisibilityKey(entry,chain)]=!!on;
     delete state.chainVisible[chain];
   }
+  function groupVisibilityKey(entry,chain,resn,resi){ return [entry||'',chain||'',resn||'',resi==null?'':resi].join('\u0001'); }
+  function groupVisibilityKeyFromGroup(g){ return groupVisibilityKey(g.entry,g.chain,g.resn,g.resi); }
+  function groupVisibilityKeyFromAtom(a){ return groupVisibilityKey(a&&a._entryName,a&&a.chain,a&&a.resn,a&&a.resi); }
+  function groupVisibilityValue(g){ return state.groupVisible[groupVisibilityKeyFromGroup(g)]!==false; }
+  function isGroupVisible(a){ return state.groupVisible[groupVisibilityKeyFromAtom(a)]!==false; }
+  function setGroupVisibility(g,on){ state.groupVisible[groupVisibilityKeyFromGroup(g)]=!!on; }
+  function serialsForAtoms(list){ const out=[]; (list||[]).forEach(a=>{ if(a&&a.serial!=null)out.push(a.serial); }); return out; }
+  function setStyleForSerials(list,spec,add){
+    const serials=serialsForAtoms(list);
+    if(!serials.length)return;
+    if(add)viewer.addStyle({serial:serials},spec);
+    else viewer.setStyle({serial:serials},spec);
+  }
+  function setStyleForSelector(sel,spec,add){
+    if(add)viewer.addStyle(sel,spec);
+    else viewer.setStyle(sel,spec);
+  }
+  function applyBaseStylesForAtoms(list){
+    const by={protein:[],ligands:[],solvents:[],other:[]};
+    (list||[]).forEach(a=>{ const c=atomCategory(a); if(by[c])by[c].push(a); });
+    if(by.protein.length){
+      setStyleForSerials(by.protein,proteinBackboneStyleSpec(),false);
+      if(state.proteinAtoms!=='off')setStyleForSerials(by.protein,proteinAtomStyleSpec(),true);
+    }
+    if(by.ligands.length)setStyleForSerials(by.ligands,ligandStyleSpec(),false);
+    if(by.solvents.length)setStyleForSerials(by.solvents,solventStyleSpec(),false);
+    if(by.other.length)setStyleForSerials(by.other,otherStyleSpec(),false);
+  }
+  function applyRuleOverlays(){
+    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
+    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
+  }
+  let visibilityRefreshTimer=null, visibilityInteractionTimer=null;
+  function scheduleVisibilityLayerRefresh(){
+    resetAtomLevelCache();
+    if(visibilityRefreshTimer!=null)clearTimeout(visibilityRefreshTimer);
+    const run=function(){
+      visibilityRefreshTimer=null;
+      displayedCount=atoms.filter(isAtomVisibleNow).length;
+      redrawWideLineStyles();
+      if(state.selectionSel)renderSelectionHighlight(false,selectedAtomsForSelector(state.selectionSel));
+      updateStatusBar();
+      if(viewer)viewer.render();
+    };
+    visibilityRefreshTimer=setTimeout(run,16);
+    if(visibilityInteractionTimer!=null)clearTimeout(visibilityInteractionTimer);
+    visibilityInteractionTimer=setTimeout(function(){
+      visibilityInteractionTimer=null;
+      resetAtomLevelCache();
+      redrawInteractions(false);
+      if(viewer)viewer.render();
+    },180);
+  }
+  function applyVisibilityForAtoms(list,selector){
+    if(!viewer||!model)return;
+    const visible=[],hidden=[];
+    (list||[]).forEach(a=>{ (isAtomVisibleNow(a)?visible:hidden).push(a); });
+    if(hidden.length){
+      if(selector&&hidden.length===(list||[]).length)setStyleForSelector(selector,{},false);
+      else setStyleForSerials(hidden,{},false);
+    }
+    if(visible.length){
+      if(selector&&visible.length===(list||[]).length&&visible.every(isProtein)){
+        setStyleForSelector(selector,proteinBackboneStyleSpec(),false);
+        if(state.proteinAtoms!=='off')setStyleForSelector(selector,proteinAtomStyleSpec(),true);
+      }else applyBaseStylesForAtoms(visible);
+      applyRuleOverlays();
+    }
+    scheduleVisibilityLayerRefresh();
+  }
   function hierarchySelect(sel,e){
     const additive=!!(e&&e.shiftKey);
     setSelection(sel,{additive});
@@ -1367,7 +1439,7 @@ function boot(){
         tree.appendChild(catRow('Ligands','#FF8A65',counts.ligands,22));
         groupedResidues(entryAtoms.filter(isLigand)).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
@@ -1389,7 +1461,7 @@ function boot(){
             indent:34,
             checkbox:true,
             checked:chainVisibilityValue(g.entry,g.chain),
-            oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyStylesFull(true); },
+            oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
             onselect:function(e){ hierarchySelect(sel,e); }
           }));
         });
@@ -1399,7 +1471,7 @@ function boot(){
         tree.appendChild(catRow('Solvents','#4DD0E1',counts.solvents,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
@@ -1407,7 +1479,7 @@ function boot(){
         tree.appendChild(catRow('Other','#CE93D8',counts.other,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
       if(!entryAtoms.length){
@@ -1532,6 +1604,7 @@ function boot(){
     resetSelectionState();
     state.visibility={protein:true,ligands:true,solvents:true,other:true};
     state.chainVisible={};
+    state.groupVisible={};
   }
   function prepareDisplayedAtoms(entry,list,serialStart){
     list.forEach(a=>{
