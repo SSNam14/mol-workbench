@@ -7,6 +7,8 @@ html,body{height:100%;margin:0;background:#1b1b1b;overflow:hidden}
 [data-menu]:hover{background:#4a4a4a}
 [data-tab]:hover{color:#cfe6ff !important}
 [data-row]:hover{background:#333 !important}
+[data-row].is-selected{background:#3b4148 !important;box-shadow:inset 3px 0 0 #6cb0e0}
+[data-row].is-selected:hover{background:#46505a !important}
 [data-seq]:hover{outline:1px solid #6cb0e0}
 ::-webkit-scrollbar{width:11px;height:11px}
 ::-webkit-scrollbar-thumb{background:#4d4d4d;border-radius:5px;border:2px solid #2b2b2b}

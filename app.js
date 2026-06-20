@@ -803,6 +803,7 @@ function boot(){
     if(opts.focus)focus(state.selectionSel);
     const info=selectionInfo(state.selectionSel,selectionAtoms);
     updateSelectionStatus(info);
+    syncHierarchySelectionHighlight();
     syncSeqHighlight(info.residueKeys);
     setStatus((add?'Added: ':'Selected: ')+info.atomCount.toLocaleString()+' atoms');
     return state.selectionSel;
@@ -816,6 +817,7 @@ function boot(){
     state.selectionSel=null; selectionAtoms=[]; state.rangeAnchor=null; state.focusTarget=null;
     renderSelectionHighlight(true,selectionAtoms);
     updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
+    syncHierarchySelectionHighlight();
     syncSeqHighlight(new Set());
     setStatus('Selection cleared.');
   }
@@ -1363,6 +1365,7 @@ function boot(){
   function hierarchyChildRow(opts){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
+    if(opts.atoms)row.dataset.hierarchySerials=serialsForAtoms(opts.atoms).map(String).join(',');
     row.style.cssText='display:flex;align-items:center;gap:7px;min-height:20px;padding:0 8px 0 '+(opts.indent||34)+'px;font-size:11.5px;cursor:pointer';
     if(opts.checkbox){
       const chk=document.createElement('input');
@@ -1385,6 +1388,19 @@ function boot(){
     row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
     row.onclick=function(e){ if(opts.onselect)opts.onselect(e); };
     return row;
+  }
+  function syncHierarchySelectionHighlight(){
+    const tree=$('hierarchyTree');
+    if(!tree)return;
+    const selected=new Set((selectionAtoms||[]).map(a=>a&&a.serial!=null?String(a.serial):'').filter(Boolean));
+    tree.querySelectorAll('[data-hierarchy-serials]').forEach(row=>{
+      let on=false;
+      if(selected.size){
+        const serials=(row.dataset.hierarchySerials||'').split(',');
+        for(let i=0;i<serials.length;i++){ if(selected.has(serials[i])){ on=true; break; } }
+      }
+      row.classList.toggle('is-selected',on);
+    });
   }
   function residueSortValue(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
   function compareHierarchyGroups(a,b){
@@ -1439,7 +1455,7 @@ function boot(){
         tree.appendChild(catRow('Ligands','#FF8A65',counts.ligands,22));
         groupedResidues(entryAtoms.filter(isLigand)).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
@@ -1459,6 +1475,7 @@ function boot(){
             count:g.atoms.length,
             color:chainColor(g.chain),
             indent:34,
+            atoms:g.atoms,
             checkbox:true,
             checked:chainVisibilityValue(g.entry,g.chain),
             oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
@@ -1471,7 +1488,7 @@ function boot(){
         tree.appendChild(catRow('Solvents','#4DD0E1',counts.solvents,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
@@ -1479,7 +1496,7 @@ function boot(){
         tree.appendChild(catRow('Other','#CE93D8',counts.other,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
           const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
       if(!entryAtoms.length){
@@ -1489,6 +1506,7 @@ function boot(){
     if(!shown.length){
       tree.appendChild(hierarchySubhead('No entries displayed',8));
     }
+    syncHierarchySelectionHighlight();
   }
 
   // ---------- Sequence viewer ----------
