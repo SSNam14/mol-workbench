@@ -151,11 +151,13 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-100 svg{width:13px;height:13px;display:block}
 
 /* Temporary imported SVG preview strip in the top toolbar. */
-.svg-icon-strip{display:flex;align-items:center;gap:4px;flex:0 1 244px;min-width:82px;max-width:244px;height:38px;padding:0 8px 0 0;border-right:1px solid #2a2a2a;overflow-x:auto;overflow-y:hidden}
-.svg-icon-strip::-webkit-scrollbar{height:4px}
-.svg-icon-strip::-webkit-scrollbar-thumb{border:0;border-radius:2px;background:#5a5a5a}
+.svg-icon-strip{display:flex;align-items:center;gap:4px;flex:0 0 304px;height:38px;padding:0 8px 0 0;border-right:1px solid #2a2a2a;overflow:hidden}
 .svg-icon-chip{display:flex;align-items:center;justify-content:center;flex:0 0 26px;width:26px;height:26px;border:1px solid #555;border-radius:5px;background:#2d2d2d}
 .svg-icon-chip img{display:block;width:18px;height:18px;object-fit:contain}
+
+/* View controls moved into the search toolbar. */
+.find-view-controls{display:flex;align-items:center;gap:4px;flex:0 0 auto;margin-left:4px;padding-left:8px;border-left:1px solid #242424}
+.find-view-controls .u-017{height:22px;padding:0 8px;border-radius:4px;font-size:11px}
 
 /* Compact per-category representation dropdowns (toolbar, replaces Style popover). */
 .rep-group{display:flex;align-items:flex-end;gap:7px;padding-right:9px;border-right:1px solid #2a2a2a}
