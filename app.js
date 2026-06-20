@@ -313,6 +313,9 @@ function boot(){
   function isProtein(a){ return !a.hetflag && !waterNames.has(normUpper(a.resn)); }
   function isLigand(a){ return !!a.hetflag && !waterNames.has(normUpper(a.resn)) && !ionNames.has(normUpper(a.resn)); }
   function isPolar(a){ return ['N','O','S'].includes(atomElem(a)); }
+  function isHydrogenAtom(a){ return atomElem(a)==='H'; }
+  function bondedAtoms(a){ return (a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean); }
+  function isPolarHydrogen(a){ return isHydrogenAtom(a)&&bondedAtoms(a).some(isPolar); }
   function isPositive(a){ return atomElem(a)==='N' && /^(NZ|NH1|NH2|NE|NE2|ND1)$/i.test(a.atom||''); }
   function isNegative(a){ return atomElem(a)==='O' && /^(OD1|OD2|OE1|OE2|OXT|O1|O2|O3|O4)$/i.test(a.atom||''); }
   function point(a){ return {x:a.x,y:a.y,z:a.z}; }
@@ -1713,11 +1716,11 @@ function boot(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
     showSelectionToolbarAtoms(selected);
-    const hydrogens=selected.filter(a=>atomElem(a)==='H'), heavy=selected.filter(a=>atomElem(a)!=='H'), hsel=serialSelectorForAtoms(hydrogens);
+    const hiddenHydrogens=selected.filter(a=>isHydrogenAtom(a)&&!isPolarHydrogen(a)), visibleAtoms=selected.filter(a=>!isHydrogenAtom(a)||isPolarHydrogen(a)), hsel=serialSelectorForAtoms(hiddenHydrogens);
     if(hsel)state.hiddenRules.push({selector:hsel,representation:'hide',options:{source:'selection-toolbar',atomLevel:true}});
-    ensureSelectionToolbarDefaultLine(heavy);
+    ensureSelectionToolbarDefaultLine(visibleAtoms);
     applyStylesFull(true);
-    setStatus('Selected heavy atoms visible: '+(selected.length-hydrogens.length).toLocaleString()+' / '+selected.length.toLocaleString());
+    setStatus('Selected heavy atoms + polar H visible: '+visibleAtoms.length.toLocaleString()+' / '+selected.length.toLocaleString());
   }
   function setSelectionToolbarRepresentation(rep){
     const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
