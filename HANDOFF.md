@@ -6,7 +6,7 @@ Last updated: 2026-06-20 KST
 
 This project is a browser-based molecular viewer. Serve it from the repository root with `server.py`; choose the port at launch.
 
-Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment. The server serves files and persists small runtime state such as the last loaded structure and interaction indexes.
+Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive performance follows the client browser/GPU/rendering environment. The server serves files and persists runtime state such as the loaded viewer session and interaction indexes.
 
 ## Runtime Shape
 
@@ -15,7 +15,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
 - `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: screen-space-width line renderer implemented as 3Dmol scene meshes with depth testing.
-- `server.py`: static file server plus `/api/last-structure` and `/api/interaction-index/<structureKey>` for server-side runtime state.
+- `server.py`: static file server plus `/api/session`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/`: optional bundled sample structures.
@@ -40,10 +40,11 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 
 ## Must-Have Behavior
 
-- Initial load restores the last loaded structure from server storage when available; otherwise it opens the bundled sample structure.
-- Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side last-structure cache so browser refresh keeps the same molecule.
+- Initial load restores the full viewer session from server storage when available; otherwise it opens the bundled sample structure.
+- Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
+- `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
 - Loading/displaying exactly one entry starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching back to a previously loaded single entry does not recompute interactions.
 - When multiple entries are displayed, nonbonded interaction indexing/rendering is disabled to avoid accidental cross-entry interactions.
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
@@ -146,7 +147,7 @@ git diff --check
 curl -sI "http://127.0.0.1:${PORT}/" | head
 curl -sI "http://127.0.0.1:${PORT}/styles.css" | head
 curl -sI "http://127.0.0.1:${PORT}/app.js" | head
-curl -s "http://127.0.0.1:${PORT}/api/last-structure" | head -c 200
+curl -s "http://127.0.0.1:${PORT}/api/session" | head -c 200
 ```
 
 Optional local browser debugging only, when `agbrowse` is installed:

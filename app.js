@@ -34,6 +34,7 @@ function boot(){
     pipi:{faceMaxDistance:4.4,faceMaxAngle:30,edgeMaxDistance:5.5,edgeMinAngle:60},
     contact:{maxDistance:4.8,minDistance:2.0,goodCutoffRatio:1.3,badCutoffRatio:0.89,uglyCutoffRatio:0.75,maxInteractions:12000}
   };
+  const VIEWER_SESSION_API = 'api/session';
   const LAST_STRUCTURE_API = 'api/last-structure';
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
@@ -131,16 +132,65 @@ function boot(){
     const name=normText(e.name||'structure');
     return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
   }
-  function saveLastStructure(e){
-    const entry=normalizeStructureEntry(e);
-    if(!entry)return Promise.resolve(false);
-    return fetch(LAST_STRUCTURE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)}).then(res=>res.ok).catch(()=>false);
+  function normalizeViewerSession(payload){
+    if(!payload||typeof payload!=='object'||!Array.isArray(payload.entries))return null;
+    const out=[],seen=new Set();
+    payload.entries.forEach(raw=>{
+      const entry=normalizeStructureEntry(raw&&raw.entry?raw.entry:raw);
+      if(!entry)return;
+      const existing=out.findIndex(e=>e.name===entry.name);
+      if(existing>=0)out[existing]=entry;
+      else{ seen.add(entry.name); out.push(entry); }
+    });
+    if(!out.length)return null;
+    const names=new Set(out.map(e=>e.name));
+    let included=Array.isArray(payload.includedEntries)?payload.includedEntries.map(String).filter(name=>names.has(name)):[];
+    if(!included.length)included=out.map(e=>e.name);
+    let active=normText(payload.activeEntry||payload.currentName||included[0]||out[0].name);
+    if(!names.has(active))active=included[0]||out[0].name;
+    return {entries:out,includedEntries:included,activeEntry:active};
+  }
+  function viewerSessionPayload(){
+    const clean=entries.map(normalizeStructureEntry).filter(Boolean);
+    if(!clean.length)return null;
+    const names=new Set(clean.map(e=>e.name));
+    let included=clean.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
+    if(!included.length)included=[clean[0].name];
+    let active=names.has(currentName)?currentName:included[0];
+    return {entries:clean,includedEntries:included,activeEntry:active};
+  }
+  function saveViewerSession(){
+    const payload=viewerSessionPayload();
+    if(!payload)return Promise.resolve(false);
+    return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
+  }
+  function loadViewerSession(){
+    return fetch(VIEWER_SESSION_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).then(payload=>normalizeViewerSession(payload)).catch(()=>null);
   }
   function loadLastStructure(){
     return fetch(LAST_STRUCTURE_API,{cache:'no-store'}).then(res=>{
       if(!res.ok)return null;
       return res.json();
-    }).then(payload=>normalizeStructureEntry(payload&&payload.entry?payload.entry:payload)).catch(()=>null);
+    }).then(payload=>{
+      const entry=normalizeStructureEntry(payload&&payload.entry?payload.entry:payload);
+      return entry?{entries:[entry],includedEntries:[entry.name],activeEntry:entry.name}:null;
+    }).catch(()=>null);
+  }
+  function restoreViewerSession(session){
+    session=normalizeViewerSession(session);
+    if(!session)throw new Error('Invalid viewer session');
+    if(!viewer)initViewer();
+    entries.splice(0,entries.length);
+    session.entries.forEach(e=>entries.push(e));
+    Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    currentName=session.activeEntry;
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries({zoom:true});
+    return session;
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
@@ -1211,9 +1261,7 @@ function boot(){
   async function persistAndLoadEntry(e){
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
-    setStatus('Saving on server: '+e.name);
-    await saveLastStructure(e);
-    return loadEntry(e,{persist:false});
+    return loadEntry(e,{persist:true});
   }
   function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
   function displayedStructureKey(list){
@@ -1319,13 +1367,14 @@ function boot(){
     entryChecked[entry.name]=!!on;
     resetSelectionState();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
+    saveViewerSession();
   }
   function activateEntry(entry){
     const wasIncluded=entryChecked[entry.name]!==false;
     currentName=entry.name;
     if(!wasIncluded)entryChecked[entry.name]=true;
-    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); }
-    else{ resetSelectionState(); rebuildDisplayedEntries({preserveView:true,zoom:false}); }
+    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); saveViewerSession(); }
+    else{ resetSelectionState(); rebuildDisplayedEntries({preserveView:true,zoom:false}); saveViewerSession(); }
   }
   function loadEntry(e,opts){
     opts=opts||{};
@@ -1338,14 +1387,14 @@ function boot(){
     entryChecked[e.name]=true;
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({zoom:true});
-    if(opts.persist!==false)saveLastStructure(e);
+    if(opts.persist!==false)saveViewerSession();
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   async function loadInitialStructure(){
-    const saved=await loadLastStructure();
+    const saved=(await loadViewerSession()) || (await loadLastStructure());
     if(saved){
-      try{ loadEntry(saved,{persist:false}); return; }catch(err){}
+      try{ restoreViewerSession(saved); return; }catch(err){}
     }
     return loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY');
   }

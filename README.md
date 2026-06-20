@@ -9,7 +9,7 @@ Runtime layout:
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
 - `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
-- `server.py`: static file server plus persisted structure and interaction-index APIs
+- `server.py`: static file server plus persisted viewer-session and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
@@ -448,7 +448,9 @@ Loading a new structure adds or replaces an entry and includes it in the display
 
 When exactly one entry is displayed, the viewer starts background interaction indexing for that entry. When multiple entries are displayed, interaction rendering is disabled until the displayed set is reduced to one entry.
 
-The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that most recently loaded structure first; the bundled sample structure is only used when no saved structure exists.
+The viewer stores the loaded entry list, included-entry state, and active entry on the server through `/api/session`. A browser refresh restores that full session first; the bundled sample structure is only used when no saved session exists.
+
+`/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
 
 Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files.
 
@@ -535,6 +537,6 @@ molAgent.models();
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/last-structure` and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.
