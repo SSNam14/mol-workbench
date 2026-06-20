@@ -299,6 +299,7 @@ Line rendering note:
 
 - App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to camera-facing mesh quads in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
 - Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
+- Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 
 ## Mouse Action Commands
 

@@ -19,11 +19,12 @@ function boot(){
   const chainColors = {};
   'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => { chainColors[ch] = chainPalette[i % chainPalette.length]; });
   const elemColors = {H:'#FFFFFF',C:'#B0BEC5',N:'#64B5F6',O:'#EF5350',S:'#FDD835',P:'#FFB74D',F:'#81C784',CL:'#81C784',BR:'#A1887F',I:'#9575CD',FE:'#FF8A65',ZN:'#90A4AE',MG:'#A5D6A7',CA:'#B0BEC5',NA:'#90CAF9',K:'#CE93D8',MN:'#CE93D8',CU:'#4DD0E1',CO:'#F48FB1',NI:'#80CBC4'};
+  const lineWidths = {fallback:4,selection:3.6,protein:2.3,ligand:2.5,tube:1.3,interaction:4,interactionSolid:8};
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
-  function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:1.8}; }
+  function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,radius:0.06,scale:0.18,thickness:0.28,linewidth:lineWidths.selection}; }
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
@@ -221,7 +222,7 @@ function boot(){
   }
   function pushSelectionShape(shape){ if(shape)selectionShapes.push(shape); }
   function selectionShapeStyle(o){
-    return {color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:o.linewidth||2};
+    return {color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:o.linewidth||lineWidths.fallback};
   }
   function drawSelectionAtom(shape,a,o){
     const radius=Number(o.scale||Math.max((o.radius||0.06)*2.2,0.12));
@@ -229,7 +230,7 @@ function boot(){
   }
   function drawSelectionBond(shape,a,b,rep,o){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
-    if(rep==='line')shape.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||2});
+    if(rep==='line')shape.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||lineWidths.fallback});
     else shape.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1});
   }
   function selectionStyleSpec(rep,o){
@@ -270,7 +271,7 @@ function boot(){
     return chainAwareAtomColor(a);
   }
   function appendWideBond(lines,a,b,o,defaultColorFn,widthDefault,dashed){
-    const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||2));
+    const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     const ca=lineColorForAtom(a,o,defaultColorFn),cb=lineColorForAtom(b,o,defaultColorFn);
     if(ca===cb){
       lines.push({start:point(a),end:point(b),color:ca,width,opacity,dashed:!!dashed});
@@ -283,7 +284,7 @@ function boot(){
   function appendWideAtomLines(lines,points,selected,o,defaultColorFn,widthDefault,dashed){
     const data=selectionBondData(selected);
     data.bonds.forEach(p=>appendWideBond(lines,p[0],p[1],o,defaultColorFn,widthDefault,dashed));
-    const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||2));
+    const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     data.looseAtoms.forEach(a=>{
       const p=point(a);
       p.color=lineColorForAtom(a,o,defaultColorFn);
@@ -294,7 +295,7 @@ function boot(){
   }
   function drawSelectionWideLines(selected,o){
     if(!wideLineLayer)return false;
-    const lines=[],points=[],width=Math.max(1,Number(o.linewidth||4));
+    const lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
     appendWideAtomLines(lines,points,selected,o,function(){ return o.color||'#fdd835'; },width,false);
     if(!lines.length&&!points.length)return false;
     wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
@@ -308,15 +309,15 @@ function boot(){
     if(!wideLineLayer)return;
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
-    if(state.proteinAtoms==='line')addWideStyleAtoms(lines,points,{hetflag:false},{linewidth:1.15},chainAwareAtomColor,1.15,false);
-    if(state.ligand==='line')addWideStyleAtoms(lines,points,{hetflag:true},{linewidth:1.25},elementColor,1.25,false);
+    if(state.proteinAtoms==='line')addWideStyleAtoms(lines,points,{hetflag:false},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
+    if(state.ligand==='line')addWideStyleAtoms(lines,points,{hetflag:true},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
     for(const r of state.styleRules){
       if(r.disabled)continue;
       const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
-      if(rep==='line')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||1.15,false);
-      else if(rep==='tube')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||0.65,false);
+      if(rep==='line')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.protein,false);
+      else if(rep==='tube')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.tube,false);
     }
-    wideLineLayer.setCollection('styles',lines,points,{linewidth:1.15,opacity:1,pointRadius:2});
+    wideLineLayer.setCollection('styles',lines,points,{linewidth:lineWidths.protein,opacity:1,pointRadius:lineWidths.fallback});
   }
   function drawSelectionChunks(shape,bonds,looseAtoms,rep,opts,job){
     let bi=0,ai=0;
@@ -568,17 +569,17 @@ function boot(){
   }
   function addInteractionWideLine(start,end,color,width,dashed){
     if(wideLineLayer){
-      interactionWideLines.push({start,end,color,width:width||2,opacity:1,dashed:!!dashed});
+      interactionWideLines.push({start,end,color,width:width||lineWidths.interaction,opacity:1,dashed:!!dashed});
       return;
     }
-    const shape=dashed&&viewer.addLine?viewer.addLine({start,end,color,dashed:true,linewidth:width||2}):viewer.addCylinder({start,end,radius:0.05,color,fromCap:1,toCap:1});
+    const shape=dashed&&viewer.addLine?viewer.addLine({start,end,color,dashed:true,linewidth:width||lineWidths.interaction}):viewer.addCylinder({start,end,radius:0.05,color,fromCap:1,toCap:1});
     if(shape)interactionShapes.push(shape);
   }
-  function drawLine(a,b,color,radius,dashed){ addInteractionWideLine(point(a),point(b),color,dashed?2:Math.max(2,Number(radius||0.05)*60),dashed); }
-  function drawDash(a,b,c){ addInteractionWideLine(point(a),point(b),c,2,true); }
-  function drawSolid(a,b,c){ addInteractionWideLine(point(a),point(b),c,4,false); }
-  function drawDashAP(a,p,c){ addInteractionWideLine(point(a),p,c,2,true); }
-  function drawDashPP(p,q,c){ addInteractionWideLine(p,q,c,2,true); }
+  function drawLine(a,b,color,radius,dashed){ addInteractionWideLine(point(a),point(b),color,dashed?lineWidths.interaction:Math.max(lineWidths.interaction,Number(radius||0.05)*120),dashed); }
+  function drawDash(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interaction,true); }
+  function drawSolid(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interactionSolid,false); }
+  function drawDashAP(a,p,c){ addInteractionWideLine(point(a),p,c,lineWidths.interaction,true); }
+  function drawDashPP(p,q,c){ addInteractionWideLine(p,q,c,lineWidths.interaction,true); }
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
@@ -599,7 +600,7 @@ function boot(){
       }
     }catch(e){}
     _lvlCache=null;
-    if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:2,opacity:1});
+    if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
     if(render!==false)viewer.render();
   }
   function interIcon(kind){ const s=document.createElement('span'); s.style.cssText='display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex:none;background:#159aad;color:#fff;font-size:13px;font-weight:700'; s.textContent=kind==='noncov'?'H':(kind==='pi'?'\u03c0':'\u2731'); return s; }

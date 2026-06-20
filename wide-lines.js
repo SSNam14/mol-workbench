@@ -33,6 +33,19 @@ function normalize(v){
   return {x:v.x/d,y:v.y/d,z:v.z/d};
 }
 
+function finiteNumber(value,fallback){
+  const n=Number(value);
+  return Number.isFinite(n)?n:fallback;
+}
+
+function lerpPoint(a,b,t){
+  return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t};
+}
+
+function pointDistance(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
+}
+
 function viewKey(viewer){
   const q=viewer&&viewer.rotationGroup&&viewer.rotationGroup.quaternion;
   const mp=viewer&&viewer.modelGroup&&viewer.modelGroup.position;
@@ -45,6 +58,7 @@ function viewKey(viewer){
 
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
+const DEFAULT_LINE_WIDTH = 4;
 
 class MolWideLineLayer{
   constructor(host,getViewer){
@@ -144,15 +158,17 @@ class MolWideLineLayer{
     return {
       lines:(lines||[]).filter(line=>finitePoint(line.start)&&finitePoint(line.end)).map(line=>({
         start:clonePoint(line.start),end:clonePoint(line.end),color:line.color||options&&options.color,
-        width:Math.max(1,Number(line.width||line.linewidth||(options&&options.linewidth)||2)),
-        opacity:line.opacity==null?(options&&options.opacity):line.opacity,dashed:!!line.dashed
+        width:Math.max(1,Number(line.width||line.linewidth||(options&&options.linewidth)||DEFAULT_LINE_WIDTH)),
+        opacity:line.opacity==null?(options&&options.opacity):line.opacity,dashed:!!line.dashed,
+        dashLength:line.dashLength||options&&options.dashLength,
+        gapLength:line.gapLength||options&&options.gapLength
       })),
       points:(points||[]).filter(finitePoint).map(point=>({
         x:Number(point.x)||0,y:Number(point.y)||0,z:Number(point.z)||0,color:point.color||options&&options.color,
-        radius:Math.max(1,Number(point.radius||(options&&options.pointRadius)||(options&&options.linewidth)||2)),
+        radius:Math.max(1,Number(point.radius||(options&&options.pointRadius)||(options&&options.linewidth)||DEFAULT_LINE_WIDTH)),
         opacity:point.opacity==null?(options&&options.opacity):point.opacity
       })),
-      options:Object.assign({color:'#fdd835',linewidth:2,opacity:1,pointRadius:2},options||{})
+      options:Object.assign({color:'#fdd835',linewidth:DEFAULT_LINE_WIDTH,opacity:1,pointRadius:DEFAULT_LINE_WIDTH},options||{})
     };
   }
 
@@ -172,7 +188,9 @@ class MolWideLineLayer{
     const group=this.collections.get(key)||this.normalizeCollection([],[],{});
     group.lines.push({
       start:clonePoint(line.start),end:clonePoint(line.end),color:line.color,
-      width:Math.max(1,Number(line.width||line.linewidth||2)),opacity:line.opacity,dashed:!!line.dashed
+      width:Math.max(1,Number(line.width||line.linewidth||DEFAULT_LINE_WIDTH)),opacity:line.opacity,dashed:!!line.dashed,
+      dashLength:line.dashLength,
+      gapLength:line.gapLength
     });
     this.collections.set(key,group);
     this.meshDirty=true;
@@ -225,10 +243,34 @@ class MolWideLineLayer{
   allItems(){
     const out=[];
     this.collections.forEach(group=>{
-      group.lines.forEach(line=>out.push({type:'line',data:line,options:group.options}));
+      group.lines.forEach(line=>{
+        if(line.dashed)this.expandDashedLine(line,group.options).forEach(segment=>out.push({type:'line',data:segment,options:group.options}));
+        else out.push({type:'line',data:line,options:group.options});
+      });
       group.points.forEach(point=>out.push({type:'point',data:point,options:group.options}));
     });
     return out;
+  }
+
+  expandDashedLine(line,options){
+    const length=pointDistance(line.start,line.end);
+    if(!Number.isFinite(length)||length<=0)return [];
+    const width=finiteNumber(line.width||options.linewidth,DEFAULT_LINE_WIDTH);
+    const dashLength=Math.max(0.12,finiteNumber(line.dashLength||options.dashLength,width*0.1));
+    const gapLength=Math.max(0.08,finiteNumber(line.gapLength||options.gapLength,dashLength*0.75));
+    const period=dashLength+gapLength;
+    if(length<=dashLength||period<=0)return [Object.assign({},line,{dashed:false})];
+    const segments=[];
+    for(let pos=0;pos<length&&segments.length<512;pos+=period){
+      const end=Math.min(length,pos+dashLength);
+      if(end<=pos)break;
+      segments.push(Object.assign({},line,{
+        start:lerpPoint(line.start,line.end,pos/length),
+        end:lerpPoint(line.start,line.end,end/length),
+        dashed:false
+      }));
+    }
+    return segments;
   }
 
   ensureMesh(viewer,items){
@@ -303,7 +345,7 @@ class MolWideLineLayer{
     if(!pa||!pb||!Number.isFinite(pa.x)||!Number.isFinite(pb.x))return;
     let dx=pb.x-pa.x, dy=pb.y-pa.y, len=Math.hypot(dx,dy);
     if(len<1e-4){ dx=1; dy=0; len=1; }
-    const half=Math.max(0.5,Number(line.width||entry.item.options.linewidth||2)/2);
+    const half=Math.max(0.5,Number(line.width||entry.item.options.linewidth||DEFAULT_LINE_WIDTH)/2);
     const off=viewer.screenOffsetToModel(-dy/len*half,dx/len*half);
     const v0={x:a.x+off.x,y:a.y+off.y,z:a.z+off.z};
     const v1={x:a.x-off.x,y:a.y-off.y,z:a.z-off.z};
@@ -317,7 +359,7 @@ class MolWideLineLayer{
   }
 
   writePointQuad(viewer,entry){
-    const p=entry.item.data, radius=Math.max(1,Number(p.radius||entry.item.options.pointRadius||entry.item.options.linewidth||2));
+    const p=entry.item.data, radius=Math.max(1,Number(p.radius||entry.item.options.pointRadius||entry.item.options.linewidth||DEFAULT_LINE_WIDTH));
     const ox=viewer.screenOffsetToModel(radius,0), oy=viewer.screenOffsetToModel(0,radius);
     const n=normalize(cross(ox,oy));
     this.writeVertex(entry.group,entry.base,{x:p.x-ox.x-oy.x,y:p.y-ox.y-oy.y,z:p.z-ox.z-oy.z},n);
