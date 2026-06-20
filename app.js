@@ -1526,10 +1526,10 @@ function installFrameSyncedMotion(targetViewer){
 
   // ---------- Wire UI ----------
   $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; state.rangeAnchor=null; setStatus('Selection level: '+state.selectionMode); };
-  $('qsP').onclick=function(){ setSelection({predicateName:'protein',not:{hetflag:true}},{}); setSelection({hetflag:false},{}); focus({hetflag:false}); };
-  $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel){ setSelection(sel,{}); focus(sel); } else setStatus('No ligand'); };
+  $('qsP').onclick=function(){ setSelection({predicateName:'protein',not:{hetflag:true}},{}); setSelection({hetflag:false},{}); };
+  $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel)setSelection(sel,{}); else setStatus('No ligand'); };
   $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
-  $('qsAll').onclick=function(){ setSelection({},{}); focus({}); };
+  $('qsAll').onclick=function(){ setSelection({},{}); };
   $('interBtn').onclick=toggleInterPanel;
   $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
