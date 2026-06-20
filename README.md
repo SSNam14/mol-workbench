@@ -1,64 +1,429 @@
-# Molecular Viewer 8704
+# Molecular Viewer
 
-Single-file browser molecular viewer for local serving on port 8704. The runtime source is `index.html`; local assets and sample data remain under `assets/` and `data/`.
+Static browser molecular viewer for protein and molecular structure inspection.
 
-## Agent API
+Runtime layout:
 
-The app is intended to be controlled by structured browser API calls through `window.molAgent`. Natural-language command input and command-log UI are intentionally not included.
+- `index.html`: DOM structure
+- `styles.css`: static UI styling
+- `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
+- `assets/3Dmol-min.js`: local 3Dmol dependency
+
+## Purpose Of This Manual
+
+This README is a tool-agnostic operation manual for agents. It assumes only that the agent can open the page and execute JavaScript in the page context, for example through a browser console, browser automation framework, extension, or test runner.
+
+Tool-specific debugging commands are intentionally not included here.
+
+## Control Surface
+
+Agents should control the viewer through:
 
 ```js
-// Style residues or ranges. The targeted residue/region is all-atom unless sidechainOnly is explicit.
-molAgent.style({chain:'H', resi:'30-35'}, 'tube', {color:'#fdd835', persist:true});
-molAgent.style({chain:'H', resi:'30-35'}, 'stick', {color:'#fdd835'});
-molAgent.style({chain:'A'}, 'hide');
+window.molAgent
+```
 
-// Named regions are never auto-created. Register them explicitly.
-molAgent.setRegions({REGION_NAME:[{chain:'H', resi:'30-35'}]});
-molAgent.style({region:'REGION_NAME'}, 'tube', {color:'#fdd835'});
+Do not send natural-language commands into the page. String commands are intentionally disabled. Use structured JavaScript objects.
 
-// True side-chain-only is separate and explicit.
-molAgent.style({chain:'H', resi:'30-35'}, 'stick', {sidechainOnly:true, color:'#00e676'});
+Wait until the API exists before issuing commands:
 
-// Interactions with selectors and filters.
-molAgent.showInteractions({kind:'hbond', between:[{chain:'A'}, {not:{chain:'A'}}], limit:2000});
-molAgent.showInteractions({kind:'salt', between:[{chain:'H'}, {chain:'L'}], limit:500});
-molAgent.showInteractions({kind:'pi', between:[{chain:'H'}, {not:{chain:'H'}}], limit:200});
+```js
+async function waitForMolAgent(timeoutMs = 10000) {
+  const start = performance.now();
+  while (!window.molAgent) {
+    if (performance.now() - start > timeoutMs) {
+      throw new Error("window.molAgent was not initialized");
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return window.molAgent;
+}
+```
 
-// Selection and focus.
-molAgent.setSelection({chain:'H', resi:'30-35'}, {representation:'stick', color:'#fdd835'});
-molAgent.setSelection({chain:'L', resi:'90-95'}, {additive:true});
-molAgent.focus({chain:'H', resi:'30-35'});
+Basic readiness check:
+
+```js
+const api = await waitForMolAgent();
+api.getState();
+```
+
+Expected initial state:
+
+```js
+{
+  mousePreset: "select-left",
+  mouseActions: {
+    buttons: {left: "select", right: "rotate", middle: "pan"},
+    wheel: "zoom"
+  }
+}
+```
+
+The exact object also includes current `selection`, `styleRules`, and `hiddenRules`.
+
+## Selector Objects
+
+Selectors are plain JavaScript objects matched against atom fields.
+
+Common selectors:
+
+```js
+{chain: "H"}
+{resi: 289}
+{resi: "30-35"}
+{resn: "TYR"}
+{atom: "CA"}
+{elem: "C"}
+{serial: [1, 2, 3]}
+{hetflag: true}
+{hetflag: false}
+{}
+```
+
+Boolean composition:
+
+```js
+{not: {chain: "A"}}
+{or: [{chain: "H"}, {chain: "L"}]}
+{and: [{chain: "H"}, {resi: "30-35"}]}
+```
+
+Selector notes:
+
+- `{}` means all atoms.
+- `resi: "30-35"` means an inclusive residue range.
+- Arrays match any listed value.
+- Numeric and string residue numbers are both accepted where the loaded model provides numeric residue values.
+
+## State Inspection
+
+Get full app state:
+
+```js
+molAgent.getState();
+```
+
+Count atoms matching a selector:
+
+```js
+molAgent.selectAtoms({chain: "H"}).length;
+```
+
+Inspect a few matching atoms:
+
+```js
+molAgent.selectAtoms({chain: "H", resi: "30-35"}).slice(0, 5);
+```
+
+Useful `getState()` fields:
+
+- `file`: current structure name
+- `atoms`: total loaded atom count
+- `mousePreset`: current mouse preset name
+- `mouseActions`: current button/wheel assignment
+- `selection`: current selection selector
+- `styleRules`: persistent style rules added through `molAgent.style(...)`
+- `hiddenRules`: hide rules added through `molAgent.run({type: "hide", ...})`
+
+## Selection Commands
+
+Select a residue range:
+
+```js
+molAgent.setSelection(
+  {chain: "H", resi: "30-35"},
+  {representation: "stick"}
+);
+```
+
+Add another selection instead of replacing:
+
+```js
+molAgent.setSelection(
+  {chain: "L", resi: "90-95"},
+  {additive: true, representation: "stick"}
+);
+```
+
+Select a whole chain:
+
+```js
+molAgent.setSelection({chain: "A"}, {representation: "stick"});
+```
+
+Select all atoms:
+
+```js
+molAgent.setSelection({}, {representation: "stick"});
+```
+
+Clear selection:
+
+```js
 molAgent.clearSelection();
-
-// Mouse presets can be changed immediately.
-molAgent.setMousePreset('select-left');
-molAgent.setMousePreset('default');
-molAgent.setMouseActions({buttons:{left:'select', right:'rotate', middle:'pan'}, wheel:'zoom'});
 ```
 
-`molAgent.run({...})` remains available for structured compatibility objects only. String commands are disabled by design.
+Selection options currently used by `setSelection`:
 
-## Selector model
+- `representation`: `stick`, `line`, `tube`, `sphere`, or `off`
+- `additive` / `add`: add to existing selection
+- `focus`: focus after setting selection
 
-Selectors are plain objects compatible with common 3Dmol-style atom fields plus local boolean composition:
+Focus current selection:
 
 ```js
-{chain:'H'}
-{chain:'H', resi:'30-35'}
-{serial:[1,2,3]}
-{not:{chain:'A'}}
-{or:[{chain:'H', resi:'30-35'}, {chain:'L', resi:'90-95'}]}
-{region:'REGION_NAME'}
+molAgent.focus();
 ```
 
-Supported representation names are `cartoon`, `line`, `stick`, `sphere`, `tube`, and `hide`. The `tube` representation includes a trace tube plus all-atom line overlay so targeted residues/regions remain visible as all atoms, not only backbone or side chain.
+Focus a selector directly:
 
-## Mouse and keyboard behavior
+```js
+molAgent.focus({chain: "H", resi: "30-35"});
+```
 
-Mouse behavior is selectable from the topbar `Settings` panel or through `molAgent.setMousePreset(...)` and `molAgent.setMouseActions(...)`.
+For a user request such as "select chain A on the current viewer", the direct page action is:
 
-`select-left` is the default for this app: left click selects according to the selection mode, left drag creates a screen-space range box, right drag rotates the camera, wheel-button drag moves the model, and wheel up zooms in. Hold Shift while clicking or drag-selecting to add the new selection to the current selection. Drag range selection respects the selection mode: `atom` selects atoms in the box, `residue`/`range` selects whole residues touched by the box, `chain` selects whole chains touched by the box, and `model` selects all atoms. `default` passes mouse and wheel events through to 3Dmol.js default controls. Custom button actions support `select`, `rotate`, `pan`, `zoom`, and `none`; wheel supports `zoom` and `none`. Empty clicks do not clear the selection. Press `z` to focus the current selection and `Esc` to clear it.
+```js
+molAgent.setSelection({chain: "A"}, {representation: "stick"});
+```
 
-## Notes
+If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
-Default background is black. Protein carbon atoms in line/stick/tube styles use stable chain-specific colors; hetero atoms use element colors by default. Hover information is written into a fixed panel without floating tooltip layout churn.
+## Styling Commands
+
+Add a persistent style rule:
+
+```js
+molAgent.style(
+  {chain: "H", resi: "30-35"},
+  "stick",
+  {color: "#fdd835", radius: 0.08}
+);
+```
+
+Style a chain as tube:
+
+```js
+molAgent.style(
+  {chain: "A"},
+  "tube",
+  {color: "#4FC3F7", thickness: 0.35, linewidth: 0.7}
+);
+```
+
+Hide a selector through the structured compatibility API:
+
+```js
+molAgent.run({
+  type: "hide",
+  selector: {resn: ["HOH", "WAT"]}
+});
+```
+
+Clear all added style/hide rules:
+
+```js
+molAgent.clearStyles();
+```
+
+Change base protein representation:
+
+```js
+molAgent.setBaseStyle("cartoon");
+molAgent.setBaseStyle("line");
+molAgent.setBaseStyle("stick");
+molAgent.setBaseStyle("sphere");
+molAgent.setBaseStyle("tube");
+```
+
+Change ligand representation:
+
+```js
+molAgent.setLigandStyle("stick");
+molAgent.setLigandStyle("line");
+molAgent.setLigandStyle("sphere");
+```
+
+Supported representations:
+
+- `cartoon`
+- `line`
+- `stick`
+- `sphere`
+- `tube`
+- `hide` / `off`
+
+Common style options:
+
+- `color`: CSS color string such as `"#fdd835"`
+- `opacity`: number, normally `0` to `1`
+- `radius`: stick radius
+- `scale`: sphere scale
+- `thickness`: tube trace thickness
+- `linewidth`: line width where supported by the browser/WebGL stack
+
+## Mouse Action Commands
+
+Read current mouse config:
+
+```js
+{
+  preset: molAgent.getMousePreset(),
+  actions: molAgent.getMouseActions()
+}
+```
+
+Restore app default:
+
+```js
+molAgent.setMousePreset("select-left");
+```
+
+Pass through to 3Dmol default mouse controls:
+
+```js
+molAgent.setMousePreset("default");
+```
+
+Assign custom button actions:
+
+```js
+molAgent.setMouseActions({
+  buttons: {left: "select", right: "rotate", middle: "pan"},
+  wheel: "zoom"
+});
+```
+
+Alternative examples:
+
+```js
+molAgent.setMouseActions({
+  buttons: {left: "rotate", right: "select", middle: "pan"},
+  wheel: "zoom"
+});
+
+molAgent.setMouseActions({
+  buttons: {left: "select", right: "zoom", middle: "pan"},
+  wheel: "zoom"
+});
+```
+
+Supported button actions:
+
+- `select`
+- `rotate`
+- `pan`
+- `zoom`
+- `none`
+
+Supported wheel actions:
+
+- `zoom`
+- `none`
+
+Default `select-left` behavior:
+
+- left click: select
+- left drag: range select
+- Shift + click / Shift + drag: additive selection
+- right drag: rotate
+- middle drag: pan
+- wheel: zoom
+
+## Loading Structures
+
+Load any structure URL that the deployed server makes available:
+
+```js
+await molAgent.loadUrl("path/to/structure.pdb", "pdb", "structure-id", "Display Title", "");
+molAgent.getState();
+```
+
+Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
+
+Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
+
+## `molAgent.run` Compatibility Commands
+
+Use `molAgent.run(...)` only for structured compatibility objects.
+
+Selection:
+
+```js
+molAgent.run({
+  type: "selection",
+  selector: {chain: "H", resi: "30-35"},
+  options: {representation: "stick", focus: true}
+});
+```
+
+Focus:
+
+```js
+molAgent.run({
+  type: "focus",
+  selector: {chain: "H", resi: "30-35"}
+});
+```
+
+Style:
+
+```js
+molAgent.run({
+  type: "style",
+  selector: {chain: "H", resi: "30-35"},
+  representation: "stick",
+  options: {color: "#00e676", radius: 0.08}
+});
+```
+
+Hide:
+
+```js
+molAgent.run({
+  type: "hide",
+  selector: {resn: ["HOH", "WAT"]}
+});
+```
+
+Clear selection:
+
+```js
+molAgent.run({type: "clearSelection"});
+```
+
+Forbidden:
+
+```js
+molAgent.run("select chain H");
+```
+
+## UI Verification Without Tool-Specific Commands
+
+When validating the visible UI manually or through any generic browser automation framework:
+
+1. Open the page.
+2. Wait until `window.molAgent` exists.
+3. Verify `molAgent.getState().file` is populated.
+4. Verify `molAgent.getState().atoms` is greater than `0`.
+5. Open the visible `Settings` button.
+6. Confirm the Settings panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
+7. Confirm the browser console has no errors.
+
+## Direct 3Dmol Escape Hatch
+
+Use these only when the structured API is insufficient.
+
+```js
+molAgent.viewer();
+molAgent.model();
+```
+
+`molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the current 3Dmol model. Direct calls can bypass app state, so prefer the structured API first.
+
+## Development Notes
+
+- Rendering happens in the browser through WebGL.
+- The file server only serves static files.
+- Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
+- Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.
