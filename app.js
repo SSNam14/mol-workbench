@@ -38,6 +38,7 @@ function boot(){
   const VIEWER_SESSION_API = 'api/session';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const LAST_STRUCTURE_API = 'api/last-structure';
+  const PREFERENCES_API = 'api/preferences';
 
   const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
 
@@ -71,6 +72,7 @@ function boot(){
   let interactionBuildSeq = 0;
   let interactionIndex = {status:'empty',jobId:0,interactions:null,counts:{}};
   let resetMouseDrag = function(){};
+  let preferencesSaveTimer = null;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
   function nextId(p){ return p + '-' + (idSeq++); }
@@ -128,6 +130,51 @@ function boot(){
     }catch(e){}
     applyVdwRadiiConfig();
     return clonePlain(visualConfig);
+  }
+  function preferencesPayload(){
+    return {
+      schema:'viewer-preferences-v1',
+      mousePreset:state.mousePreset,
+      mouse:cloneMouseSettings(),
+      chainColors:Object.assign({},chainColors),
+      carbonByChain:state.carbonByChain
+    };
+  }
+  function savePreferencesNow(){
+    if(preferencesSaveTimer){
+      clearTimeout(preferencesSaveTimer);
+      preferencesSaveTimer=null;
+    }
+    return fetch(PREFERENCES_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(preferencesPayload())}).then(res=>res.ok?res.json():null).catch(()=>null);
+  }
+  function savePreferences(){
+    if(preferencesSaveTimer)clearTimeout(preferencesSaveTimer);
+    preferencesSaveTimer=setTimeout(function(){
+      preferencesSaveTimer=null;
+      savePreferencesNow();
+    },150);
+  }
+  function applyPreferences(payload){
+    if(!payload||typeof payload!=='object')return null;
+    if(payload.chainColors&&typeof payload.chainColors==='object'){
+      Object.keys(chainColors).forEach(k=>delete chainColors[k]);
+      Object.assign(chainColors,defaultChainColors);
+      Object.keys(payload.chainColors).forEach(k=>{
+        const chain=normText(k).toUpperCase(), color=toHex(payload.chainColors[k]);
+        if(/^[A-Z]$/.test(chain))chainColors[chain]=color;
+      });
+    }
+    if(typeof payload.carbonByChain==='boolean')state.carbonByChain=payload.carbonByChain;
+    if(payload.mousePreset==='default')setMousePreset('default',{persist:false,status:false});
+    else if(payload.mouse)setMouseActions(payload.mouse,{persist:false,status:false,preset:payload.mousePreset||'custom'});
+    else if(payload.mousePreset==='select-left')setMousePreset('select-left',{persist:false,status:false});
+    return payload;
+  }
+  function loadPreferences(){
+    return fetch(PREFERENCES_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).then(payload=>applyPreferences(payload)).catch(()=>null);
   }
   function normalizeStructureEntry(e){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
@@ -1715,20 +1762,32 @@ function installFrameSyncedMotion(targetViewer){
   // ---------- Settings ----------
   function toHex(col){ if(/^#[0-9a-f]{6}$/i.test(col))return col; try{ const cx=document.createElement('canvas').getContext('2d'); cx.fillStyle=col; if(/^#[0-9a-f]{6}$/i.test(cx.fillStyle))return cx.fillStyle; }catch(e){} return '#888888'; }
   function setBackground(c){ state.bgColor=c; if(viewer&&viewer.setBackgroundColor){ viewer.setBackgroundColor(c); viewer.render(); } if($('bgCustom'))$('bgCustom').value=toHex(c); document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.style.borderColor=(b.getAttribute('data-bg').toLowerCase()===String(c).toLowerCase())?'#3a7bd5':'#777'; }); }
+  function normalizeEditableColor(color){
+    const value=normText(color);
+    if(!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Chain color must be a #RRGGBB value.');
+    return value.toLowerCase();
+  }
+  function setChainColor(chain,color,opts){
+    const key=normText(chain).toUpperCase();
+    if(!/^[A-Z]$/.test(key))throw new Error('Chain color key must be A-Z.');
+    chainColors[key]=normalizeEditableColor(color);
+    const input=document.querySelector('#chainColorList input[data-chain="'+key+'"]');
+    if(input&&input.value!==chainColors[key])input.value=chainColors[key];
+    applyStylesFull(true); buildHierarchy(); drawNavigator();
+    if(!opts||opts.persist!==false)savePreferences();
+    return chainColors[key];
+  }
+  function resetChainColors(opts){
+    Object.keys(chainColors).forEach(k=>delete chainColors[k]);
+    Object.assign(chainColors,defaultChainColors);
+    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList();
+    if(!opts||opts.persist!==false)savePreferencesNow();
+  }
   function buildChainColorList(){
     const wrap=$('chainColorList'); if(!wrap)return; wrap.innerHTML='';
-    const chains=Array.from(new Set(atoms.map(a=>a.chain||'?'))).sort();
-    if(!chains.length){
-      const empty=document.createElement('span');
-      empty.className='settings-empty';
-      empty.textContent='No structure loaded';
-      wrap.appendChild(empty);
-      return;
-    }
-    chains.forEach(c=>{ const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;font-size:12px;color:#d4d4d4'; const inp=document.createElement('input'); inp.type='color'; inp.value=toHex(chainColor(c)); inp.style.cssText='height:24px;width:34px;border:1px solid #555;border-radius:4px;background:#1f1f1f;padding:1px;cursor:pointer'; inp.oninput=function(){ chainColors[(c||'?').toUpperCase()]=inp.value; applyStylesFull(true); buildHierarchy(); drawNavigator(); }; const sp=document.createElement('span'); sp.textContent='Chain '+c; lab.appendChild(inp); lab.appendChild(sp); wrap.appendChild(lab); });
+    const chains='ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    chains.forEach(c=>{ const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;font-size:12px;color:#d4d4d4'; const inp=document.createElement('input'); inp.type='color'; inp.value=toHex(chainColor(c)); inp.dataset.chain=c; inp.style.cssText='height:24px;width:34px;border:1px solid #555;border-radius:4px;background:#1f1f1f;padding:1px;cursor:pointer'; inp.oninput=function(){ setChainColor(c,inp.value,{persist:true}); }; const sp=document.createElement('span'); sp.textContent='Chain '+c; lab.appendChild(inp); lab.appendChild(sp); wrap.appendChild(lab); });
   }
-  // The 3 buttons (left/right/middle) must hold distinct actions: an action already used by
-  // another button is disabled in this button's dropdown so duplicates can't be chosen. Wheel is fixed.
   // Each of the 3 buttons holds exactly one action; checking a cell that is taken by another
   // button swaps them, so no action is ever assigned to two buttons. (Wheel is fixed to zoom.)
   const MOUSE_ACTIONS=[['rotate','Rotate'],['pan','Pan'],['zoom','Zoom'],['select','Select']];
@@ -1740,6 +1799,7 @@ function installFrameSyncedMotion(targetViewer){
     const prev=cur[btn];
     ['left','right','middle'].forEach(b=>{ if(b!==btn&&cur[b]===action)cur[b]=prev; });
     cur[btn]=action; state.mousePreset='custom'; resetMouseDrag(); buildMouseMatrix();
+    savePreferencesNow();
     setStatus('Mouse: L '+cur.left+' / R '+cur.right+' / M '+cur.middle);
   }
   function buildMouseMatrix(){
@@ -1753,8 +1813,12 @@ function installFrameSyncedMotion(targetViewer){
       MOUSE_ACTIONS.forEach(a=>{
         const cell=document.createElement('div'); cell.style.cssText='display:flex;align-items:center;justify-content:center;cursor:pointer';
         const on=settings.mouse.buttons[b[0]]===a[0];
-        const box=document.createElement('span'); box.textContent=on?'\u2713':'';
-        box.style.cssText='display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;font-size:12px;line-height:1;'+(on?'background:#2f86d6;color:#fff;border:1px solid #2f86d6':'background:#1f1f1f;border:1px solid #555;color:transparent');
+        const box=document.createElement('input');
+        box.type='checkbox';
+        box.checked=on;
+        box.setAttribute('aria-label',b[1]+' '+a[1]);
+        box.style.cssText='width:18px;height:18px;accent-color:#2f86d6;cursor:pointer';
+        box.onclick=function(e){ e.preventDefault(); e.stopPropagation(); setMouseAction(b[0],a[0]); };
         cell.appendChild(box); cell.onclick=function(){ setMouseAction(b[0],a[0]); };
         grid.appendChild(cell);
       });
@@ -1770,8 +1834,6 @@ function installFrameSyncedMotion(targetViewer){
   function openSettings(){
     buildMouseMatrix();
     $('setCarbonByChain').checked=state.carbonByChain;
-    $('setHbond').value=state.hbondCutoff; $('hbondVal').textContent=Number(state.hbondCutoff).toFixed(2);
-    $('setSalt').value=state.saltCutoff; $('saltVal').textContent=Number(state.saltCutoff).toFixed(1);
     setBackground(state.bgColor); buildChainColorList();
     $('settingsOverlay').style.display='flex'; setBtnActive($('settingsBtn'),true);
   }
@@ -1786,17 +1848,20 @@ function installFrameSyncedMotion(targetViewer){
     return out;
   }
   function cloneMouseSettings(){ return {buttons:Object.assign({},settings.mouse.buttons),wheel:settings.mouse.wheel}; }
-  function setMousePreset(preset){
+  function setMousePreset(preset,opts){
+    opts=opts||{};
     const next=preset==='default'?'default':(preset==='custom'?'custom':'select-left');
     state.mousePreset=next;
     if(next==='select-left'){ settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel=mousePresets['select-left'].wheel; }
     resetMouseDrag();
     buildMouseMatrix();
     updateMousePresetButtons();
-    setStatus('Mouse preset: '+next);
+    if(opts.persist!==false)savePreferencesNow();
+    if(opts.status!==false)setStatus('Mouse preset: '+next);
     return next;
   }
-  function setMouseActions(actions){
+  function setMouseActions(actions,opts){
+    opts=opts||{};
     if(!actions||typeof actions!=='object'||Array.isArray(actions))throw new Error('Mouse actions must be an object.');
     const next=actions, buttons=next.buttons||next, nextButtons=Object.assign({},settings.mouse.buttons);
     ['left','right','middle'].forEach(btn=>{
@@ -1820,11 +1885,12 @@ function installFrameSyncedMotion(targetViewer){
     }
     settings.mouse.buttons=nextButtons;
     settings.mouse.wheel=nextWheel;
-    state.mousePreset='custom';
+    state.mousePreset=opts.preset==='select-left'?'select-left':'custom';
     resetMouseDrag();
     buildMouseMatrix();
     updateMousePresetButtons();
-    setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
+    if(opts.persist!==false)savePreferencesNow();
+    if(opts.status!==false)setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
     return cloneMouseSettings();
   }
   function clearStyles(){ state.styleRules=[]; state.hiddenRules=[]; applyStylesFull(true); }
@@ -1867,6 +1933,8 @@ function installFrameSyncedMotion(targetViewer){
     setSelection, setSelectionHighlight, clearSelection, focus,
     style:function(selector,representation,options){ const rule={selector:selector||{},representation:representation||'cartoon',options:options||{}}; state.styleRules.push(rule); applyStylesFull(true); return rule; },
     clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle, setSolventStyle, setOtherStyle,
+    setChainColor, resetChainColors, getChainColors:function(){ return Object.assign({},chainColors); },
+    getPreferences:preferencesPayload, savePreferences:savePreferencesNow,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
     getState:function(){ return {file:currentName,entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false,active:e.name===currentName})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
@@ -1900,14 +1968,11 @@ function installFrameSyncedMotion(targetViewer){
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
-  document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{ btn.onclick=function(){ setMousePreset(btn.getAttribute('data-mouse-preset')); }; });
-  $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); };
-  $('setHbond').oninput=function(){ state.hbondCutoff=Number($('setHbond').value); $('hbondVal').textContent=state.hbondCutoff.toFixed(2); redrawInteractions(true); };
-  $('setSalt').oninput=function(){ state.saltCutoff=Number($('setSalt').value); $('saltVal').textContent=state.saltCutoff.toFixed(1); redrawInteractions(true); };
+  $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); savePreferencesNow(); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
-  $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('resetChainColors').onclick=function(){ resetChainColors(); };
+  $('settingsReset').onclick=function(){ resetChainColors({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); savePreferencesNow(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
@@ -1942,6 +2007,8 @@ function installFrameSyncedMotion(targetViewer){
   startFpsOverlay();
   $('selLevel').value=state.selectionMode;
   loadVisualConfig().then(function(){
+    return loadPreferences();
+  }).then(function(){
     return loadInitialStructure();
   }).then(function(){
     startSessionSync();

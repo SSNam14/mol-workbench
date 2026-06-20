@@ -9,7 +9,7 @@ Runtime layout:
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
 - `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
-- `server.py`: static file server plus persisted viewer-session and interaction-index APIs
+- `server.py`: static file server plus persisted viewer-session, preferences, and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
@@ -28,7 +28,7 @@ PORT=8704
 python3 server.py --port "$PORT" --bind 0.0.0.0
 ```
 
-Use this server instead of `python3 -m http.server`; the generic static server cannot persist the last loaded structure or server-side interaction indexes.
+Use this server instead of `python3 -m http.server`; the generic static server cannot persist the loaded structure session, preferences, or server-side interaction indexes.
 
 ## Control Surface
 
@@ -62,7 +62,7 @@ const api = await waitForMolAgent();
 api.getState();
 ```
 
-Expected initial state:
+Expected first-run default state:
 
 ```js
 {
@@ -77,7 +77,7 @@ Expected initial state:
 }
 ```
 
-The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`.
+The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`. If `/api/preferences` already contains saved settings, `mousePreset`, `mouseActions`, chain colors, and carbon-by-chain coloring are restored from the server during startup.
 
 ## Selector Objects
 
@@ -431,6 +431,41 @@ Default `select-left` behavior:
 - middle drag: pan
 - wheel: zoom
 
+Mouse action changes made through the Preference panel or `molAgent.setMouseActions(...)` are saved to the server through `/api/preferences`.
+
+## Preference Commands
+
+Read the current persisted-preference payload shape:
+
+```js
+molAgent.getPreferences();
+```
+
+Persist the current preference payload immediately:
+
+```js
+await molAgent.savePreferences();
+```
+
+Set an editable chain color. Chain keys are `A` through `Z`, and colors must be `#RRGGBB` strings:
+
+```js
+molAgent.setChainColor("A", "#4fc3f7");
+molAgent.getChainColors();
+```
+
+Reset all A-Z chain colors to the tracked defaults:
+
+```js
+molAgent.resetChainColors();
+```
+
+Preference persistence covers:
+
+- mouse preset/action assignment
+- chain colors `A` through `Z`
+- whether protein carbon atoms use chain colors
+
 ## Loading Structures
 
 Load any structure URL that the deployed server makes available:
@@ -598,6 +633,6 @@ PY
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

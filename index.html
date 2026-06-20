@@ -14,7 +14,7 @@
 
   <div class="u-002">
     <label data-menu class="u-003">Open file<input id="fileInput" type="file" accept=".pdb,.ent,.sdf,.mol,.mol2,.xyz,.cif" class="u-004"></label>
-    <button id="settingsBtn" data-menu class="u-005">Settings</button>
+    <button id="settingsBtn" data-menu class="u-005">Preference</button>
   </div>
 
   <div class="u-006">
@@ -60,6 +60,9 @@
       <button id="btnFit" data-btn class="u-017">Fit</button>
       <button id="btnFocus" data-btn class="u-017">Focus</button>
       <button id="btnClear" data-btn class="u-017">Clear</button>
+      <button id="saveView" data-btn class="u-017">Save view</button>
+      <button id="restoreView" data-btn class="u-017">Restore</button>
+      <button id="lockView" data-btn class="u-017">Lock</button>
     </div>
     <div class="u-018"></div>
     <div id="clipControl" class="clip-control">
@@ -167,11 +170,6 @@
 
         <section class="u-079">
           <h3 class="u-080">Mouse actions</h3>
-          <div id="mousePresetRow" class="mouse-preset-row">
-            <button type="button" data-mouse-preset="select-left" data-btn class="mouse-preset-btn">App default</button>
-            <button type="button" data-mouse-preset="default" data-btn class="mouse-preset-btn">3Dmol default</button>
-            <button type="button" data-mouse-preset="custom" data-btn class="mouse-preset-btn">Custom</button>
-          </div>
           <div id="mouseMatrix"></div>
         </section>
 
@@ -196,29 +194,6 @@
           </div>
           <div id="chainColorList" class="u-090"></div>
           <label class="u-091"><input id="setCarbonByChain" type="checkbox" checked class="u-092">Color protein carbons by chain</label>
-        </section>
-
-        <div class="u-057"></div>
-        <section class="u-079">
-          <h3 class="u-080">Interactions</h3>
-          <div class="u-093">
-            <span class="u-094">H-bond max (&#8491;)</span>
-            <input id="setHbond" type="range" min="2.4" max="4" step="0.05" value="2.8">
-            <span id="hbondVal" class="u-096">2.8</span>
-            <span class="u-094">Salt bridge max (&#8491;)</span>
-            <input id="setSalt" type="range" min="3.5" max="5.5" step="0.1" value="5.0">
-            <span id="saltVal" class="u-096">5.0</span>
-          </div>
-        </section>
-
-        <div class="u-057"></div>
-        <section class="u-079">
-          <h3 class="u-080">View</h3>
-          <div class="u-063">
-            <button id="saveView" data-btn class="u-064">Save view</button>
-            <button id="restoreView" data-btn class="u-064">Restore</button>
-            <button id="lockView" data-btn class="u-064">Lock</button>
-          </div>
         </section>
 
         <div class="u-097">

@@ -13,12 +13,19 @@ ROOT = Path(__file__).resolve().parent
 STATE_DIR = ROOT / ".viewer_state"
 LAST_STRUCTURE_PATH = STATE_DIR / "last_structure.json"
 SESSION_PATH = STATE_DIR / "session.json"
+PREFERENCES_PATH = STATE_DIR / "preferences.json"
 INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
 MAX_SESSION_BYTES = 500 * 1024 * 1024
+MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 SESSION_SCHEMA = "viewer-session-v1"
+PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v5"
+MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
+MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
+MOUSE_PRESETS = {"select-left", "custom", "default"}
+CHAIN_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 def normalize_entry(value):
@@ -70,6 +77,65 @@ def normalize_session(value):
         "includedEntries": included_entries,
         "activeEntry": active,
     }
+
+
+def normalize_hex_color(value):
+    color = str(value or "").strip()
+    if len(color) != 7 or color[0] != "#":
+        return None
+    if not all(ch in "0123456789abcdefABCDEF" for ch in color[1:]):
+        return None
+    return "#" + color[1:].lower()
+
+
+def normalize_preferences(value):
+    if not isinstance(value, dict):
+        return None
+    out = {"schema": PREFERENCES_SCHEMA}
+
+    mouse_preset = str(value.get("mousePreset") or "custom").strip()
+    if mouse_preset not in MOUSE_PRESETS:
+        return None
+    out["mousePreset"] = mouse_preset
+
+    mouse = value.get("mouse")
+    if mouse is not None:
+        if not isinstance(mouse, dict):
+            return None
+        buttons = mouse.get("buttons", mouse)
+        if not isinstance(buttons, dict):
+            return None
+        normalized_buttons = {}
+        for button in ("left", "right", "middle"):
+            action = str(buttons.get(button) or "").strip().lower()
+            if action not in MOUSE_BUTTON_ACTIONS:
+                return None
+            normalized_buttons[button] = action
+        used_actions = [action for action in normalized_buttons.values() if action != "none"]
+        if len(used_actions) != len(set(used_actions)):
+            return None
+        wheel = str(mouse.get("wheel", mouse.get("wheelAction", "zoom")) or "").strip().lower()
+        if wheel not in MOUSE_WHEEL_ACTIONS:
+            return None
+        out["mouse"] = {"buttons": normalized_buttons, "wheel": wheel}
+
+    chain_colors = value.get("chainColors")
+    if chain_colors is not None:
+        if not isinstance(chain_colors, dict):
+            return None
+        normalized_colors = {}
+        for chain in CHAIN_IDS:
+            if chain not in chain_colors:
+                continue
+            color = normalize_hex_color(chain_colors[chain])
+            if color is None:
+                return None
+            normalized_colors[chain] = color
+        out["chainColors"] = normalized_colors
+
+    if "carbonByChain" in value:
+        out["carbonByChain"] = bool(value.get("carbonByChain"))
+    return out
 
 
 def load_json(path):
@@ -225,6 +291,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session":
             self.handle_get_session()
             return
+        if path == "/api/preferences":
+            self.handle_get_preferences()
+            return
         if path == "/api/last-structure":
             self.handle_get_last_structure()
             return
@@ -241,6 +310,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session-entry":
             self.handle_put_session_entry()
             return
+        if path == "/api/preferences":
+            self.handle_put_preferences()
+            return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
             return
@@ -256,6 +328,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/session-entry":
             self.handle_put_session_entry()
+            return
+        if path == "/api/preferences":
+            self.handle_put_preferences()
             return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
@@ -333,6 +408,35 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         session = upsert_session_entry(entry)
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+
+    def handle_get_preferences(self):
+        try:
+            preferences = normalize_preferences(load_json(PREFERENCES_PATH))
+        except FileNotFoundError:
+            self.send_json(404, {"error": "not_found"})
+            return
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "preferences_read_failed"})
+            return
+        if not preferences:
+            self.send_json(500, {"error": "invalid_preferences_state"})
+            return
+        self.send_json(200, preferences)
+
+    def handle_put_preferences(self):
+        payload = self.read_json_body(MAX_PREFERENCES_BYTES)
+        if payload is None:
+            return
+        preferences = normalize_preferences(payload)
+        if not preferences:
+            self.send_json(400, {"error": "invalid_preferences"})
+            return
+        try:
+            write_json_atomic(PREFERENCES_PATH, preferences)
+        except OSError:
+            self.send_json(500, {"error": "preferences_write_failed"})
+            return
+        self.send_json(200, {"ok": True, "preferences": preferences})
 
     def handle_delete_session_entry(self, name):
         if not name:

@@ -107,7 +107,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-087{height:30px;width:42px;background:#1f1f1f;border:1px solid #555;border-radius:5px;padding:1px;cursor:pointer}
 .u-088{display:flex;align-items:center;justify-content:space-between}
 .u-089{height:24px;padding:0 10px;border:1px solid #555;border-radius:5px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:11px}
-.u-090{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.u-090{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;max-height:156px;overflow:auto;padding-right:4px}
 .u-091{display:flex;align-items:center;gap:8px;font-size:12px;color:#d4d4d4;cursor:pointer}
 .u-092{width:14px;height:14px;accent-color:#3a7bd5}
 .u-093{display:grid;grid-template-columns:160px 1fr 56px;gap:9px 12px;align-items:center}
