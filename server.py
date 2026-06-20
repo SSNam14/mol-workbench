@@ -26,7 +26,19 @@ MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
 MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
 MOUSE_PRESETS = {"select-left", "custom", "default"}
 CHAIN_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-ELEMENT_IDS = ("H", "C", "N", "O", "S", "P", "F", "CL", "BR", "I", "FE", "ZN", "MG", "CA", "NA", "K", "MN", "CU", "CO", "NI")
+ELEMENT_IDS = (
+    "H", "B", "C", "N", "O", "F", "SI", "P", "S", "CL", "BR", "I",
+    "LI", "NA", "K", "RB", "CS", "FR", "BE", "MG", "CA", "SR", "BA", "RA",
+    "HE", "NE", "AR", "KR", "XE", "RN",
+    "AL", "GA", "GE", "IN", "SN", "SB", "TL", "PB", "BI", "PO",
+    "AS", "SE", "TE", "AT",
+    "SC", "TI", "V", "CR", "MN", "FE", "CO", "NI", "CU", "ZN",
+    "Y", "ZR", "NB", "MO", "TC", "RU", "RH", "PD", "AG", "CD",
+    "HF", "TA", "W", "RE", "OS", "IR", "PT", "AU", "HG",
+    "LA", "CE", "PR", "ND", "PM", "SM", "EU", "GD", "TB", "DY", "HO", "ER", "TM", "YB", "LU",
+    "AC", "TH", "PA", "U", "NP", "PU", "AM", "CM", "BK", "CF", "ES", "FM", "MD", "NO", "LR",
+    "RF", "DB", "SG",
+)
 
 
 def normalize_entry(value):

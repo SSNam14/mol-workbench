@@ -60,6 +60,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - wheel zooms
 - Custom mouse actions are configurable from Settings and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
+- Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.
 - Box selection respects selection mode:
   - `atom`: atoms inside the box
   - `residue` / legacy internal `range`: whole touched residues
@@ -97,6 +98,11 @@ molAgent.setBaseStyle(representation);
 molAgent.setProteinBackboneStyle(representation);
 molAgent.setProteinAtomStyle(representation);
 molAgent.setLigandStyle(representation);
+molAgent.setChainColor(chain, color);
+molAgent.getChainColors();
+molAgent.setAtomColor(element, color);
+molAgent.getAtomColors();
+molAgent.resetColorSchemes();
 molAgent.setMousePreset(preset);
 molAgent.getMousePreset();
 molAgent.setMouseActions(actions);

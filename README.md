@@ -447,18 +447,25 @@ Persist the current preference payload immediately:
 await molAgent.savePreferences();
 ```
 
-Set an editable chain color. Chain keys are `A` through `Z`, and colors must be `#RRGGBB` strings:
+Set an editable chain color. Chain keys are `A` through `Z`, and colors must be `#RRGGBB` strings. The tracked defaults follow the Maestro chain color scheme:
 
 ```js
-molAgent.setChainColor("A", "#4fc3f7");
+molAgent.setChainColor("A", "#00cc00");
 molAgent.getChainColors();
 ```
 
-Set an editable atom color. Atom keys are the currently exposed 3Dmol-style element keys:
+Set an editable atom color. Atom keys are the currently exposed 3Dmol-style uppercase element symbols. The tracked defaults follow the Maestro element color scheme:
 
 ```js
-molAgent.setAtomColor("C", "#b0bec5");
+molAgent.setAtomColor("C", "#808080");
 molAgent.getAtomColors();
+```
+
+List editable color keys before changing them:
+
+```js
+Object.keys(molAgent.getChainColors());
+Object.keys(molAgent.getAtomColors());
 ```
 
 Reset color schemes to the tracked defaults:
@@ -473,7 +480,7 @@ Preference persistence covers:
 
 - mouse preset/action assignment
 - chain colors `A` through `Z`
-- atom colors for `H`, `C`, `N`, `O`, `S`, `P`, `F`, `CL`, `BR`, `I`, `FE`, `ZN`, `MG`, `CA`, `NA`, `K`, `MN`, `CU`, `CO`, and `NI`
+- atom colors for the Maestro-derived editable element set returned by `Object.keys(molAgent.getAtomColors())`
 - whether protein carbon atoms use chain colors
 
 The bundled 3Dmol color scheme registry also contains these built-in `colorscheme` names: `default`, `rasmol`, `Jmol`, `greenCarbon`, `cyanCarbon`, `magentaCarbon`, `yellowCarbon`, `whiteCarbon`, `orangeCarbon`, `purpleCarbon`, `blueCarbon`, `ssPyMol`, `ssJmol`, `amino`, `shapely`, `nucleic`, `chain`, and `chainHetatm`. Separately, spectrum coloring uses the gradient registry (`rwb`, `RWB`, `roygb`, `ROYGB`, `sinebow`, `linear`, and `linear_<color>_<color>...` custom gradients).
