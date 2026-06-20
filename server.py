@@ -301,6 +301,12 @@ class ViewerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    def end_headers(self):
+        buffered_headers = b"".join(getattr(self, "_headers_buffer", [])).lower()
+        if b"cache-control:" not in buffered_headers:
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
