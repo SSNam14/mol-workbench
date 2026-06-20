@@ -303,7 +303,12 @@ function boot(){
     sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
-  function chainColor(ch){ const c=normText(ch||'?'),u=c.toUpperCase(); if(chainColors[u])return chainColors[u]; let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)'; }
+  function chainColor(ch){
+    const c=normText(ch||'?'),u=c.toUpperCase();
+    if(chainColors[u])return chainColors[u];
+    if(u.length>1&&chainColors[u[1]])return chainColors[u[1]];
+    let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)';
+  }
   function elementColor(a){ return elemColors[atomElem(a)]||'#D1D5DB'; }
   function isProtein(a){ return !a.hetflag && !waterNames.has(normUpper(a.resn)); }
   function isLigand(a){ return !!a.hetflag && !waterNames.has(normUpper(a.resn)) && !ionNames.has(normUpper(a.resn)); }
@@ -1804,11 +1809,15 @@ function installFrameSyncedMotion(targetViewer){
     inp.oninput=function(){ onChange(inp.value); };
     const sp=document.createElement('span');
     sp.className='color-tile-label';
-    sp.textContent=key;
+    sp.textContent=kind==='atom'?elementDisplayLabel(key):key;
     lab.appendChild(inp);
     lab.appendChild(sp);
     updateColorInputTile(inp,color);
     return lab;
+  }
+  function elementDisplayLabel(element){
+    const key=normText(element).toUpperCase();
+    return key.length>1?key[0]+key.slice(1).toLowerCase():key;
   }
   function setChainColor(chain,color,opts){
     const key=normText(chain).toUpperCase();

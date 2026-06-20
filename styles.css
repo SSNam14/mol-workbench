@@ -124,13 +124,12 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 /* Compact editable color scheme grids inside Preferences. */
 .color-scheme-block{display:grid;gap:6px}
 .color-scheme-head{font-size:11px;color:#aaa;font-weight:600}
-.color-scheme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(34px,1fr));gap:6px;max-height:94px;overflow:auto;padding-right:4px}
-.atom-color-grid{grid-template-columns:repeat(auto-fill,minmax(42px,1fr));max-height:114px}
-.color-tile{position:relative;display:block;width:32px;height:32px;border:1px solid #555;border-radius:4px;overflow:hidden;background:#1f1f1f;cursor:pointer}
-.atom-color-grid .color-tile{width:40px}
+.color-scheme-grid{display:grid;grid-template-columns:repeat(auto-fill,32px);gap:6px;max-height:94px;overflow:auto;padding-right:4px}
+.atom-color-grid{max-height:114px}
+.color-tile{position:relative;display:block;width:32px;height:32px;aspect-ratio:1;border:1px solid #555;border-radius:4px;overflow:hidden;background:#1f1f1f;cursor:pointer}
 .color-tile:hover{filter:brightness(1.18)}
 .color-tile input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
-.color-tile-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 10px/1 ui-monospace,Menlo,Consolas,monospace;text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
+.color-tile-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 14px/1 ui-monospace,Menlo,Consolas,monospace;text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
 
 /* Clip plane control (toolbar, right end of Fit/Focus/Clear row). */
 .clip-control{display:flex;align-items:center;gap:8px;height:38px;padding-left:10px;border-left:1px solid #2a2a2a}
