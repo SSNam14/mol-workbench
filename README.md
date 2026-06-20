@@ -95,6 +95,7 @@ Common selectors:
 {serial: [1, 2, 3]}
 {hetflag: true}
 {hetflag: false}
+{_entryName: "proteinprep_10AY"}
 {}
 ```
 
@@ -109,6 +110,7 @@ Boolean composition:
 Selector notes:
 
 - `{}` means all atoms.
+- `_entryName` scopes a selector to one loaded entry. This is useful when several entries are displayed at once and chain/residue names overlap.
 - `resi: "30-35"` means an inclusive residue range.
 - Arrays match any listed value.
 - Numeric and string residue numbers are both accepted where the loaded model provides numeric residue values.
@@ -136,6 +138,8 @@ molAgent.selectAtoms({chain: "H", resi: "30-35"}).slice(0, 5);
 Useful `getState()` fields:
 
 - `file`: current structure name
+- `entries`: loaded entries with `name`, `title`, `included`, and `active`
+- `includedEntries`: entry names currently displayed in the viewer
 - `atoms`: total loaded atom count
 - `proteinBackbone`: protein backbone representation, usually `cartoon`, `tube`, or `off`
 - `proteinAtoms`: protein atom-level representation, usually `off`, `line`, `stick`, `sphere`, or `cpk`
@@ -159,7 +163,7 @@ molAgent.getInteractionIndex();
 
 Expected fields:
 
-- `status`: `empty`, `loading-cache`, `ready`, `unavailable`, or `error`
+- `status`: `empty`, `multi-entry`, `loading-cache`, `ready`, `unavailable`, or `error`
 - `source`: `worker` or `server` when ready
 - `structureKey`: server cache key for the current structure
 - `counts`: precomputed interaction counts by type
@@ -173,6 +177,7 @@ molAgent.rebuildInteractionIndex();
 
 Rendering rules:
 
+- Interaction indexing/rendering is enabled only when exactly one entry is displayed. When two or more entries are included, interactions are disabled to avoid accidental cross-entry interactions.
 - All nonbonded interaction guide lines are dashed.
 - A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
 - Protein cartoon alone does not count as atom-level display for interaction endpoints.
@@ -214,6 +219,8 @@ Clear selection:
 molAgent.clearSelection();
 ```
 
+`molAgent.setSelection(null)` also clears selection. Passing a non-object selector throws; selectors must be an object, an array of selector objects, or `null`.
+
 Selection options currently used by `setSelection`:
 
 - `representation`: `stick`, `line`, `tube`, `sphere`, `cpk`, or `off`
@@ -241,7 +248,7 @@ molAgent.setSelection({chain: "A"});
 
 If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
-Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, or `sphere`, the highlight follows that atom-level representation using the selection color. Agents may still change highlight options programmatically:
+Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, `sphere`, or `cpk`, the highlight follows that atom-level representation using the selection color. Agents may still change highlight options programmatically:
 
 ```js
 molAgent.setSelectionHighlight({
@@ -413,6 +420,8 @@ Supported wheel actions:
 - `zoom`
 - `none`
 
+`molAgent.setMouseActions(...)` validates action names and rejects duplicate non-`none` button actions.
+
 Default `select-left` behavior:
 
 - left click: select
@@ -435,7 +444,11 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
-The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that structure first; the bundled sample structure is only used when no saved structure exists.
+Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others.
+
+When exactly one entry is displayed, the viewer starts background interaction indexing for that entry. When multiple entries are displayed, interaction rendering is disabled until the displayed set is reduced to one entry.
+
+The viewer stores the last loaded structure on the server through `/api/last-structure`. A browser refresh restores that most recently loaded structure first; the bundled sample structure is only used when no saved structure exists.
 
 Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files.
 
@@ -504,7 +517,8 @@ When validating the visible UI manually or through any generic browser automatio
 4. Verify `molAgent.getState().atoms` is greater than `0`.
 5. Open the visible `Settings` button.
 6. Confirm the Settings panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
-7. Confirm the browser console has no errors.
+7. Load a second entry if available and confirm `molAgent.getState().includedEntries.length` can be greater than `1`.
+8. Confirm the browser console has no errors.
 
 ## Direct 3Dmol Escape Hatch
 
@@ -513,9 +527,10 @@ Use these only when the structured API is insufficient.
 ```js
 molAgent.viewer();
 molAgent.model();
+molAgent.models();
 ```
 
-`molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the current 3Dmol model. Direct calls can bypass app state, so prefer the structured API first.
+`molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the first displayed 3Dmol model for backward compatibility. `molAgent.models()` returns all currently displayed 3Dmol models. Direct calls can bypass app state, so prefer the structured API first.
 
 ## Development Notes
 

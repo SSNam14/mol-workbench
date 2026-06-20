@@ -35,13 +35,17 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Preserve fast interactive camera behavior. Do not change camera semantics to hide performance problems.
 - Keep settings extensible; the settings panel should be able to host future visual/input preferences without restructuring.
 - Keep control surfaces explicit. Empty select clicks and empty range-select drags in the viewer clear the current selection.
+- Find/search misses should not clear the current selection; they should report no match and leave selection state unchanged.
 - Keep `window.molAgent` as the structured automation/API surface. Do not add free-form natural-language command execution.
 
 ## Must-Have Behavior
 
 - Initial load restores the last loaded structure from server storage when available; otherwise it opens the bundled sample structure.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side last-structure cache so browser refresh keeps the same molecule.
-- Loading a structure starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching between previously loaded entries does not recompute interactions.
+- Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
+- Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
+- Loading/displaying exactly one entry starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching back to a previously loaded single entry does not recompute interactions.
+- When multiple entries are displayed, nonbonded interaction indexing/rendering is disabled to avoid accidental cross-entry interactions.
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
 - Default mouse preset is `select-left`:
@@ -53,11 +57,11 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - wheel zooms
 - Custom mouse actions are configurable from Settings and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
-- Range selection respects selection mode:
+- Box selection respects selection mode:
   - `atom`: atoms inside the box
-  - `residue` / `range`: whole touched residues
+  - `residue` / legacy internal `range`: whole touched residues
   - `chain`: whole touched chains
-  - `model`: all atoms
+  - `model`: all atoms in touched entries
 - Pressing `z` toggles between focusing the current selection and overview.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z`/Focus.
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.
@@ -104,15 +108,17 @@ molAgent.loadUrl(url, fmt, name, title, pdbId);
 molAgent.run(commandObject);
 molAgent.viewer();
 molAgent.model();
+molAgent.models();
 ```
 
-String commands are intentionally disabled. Use structured objects only.
+String commands are intentionally disabled. Use structured objects only. `setSelection` accepts a selector object, an array of selector objects, or `null` to clear selection; invalid selector types should throw. `setMouseActions` should validate supported actions and reject duplicate non-`none` button actions.
 
 Common selector examples:
 
 ```js
 {chain: 'H'}
 {chain: 'H', resi: '30-35'}
+{_entryName: 'proteinprep_10AY', chain: 'H'}
 {serial: [1, 2, 3]}
 {not: {chain: 'A'}}
 {or: [{chain: 'H', resi: '30-35'}, {chain: 'L', resi: '90-95'}]}

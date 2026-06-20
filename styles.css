@@ -117,10 +117,15 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-097{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}
 .u-098{height:30px;padding:0 14px;border:1px solid #555;border-radius:6px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:12px}
 .u-099{height:30px;padding:0 18px;border:1px solid #3a7bd5;border-radius:6px;background:#1a4f7a;color:#fff;cursor:pointer;font-size:12px;font-weight:500}
+.mouse-preset-row{display:flex;align-items:center;gap:6px}
+.mouse-preset-btn{height:24px;padding:0 10px;border:1px solid #555;border-radius:5px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:11px}
+.mouse-preset-btn.is-active{border-color:#3a7bd5;background:#1a4f7a;color:#fff}
 
 /* Clip plane control (toolbar, right end of Fit/Focus/Clear row). */
 .clip-control{display:flex;align-items:center;gap:8px;height:38px;padding-left:10px;border-left:1px solid #2a2a2a}
 .clip-cap{font-size:11px;color:#cfcfcf;font-weight:600}
+.clip-control.is-active .clip-cap{color:#7fd4ff}
+.clip-control.is-active .clip-range{background:#64b5f6}
 .clip-bar{position:relative;width:150px;height:38px;display:flex;align-items:center;cursor:pointer}
 .clip-bar::before{content:'';position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:4px;border-radius:2px;background:#1f1f1f;border:1px solid #555}
 .clip-range{position:absolute;top:50%;transform:translateY(-50%);height:4px;border-radius:2px;background:#3a7bd5;pointer-events:none}

@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, atoms = [], atomByIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entries = [];
   const entryChecked = Object.create(null);
   let displayedCount = 0;
@@ -272,7 +272,8 @@ function boot(){
     if(isPureSerialSelector(r))return filterAtomsBySerial(r.serial);
     return atoms.filter(a=>matchesResolvedSelector(a,r));
   }
-  function residueUiKey(a){ return (a.chain||'')+':'+a.resi; }
+  function residueUiKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi; }
+  function atomEntryIndexKey(entry,index){ return (entry||'')+'\u0001'+index; }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
@@ -293,7 +294,15 @@ function boot(){
   function countAtoms(sel){ return selectionInfo(sel).atomCount; }
   function residueCount(sel){ return selectionInfo(sel).residueCount; }
   function combineSelectors(a,b){ const seen=new Set(); [a,b].forEach(s=>addSelectorSerials(seen,s,{})); return {serial:Array.from(seen)}; }
-  function normalizeSelectorInput(s){ if(s==null)return {}; if(typeof s!=='object')return s; return s; }
+  function normalizeSelectorInput(s){
+    if(s==null)return null;
+    if(Array.isArray(s)){
+      if(!s.every(x=>x&&typeof x==='object'&&!Array.isArray(x)))throw new Error('Selection array entries must be selector objects.');
+      return {or:s};
+    }
+    if(typeof s!=='object')throw new Error('Selection selector must be an object, an array of objects, or null.');
+    return s;
+  }
 
   function applyVisibility(){
     const off=[];
@@ -361,12 +370,13 @@ function boot(){
   }
   function selectionBondData(selected){
     const selectedIndexes=new Set(),bondKeys=new Set(),bondedSerials=new Set(),bonds=[];
-    selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(a.index); });
+    selected.forEach(a=>{ if(a.index!=null)selectedIndexes.add(atomEntryIndexKey(a._entryName,a.index)); });
     selected.forEach(a=>{
       (a.bonds||[]).forEach(idx=>{
-        const b=atomByIndex.get(idx);
-        if(!b||!selectedIndexes.has(b.index))return;
-        const ka=a.index<b.index?a.index+':'+b.index:b.index+':'+a.index;
+        const b=atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx);
+        if(!b||!selectedIndexes.has(atomEntryIndexKey(b._entryName,b.index)))return;
+        const ea=a._entryName||'',eb=b._entryName||'';
+        const ka=ea+':'+a.index<eb+':'+b.index?ea+':'+a.index+'|'+eb+':'+b.index:eb+':'+b.index+'|'+ea+':'+a.index;
         if(bondKeys.has(ka))return;
         bondKeys.add(ka);
         if(a.serial!=null)bondedSerials.add(a.serial);
@@ -576,10 +586,11 @@ function boot(){
       bar.appendChild(wrap);
     }
     seg('Kind',kind);
+    if(a._entryTitle||a._entryName)seg('Entry',a._entryTitle||a._entryName);
     seg('Chain',a.chain||'-');
     seg('Residue',(a.resn||'-')+' '+(a.resi==null?'-':a.resi));
     seg('Atom',(a.atom||'-')+' ('+(atomElem(a)||'-')+')');
-    seg('Serial',a.serial==null?'-':a.serial);
+    seg('Serial',a._sourceSerial==null?(a.serial==null?'-':a.serial):a._sourceSerial);
     seg('XYZ',Number(a.x).toFixed(2)+', '+Number(a.y).toFixed(2)+', '+Number(a.z).toFixed(2));
   }
   function handleAtomClick(a,e){
@@ -587,13 +598,14 @@ function boot(){
     if(state.selectionMode==='range'){ handleRangeSelection(a,e); return; }
     setSelection(selectionFromAtom(a,state.selectionMode), {source:'click',additive:e&&e.shiftKey});
   }
-  function selectionFromAtom(a,m){ if(m==='atom')return {serial:a.serial}; if(m==='chain')return {chain:a.chain}; if(m==='model')return {}; return {chain:a.chain,resi:a.resi,resn:a.resn}; }
+  function selectionFromAtom(a,m){ if(m==='atom')return {serial:a.serial}; if(m==='chain')return {_entryName:a._entryName,chain:a.chain}; if(m==='model')return {_entryName:a._entryName}; return {_entryName:a._entryName,chain:a.chain,resi:a.resi,resn:a.resn}; }
   function handleRangeSelection(a,e){
     const resi=Number(a.resi),chain=a.chain||'';
-    if(!Number.isFinite(resi)){ setSelection({chain:a.chain,resi:a.resi,resn:a.resn},{additive:e&&e.shiftKey}); return; }
-    if(!state.rangeAnchor||state.rangeAnchor.chain!==chain){ state.rangeAnchor={chain,resi}; setStatus('Range start: '+(chain||'-')+' '+resi+' \u2014 click end residue'); return; }
+    const entry=a._entryName||'';
+    if(!Number.isFinite(resi)){ setSelection({_entryName:entry,chain:a.chain,resi:a.resi,resn:a.resn},{additive:e&&e.shiftKey}); return; }
+    if(!state.rangeAnchor||state.rangeAnchor.chain!==chain||state.rangeAnchor.entry!==entry){ state.rangeAnchor={entry,chain,resi}; setStatus('Range start: '+(chain||'-')+' '+resi+' \u2014 click end residue'); return; }
     const lo=Math.min(state.rangeAnchor.resi,resi),hi=Math.max(state.rangeAnchor.resi,resi); state.rangeAnchor=null;
-    setSelection({chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
+    setSelection({_entryName:entry,chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
   }
   function applySelectionOptionOverrides(opts){
     if(opts.representation)state.selectionRepresentation=normText(opts.representation).toLowerCase();
@@ -605,6 +617,7 @@ function boot(){
   function setSelection(sel,opts){
     opts=opts||{};
     const next=normalizeSelectorInput(sel), add=!!(opts.additive||opts.add);
+    if(next==null){ clearSelection(); return null; }
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
     selectionAtoms=selectedAtomsForSelector(state.selectionSel);
     state.rangeAnchor=null; state.focusTarget=null;
@@ -646,7 +659,7 @@ function boot(){
   const vdwR={H:1.20,C:1.70,N:1.55,O:1.52,S:1.80,P:1.80,F:1.47,CL:1.75,BR:1.85,I:1.98,ZN:1.39,FE:1.56,MG:1.73,CA:2.31,NA:2.27,K:2.75,MN:1.61,CU:1.40,CO:1.50,NI:1.49,SE:1.90};
   function vdwOf(a){ return vdwR[atomElem(a)]||1.7; }
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
-  function residueKey(a){ return (a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
+  function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
   let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
@@ -699,7 +712,8 @@ function boot(){
     const n=Number(a.serial);
     return atomLevelSerials().has(Number.isNaN(n)?String(a.serial):n);
   }
-  const interState={ enabled:true, scope:{noncov:'all', pi:'pl', contact:'pl'}, types:{
+  const DEFAULT_INTER_SCOPE={noncov:'all', pi:'pl', contact:'pl'};
+  const DEFAULT_INTER_TYPES={
     hbond:{label:'Hydrogen bonds',color:'#ffd400',on:true},
     halogen:{label:'Halogen bonds',color:'#9b30ff',on:true},
     salt:{label:'Salt bridges',color:'#ff45c0',on:true},
@@ -709,17 +723,29 @@ function boot(){
     good:{label:'Good',color:'#26a69a',on:false},
     bad:{label:'Bad',color:'#ffa726',on:true},
     ugly:{label:'Ugly',color:'#ef5350',on:true}
-  }};
+  };
+  function cloneInteractionTypes(){ return clonePlain(DEFAULT_INTER_TYPES); }
+  const interState={ enabled:true, scope:Object.assign({},DEFAULT_INTER_SCOPE), types:cloneInteractionTypes() };
+  function resetInteractionSettings(){
+    interState.enabled=true;
+    interState.scope=Object.assign({},DEFAULT_INTER_SCOPE);
+    interState.types=cloneInteractionTypes();
+    state.hbondCutoff=2.8;
+    state.saltCutoff=5.0;
+    updateInterToggle();
+    buildInterPanel();
+  }
   function atomPayloadForInteractionIndex(){
     return atoms.map(a=>{
-      const bonds=(a.bonds||[]).map(idx=>atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
-      return {serial:a.serial,index:a.index,chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
+      const bonds=(a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
+      return {serial:a.serial,index:a.index,entry:a._entryName||'',chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
     });
   }
   function resetInteractionIndex(status){
     interactionBuildSeq++;
     if(interactionWorker){ try{ interactionWorker.terminate(); }catch(e){} interactionWorker=null; }
     interactionIndex={status:status||'empty',jobId:interactionBuildSeq,interactions:null,counts:{}};
+    updateInteractionSummary(0);
   }
   function countInteractionIndex(interactions){
     interactions=interactions||{};
@@ -751,6 +777,7 @@ function boot(){
   function startInteractionWorker(jobId,key){
     if(!window.Worker){
       interactionIndex.status='unavailable';
+      updateInteractionSummary(0);
       return;
     }
     setStatus('Building interaction index...');
@@ -761,6 +788,7 @@ function boot(){
       if(jobId!==interactionBuildSeq)return;
       if(msg.error){
         interactionIndex={status:'error',jobId,interactions:null,counts:{},error:msg.error};
+        updateInteractionSummary(0);
         setStatus('Interaction index failed: '+msg.error);
         return;
       }
@@ -773,11 +801,18 @@ function boot(){
       if(jobId!==interactionBuildSeq)return;
       interactionIndex={status:'error',jobId,interactions:null,counts:{},error:e.message||'worker error'};
       interactionWorker=null;
+      updateInteractionSummary(0);
       setStatus('Interaction index failed: '+interactionIndex.error);
     };
     worker.postMessage({jobId,atoms:atomPayloadForInteractionIndex(),criteria:INTERACTION_CRITERIA});
   }
   function startInteractionIndexBuild(){
+    const visible=includedEntries();
+    if(visible.length!==1){
+      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      clearInteractionShapes();
+      return;
+    }
     resetInteractionIndex('loading-cache');
     const key=currentStructureKey;
     if(!key){ startInteractionWorker(interactionBuildSeq,key); return; }
@@ -841,7 +876,7 @@ function boot(){
   function detectHBonds(scope){ const C=atomLevelAtoms().filter(a=>isPolar(a)&&!isWaterAtom(a)); return pairsSym(scope,C,2.4,state.hbondCutoff,1500); }
   function detectHalogen(scope){ const hal=a=>['CL','BR','I'].includes(atomElem(a)),acc=a=>['O','N','S'].includes(atomElem(a))&&!isWaterAtom(a); return pairsAsym(scope,atomLevelAtoms().filter(hal),atomLevelAtoms().filter(acc),2.6,3.9,400); }
   function detectSalt(scope){ return pairsAsym(scope,atomLevelAtoms().filter(isPositive),atomLevelAtoms().filter(isNegative),1.6,state.saltCutoff,800); }
-  function aromaticRings(){ const by=new Map(); for(const a of atoms){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
+  function aromaticRings(){ const by=new Map(); for(const a of atoms){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
   function ringsLvl(){ return aromaticRings().filter(r=>isAtomLevelShown(r.atom)); }
   function ringPairs(scope,rings){
     const out=[];
@@ -898,9 +933,10 @@ function boot(){
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
-    if(!interState.enabled){ if(render!==false)viewer.render(); return; }
-    if(!model||!atoms.length){ if(render!==false)viewer.render(); return; }
+    if(!interState.enabled){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
+    if(!model||!atoms.length){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
     if(!indexedInteractionsReady()){
+      updateInteractionSummary(0);
       if(render!==false)viewer.render();
       return;
     }
@@ -920,6 +956,7 @@ function boot(){
       }
     }catch(e){}
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
+    updateInteractionSummary(interactionWideLines.length);
     if(render!==false)viewer.render();
   }
   function interIcon(kind){ const s=document.createElement('span'); s.style.cssText='display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex:none;background:#159aad;color:#fff;font-size:13px;font-weight:700'; s.textContent=kind==='noncov'?'H':(kind==='pi'?'\u03c0':'\u2731'); return s; }
@@ -939,9 +976,9 @@ function boot(){
     const body=$('interPanelBody'); if(!body)return; body.innerHTML='';
     const SCOPE_OPTS=[['All','all'],['Protein-Ligand','pl'],['Protein-Protein','pp']];
     const groups=[
-      {key:'noncov',name:'Non-covalent bonds',rows:[['hbond','halogen'],['salt','aromhb']],gear:false},
-      {key:'pi',name:'Pi interactions',rows:[['pipi','pication']],gear:true},
-      {key:'contact',name:'Contacts/Clashes',rows:[['good','bad','ugly']],gear:true}
+      {key:'noncov',name:'Non-covalent bonds',rows:[['hbond','halogen'],['salt','aromhb']]},
+      {key:'pi',name:'Pi interactions',rows:[['pipi','pication']]},
+      {key:'contact',name:'Contacts/Clashes',rows:[['good','bad','ugly']]}
     ];
     groups.forEach((g,gi)=>{
       const sec=document.createElement('div'); sec.style.cssText='display:grid;gap:9px;padding:11px 0'+(gi>0?';border-top:1px solid #1c1c1c':'');
@@ -953,7 +990,6 @@ function boot(){
       sel.value=interState.scope[g.key];
       sel.onchange=function(){ interState.scope[g.key]=sel.value; redrawInteractions(true); };
       head.appendChild(sel);
-      const gr=document.createElement('span'); gr.textContent=g.gear?'\u2699':''; gr.style.cssText='flex:none;width:14px;text-align:center;color:#8f8f8f;font-size:13px'; head.appendChild(gr);
       sec.appendChild(head);
       g.rows.forEach(row=>{ const r=document.createElement('div'); r.style.cssText='display:grid;grid-template-columns:repeat('+row.length+',1fr);gap:8px;padding-left:30px'; row.forEach(k=>r.appendChild(makeInterToggle(k))); sec.appendChild(r); });
       body.appendChild(sec);
@@ -962,6 +998,22 @@ function boot(){
   function openInterPanel(){ $('interPanel').hidden=false; setBtnActive($('interBtn'),true); }
   function closeInterPanel(){ $('interPanel').hidden=true; setBtnActive($('interBtn'),false); }
   function toggleInterPanel(){ if($('interPanel').hidden)openInterPanel(); else closeInterPanel(); }
+  function indexedInteractionTotal(){
+    const c=interactionIndex&&interactionIndex.counts||{};
+    return ['hbond','halogen','salt','pipi','pication','contactGood','contactBad','contactUgly'].reduce((sum,k)=>sum+Number(c[k]||0),0);
+  }
+  function updateInteractionSummary(visibleCount){
+    const btn=$('interBtn'); if(!btn)return;
+    const visible=Number(visibleCount||0),indexed=indexedInteractionTotal();
+    btn.textContent=indexedInteractionsReady()?'Interactions '+visible:'Interactions';
+    if(interactionIndex&&interactionIndex.status==='multi-entry'){
+      btn.title='Interactions disabled for multi-entry display';
+    }else if(indexedInteractionsReady()){
+      btn.title='Indexed '+indexed+' interactions; '+visible+' currently visible with atom-level display';
+    }else{
+      btn.title='Interactions not indexed yet';
+    }
+  }
   function updateInterToggle(){
     const b=$('interToggle'); if(!b)return;
     const on=interState.enabled;
@@ -975,13 +1027,14 @@ function boot(){
   function chargeOf(resn){ const r=normUpper(resn); if(r==='ARG'||r==='LYS')return 1; if(r==='ASP'||r==='GLU')return -1; return 0; }
   function updateStatusBar(){
     const residues=new Set(),chains=new Set(),ligs=new Set(); let charge=0; const seenRes=new Set();
-    atoms.forEach(a=>{ const rk=(a.chain||'')+':'+a.resi+':'+(a.resn||''); residues.add(rk); chains.add(a.chain||'?'); if(isLigand(a))ligs.add((a.chain||'')+':'+(a.resn||'')+':'+a.resi); if(!seenRes.has(rk)){ seenRes.add(rk); charge+=chargeOf(a.resn); } });
+    atoms.forEach(a=>{ const rk=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+(a.resn||''); residues.add(rk); chains.add(a.chain||'?'); if(isLigand(a))ligs.add((a._entryName||'')+':'+(a.chain||'')+':'+(a.resn||'')+':'+a.resi); if(!seenRes.has(rk)){ seenRes.add(rk); charge+=chargeOf(a.resn); } });
     const protChains=new Set(); atoms.forEach(a=>{ if(isProtein(a))protChains.add(a.chain||'?'); });
     const mols = protChains.size + ligs.size;
     $('stAtoms').textContent=atoms.length.toLocaleString();
     $('stChains').textContent=chains.size;
     $('stResidues').textContent=residues.size.toLocaleString();
-    $('stEntries').textContent=entries.length;
+    const includedCount=includedEntries().length;
+    $('stEntries').textContent=includedCount===entries.length?entries.length:(includedCount+'/'+entries.length);
     $('stMols').textContent=mols;
     $('stCharge').textContent=(charge>0?'+':'')+charge;
     $('stDisplayed').textContent=displayedCount.toLocaleString()+' of '+atoms.length.toLocaleString();
@@ -1007,17 +1060,16 @@ function boot(){
       row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
       const chk=document.createElement('input'); chk.type='checkbox';
-      const checked=(e.name in entryChecked)?entryChecked[e.name]:active;
-      entryChecked[e.name]=checked; chk.checked=checked;
+      chk.checked=entryChecked[e.name]!==false;
       const CHK_ON="border:1px solid #3a7bd5;background:#3a7bd5 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E\") center/10px no-repeat";
       const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
       function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:3px;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
       paintChk();
       chk.onclick=function(ev){ ev.stopPropagation(); };
-      chk.onchange=function(){ entryChecked[e.name]=chk.checked; paintChk(); };
+      chk.onchange=function(){ setEntryIncluded(e,chk.checked); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
       row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl);
-      row.onclick=function(){ if(e.name!==currentName)persistAndLoadEntry(e).catch(err=>setStatus('Load failed: '+err.message)); };
+      row.onclick=function(){ activateEntry(e); };
       el.appendChild(row);
     });
   }
@@ -1041,7 +1093,8 @@ function boot(){
     arrow.className='tree-arrow';
     arrow.textContent='\u25be';
     head.appendChild(arrow);
-    head.appendChild(document.createTextNode(currentName||'\u2014'));
+    const shown=includedEntries();
+    head.appendChild(document.createTextNode((currentName||'\u2014')+(shown.length>1?' ('+shown.length+' shown)':'')));
     tree.appendChild(head);
     const counts={protein:0,ligands:0,solvents:0,other:0};
     atoms.forEach(a=>{ counts[atomCategory(a)]++; });
@@ -1070,12 +1123,13 @@ function boot(){
   function buildSequence(){
     const body=$('seqBody'); if(!body){ seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set(); return; } body.innerHTML=''; seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set();
     const byChain=new Map();
-    atoms.forEach(a=>{ if(!isProtein(a))return; const c=a.chain||'?'; if(!byChain.has(c))byChain.set(c,new Map()); const m=byChain.get(c); if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c}); });
+    atoms.forEach(a=>{ if(!isProtein(a))return; const entry=a._entryName||'',c=a.chain||'?',ck=entry+'\u0001'+c; if(!byChain.has(ck))byChain.set(ck,{entry,chain:c,residues:new Map()}); const m=byChain.get(ck).residues; if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c,entry}); });
     const chains=Array.from(byChain.keys()).sort();
-    chains.forEach(c=>{
-      const residues=Array.from(byChain.get(c).values()).sort((x,y)=>Number(x.resi)-Number(y.resi));
+    chains.forEach(ck=>{
+      const group=byChain.get(ck),c=group.chain,entry=group.entry;
+      const residues=Array.from(group.residues.values()).sort((x,y)=>Number(x.resi)-Number(y.resi));
       const rowWrap=document.createElement('div'); rowWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;white-space:nowrap';
-      const tag=document.createElement('span'); tag.textContent=c; tag.style.cssText='position:sticky;left:0;flex:none;width:16px;text-align:center;font-size:11px;font-weight:700;color:'+chainColor(c)+';background:#121212;z-index:1';
+      const tag=document.createElement('span'); tag.textContent=entries.length>1?(entry+':'+c):c; tag.style.cssText='position:sticky;left:0;flex:none;width:'+(entries.length>1?'74px':'16px')+';text-align:center;font-size:11px;font-weight:700;color:'+chainColor(c)+';background:#121212;z-index:1';
       rowWrap.appendChild(tag);
       const strip=document.createElement('span'); strip.style.cssText='font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;letter-spacing:1px';
       residues.forEach(r=>{
@@ -1083,11 +1137,11 @@ function boot(){
         const sp=document.createElement('span'); sp.setAttribute('data-seq',''); sp.textContent=code;
         sp.dataset.chain=c; sp.dataset.resi=r.resi;
         sp.style.cssText='display:inline-block;width:9px;text-align:center;color:#c8c8c8;cursor:pointer;border-radius:2px';
-        sp.onclick=function(e){ setSelection({chain:c,resi:Number(r.resi),resn:r.resn},{additive:e.shiftKey}); focus({chain:c,resi:Number(r.resi)}); };
-        sp.title=c+' '+r.resn+' '+r.resi;
+        sp.onclick=function(e){ const n=Number(r.resi),sel={_entryName:entry,chain:c,resi:Number.isFinite(n)?n:r.resi,resn:r.resn}; setSelection(sel,{additive:e.shiftKey}); focus(sel); };
+        sp.title=(entries.length>1?entry+' ':'')+c+' '+r.resn+' '+r.resi;
         strip.appendChild(sp);
-        const key=c+':'+Number(r.resi);
-        seqResidues.push({el:sp,chain:c,resi:Number(r.resi),key});
+        const key=entry+':'+c+':'+r.resi;
+        seqResidues.push({el:sp,chain:c,resi:r.resi,key});
         if(!seqResidueByKey.has(key))seqResidueByKey.set(key,[]);
         seqResidueByKey.get(key).push(sp);
       });
@@ -1116,9 +1170,27 @@ function boot(){
     const keymap={resi:'resi',resn:'resn',atom:'atom',chain:'chain',elem:'elem'};
     const key=keymap[type];
     const seen=new Set();
-    atoms.forEach(a=>{ let v = key==='elem'?atomElem(a):a[key]; if(v==null)return; if(matchScalar(v,(type==='resi'?(/^-?\d+(\s*-\s*-?\d+)?$/.test(q)?q:q):q),key)){ const rk=(a.chain||'')+':'+a.resi+':'+(a.atom||''); if(type==='atom'){ if(!seen.has(a.serial)){seen.add(a.serial); findMatches.push({sel:{serial:a.serial},label:(a.chain||'')+' '+(a.resn||'')+a.resi+' '+a.atom}); } } else { const gk=(a.chain||'')+':'+a.resi; if(!seen.has(gk)){ seen.add(gk); findMatches.push({sel:{chain:a.chain,resi:a.resi,resn:a.resn},label:(a.chain||'')+' '+(a.resn||'')+' '+a.resi}); } } } });
+    atoms.forEach(a=>{
+      let v = key==='elem'?atomElem(a):a[key];
+      if(v==null)return;
+      if(matchScalar(v,(type==='resi'?(/^-?\d+(\s*-\s*-?\d+)?$/.test(q)?q:q):q),key)){
+        const entry=a._entryName||'',prefix=entries.length>1?(a._entryTitle||entry)+' ':'';
+        if(type==='atom'){
+          if(!seen.has(a.serial)){
+            seen.add(a.serial);
+            findMatches.push({sel:{serial:a.serial},label:prefix+(a.chain||'')+' '+(a.resn||'')+a.resi+' '+a.atom});
+          }
+        }else{
+          const gk=entry+':'+(a.chain||'')+':'+a.resi;
+          if(!seen.has(gk)){
+            seen.add(gk);
+            findMatches.push({sel:{_entryName:entry,chain:a.chain,resi:a.resi,resn:a.resn},label:prefix+(a.chain||'')+' '+(a.resn||'')+' '+a.resi});
+          }
+        }
+      }
+    });
     $('findCount').textContent=findMatches.length+' match'+(findMatches.length===1?'':'es');
-    if(findMatches.length){ findIndex=0; gotoFindMatch(); } else { $('findSel').textContent=''; clearSelection(); }
+    if(findMatches.length){ findIndex=0; gotoFindMatch(); } else { $('findSel').textContent='No match; selection kept'; setStatus('Find: no matches'); }
   }
   function gotoFindMatch(){
     if(findIndex<0||findIndex>=findMatches.length)return;
@@ -1143,33 +1215,129 @@ function boot(){
     await saveLastStructure(e);
     return loadEntry(e,{persist:false});
   }
-  function loadEntry(e,opts){
+  function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
+  function displayedStructureKey(list){
+    if(list.length===1)return structureCacheKey(list[0]);
+    return list.length?'multi-'+list.length+'-'+fnv1aHex(list.map(structureCacheKey).join('|')):'';
+  }
+  function resetSelectionState(){
+    state.selectionSel=null;
+    selectionAtoms=[];
+    state.rangeAnchor=null;
+    state.focusTarget=null;
+    state.selectionOptions=defaultSelectionOptions();
+  }
+  function resetDisplayRulesForStructure(){
+    state.styleRules=[];
+    state.hiddenRules=[];
+    state.interactionRules=[];
+    resetSelectionState();
+    state.visibility={protein:true,ligands:true,solvents:true,other:true};
+    state.chainVisible={};
+  }
+  function prepareDisplayedAtoms(entry,list,serialStart){
+    list.forEach(a=>{
+      a._entryName=entry.name;
+      a._entryTitle=entry.title;
+      a._sourceSerial=a.serial;
+      a.serial=serialStart++;
+    });
+    return serialStart;
+  }
+  function refreshAtomMaps(){
+    atomByIndex=new Map();
+    atomByEntryIndex=new Map();
+    atomBySerial=new Map();
+    atoms.forEach(a=>{
+      if(a.index!=null){
+        if(!atomByIndex.has(a.index))atomByIndex.set(a.index,a);
+        atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
+      }
+      if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
+    });
+  }
+  function finishStructureRefresh(visible,opts){
     opts=opts||{};
-    e=normalizeStructureEntry(e);
-    if(!e)throw new Error('Invalid structure data');
-    currentStructureKey=structureCacheKey(e);
+    currentStructureKey=displayedStructureKey(visible);
+    setupAtomEvents();
+    applyStylesFull(false);
+    if(opts.preserveView&&opts.view&&viewer&&viewer.setView){ try{ viewer.setView(opts.view); }catch(e){} }
+    else if(opts.zoom!==false) viewer.zoomTo();
+    viewer.render();
+    buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
+    showHover(null);
+    if(visible.length===1){
+      setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
+      startInteractionIndexBuild();
+    }else{
+      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      clearInteractionShapes();
+      updateInteractionSummary(0);
+      setStatus(visible.length?visible.length+' entries displayed \u00b7 interactions disabled for multi-entry view':'No entries displayed');
+    }
+  }
+  function rebuildDisplayedEntries(opts){
+    opts=opts||{};
     if(!viewer)initViewer();
-    const existingEntry=entries.findIndex(x=>x.name===e.name);
-    if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
+    const view=opts.preserveView&&viewer&&viewer.getView?viewer.getView():null;
+    const visible=includedEntries();
+    if(currentName&&entryChecked[currentName]===false){
+      currentName=visible.length?visible[0].name:'';
+    }else if(!currentName&&visible.length){
+      currentName=visible[0].name;
+    }
     viewer.clear();
     if(wideLineLayer)wideLineLayer.clear();
     interactionShapes=[]; interactionWideLines=[];
     resetInteractionIndex('empty');
-    model=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
-    atoms=model.selectedAtoms({});
-    atomByIndex=new Map();
-    atomBySerial=new Map();
-    atoms.forEach(a=>{ if(a.index!=null)atomByIndex.set(a.index,a); if(a.serial!=null)atomBySerial.set(Number(a.serial),a); });
+    models=[]; model=null; atoms=[];
+    let nextSerial=1;
+    visible.forEach(e=>{
+      const m=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
+      const list=m.selectedAtoms({});
+      nextSerial=prepareDisplayedAtoms(e,list,nextSerial);
+      models.push({entry:e,model:m});
+      atoms=atoms.concat(list);
+    });
+    model=models.length?models[0].model:null;
+    refreshAtomMaps();
+    if(!model){
+      currentStructureKey='';
+      resetAtomLevelCache();
+      resetInteractionIndex('empty');
+      buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
+      showHover(null);
+      viewer.render();
+      updateInteractionSummary(0);
+      setStatus('No entries displayed');
+      return null;
+    }
+    finishStructureRefresh(visible,Object.assign({},opts,{view}));
+    return visible;
+  }
+  function setEntryIncluded(entry,on){
+    entryChecked[entry.name]=!!on;
+    resetSelectionState();
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+  }
+  function activateEntry(entry){
+    const wasIncluded=entryChecked[entry.name]!==false;
+    currentName=entry.name;
+    if(!wasIncluded)entryChecked[entry.name]=true;
+    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); }
+    else{ resetSelectionState(); rebuildDisplayedEntries({preserveView:true,zoom:false}); }
+  }
+  function loadEntry(e,opts){
+    opts=opts||{};
+    e=normalizeStructureEntry(e);
+    if(!e)throw new Error('Invalid structure data');
+    if(!viewer)initViewer();
+    const existingEntry=entries.findIndex(x=>x.name===e.name);
+    if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
     currentName=e.name;
-    state.styleRules=[];state.hiddenRules=[];state.interactionRules=[];state.selectionSel=null;selectionAtoms=[];state.rangeAnchor=null;state.focusTarget=null;state.selectionOptions=defaultSelectionOptions();
-    state.visibility={protein:true,ligands:true,solvents:true,other:true}; state.chainVisible={};
-    setupAtomEvents();
-    applyStylesFull(false);
-    viewer.zoomTo(); viewer.render();
-    buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
-    showHover(null);
-    setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
-    startInteractionIndexBuild();
+    entryChecked[e.name]=true;
+    resetDisplayRulesForStructure();
+    rebuildDisplayedEntries({zoom:true});
     if(opts.persist!==false)saveLastStructure(e);
     return e;
   }
@@ -1186,12 +1354,15 @@ function boot(){
   const clip={near:-100, far:100};
   function clipPct(v){ return (v-CLIP_MIN)/(CLIP_MAX-CLIP_MIN)*100; }
   function renderClipUI(){
-    const nh=$('clipNearH'),fh=$('clipFarH'),rg=$('clipRange'),val=$('clipVal');
+    const nh=$('clipNearH'),fh=$('clipFarH'),rg=$('clipRange'),val=$('clipVal'),cap=document.querySelector('#clipControl .clip-cap'),ctrl=$('clipControl');
     if(!nh||!fh)return;
     const np=clipPct(clip.near),fp=clipPct(clip.far);
+    const active=clip.near!==-100||clip.far!==100;
     nh.style.left=np+'%'; fh.style.left=fp+'%';
     if(rg){ rg.style.left=np+'%'; rg.style.width=Math.max(0,fp-np)+'%'; }
     if(val)val.textContent=Math.round(clip.near)+' / '+Math.round(clip.far);
+    if(cap)cap.textContent=active?'Clip active':'Clip off';
+    if(ctrl)ctrl.classList.toggle('is-active',active);
   }
   function applyClip(){
     renderClipUI();
@@ -1253,7 +1424,7 @@ function boot(){
   function normalizedPageRect(a,b){ const bd=viewerPageBounds(); return {left:Math.max(bd.left,Math.min(a.x,b.x)),right:Math.min(bd.right,Math.max(a.x,b.x)),top:Math.max(bd.top,Math.min(a.y,b.y)),bottom:Math.min(bd.bottom,Math.max(a.y,b.y))}; }
   function updateDragSelectBox(a,b){ const r=normalizedPageRect(a,b),bd=viewerPageBounds(); dragSelectBoxEl.style.left=(r.left-bd.left)+'px'; dragSelectBoxEl.style.top=(r.top-bd.top)+'px'; dragSelectBoxEl.style.width=Math.max(0,r.right-r.left)+'px'; dragSelectBoxEl.style.height=Math.max(0,r.bottom-r.top)+'px'; dragSelectBoxEl.style.display='block'; }
   function hideDragSelectBox(){ dragSelectBoxEl.style.display='none'; }
-  function atomResidueKey(a){ return (a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
+  function atomResidueKey(a){ return (a._entryName||'')+'\u0001'+(a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
   function serialSelectorForAtoms(list){ const ser=[],seen=new Set(); for(const a of list){ if(a.serial==null||seen.has(a.serial))continue; seen.add(a.serial); ser.push(a.serial); } return ser.length?{serial:ser}:null; }
   function atomsInPageRect(rect){ if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return []; let pts=[]; try{ pts=viewer.modelToScreen(atoms); }catch(e){ return []; } const out=[]; for(let i=0;i<atoms.length;i++){ const p=pts[i]; if(!p||!Number.isFinite(p.x))continue; if(p.x>=rect.left&&p.x<=rect.right&&p.y>=rect.top&&p.y<=rect.bottom)out.push(atoms[i]); } return out; }
   function atomAtPagePoint(pt,maxDist){
@@ -1267,7 +1438,20 @@ function boot(){
     }
     return best;
   }
-  function selectorFromDragHits(hits){ if(!hits.length||state.selectionMode==='off')return null; if(state.selectionMode==='model')return {}; if(state.selectionMode==='atom')return serialSelectorForAtoms(hits); if(state.selectionMode==='chain'){ const ch=new Set(hits.map(a=>a.chain||'')); return serialSelectorForAtoms(atoms.filter(a=>ch.has(a.chain||''))); } const res=new Set(hits.map(atomResidueKey)); return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a)))); }
+  function selectorFromDragHits(hits){
+    if(!hits.length||state.selectionMode==='off')return null;
+    if(state.selectionMode==='model'){
+      const entriesHit=new Set(hits.map(a=>a._entryName||''));
+      return serialSelectorForAtoms(atoms.filter(a=>entriesHit.has(a._entryName||'')));
+    }
+    if(state.selectionMode==='atom')return serialSelectorForAtoms(hits);
+    if(state.selectionMode==='chain'){
+      const ch=new Set(hits.map(a=>(a._entryName||'')+'\u0001'+(a.chain||'')));
+      return serialSelectorForAtoms(atoms.filter(a=>ch.has((a._entryName||'')+'\u0001'+(a.chain||''))));
+    }
+    const res=new Set(hits.map(atomResidueKey));
+    return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a))));
+  }
   function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ clearSelection(); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
   function isCustomMousePreset(){ return !(mousePresets[state.mousePreset]&&mousePresets[state.mousePreset].passThrough); }
   function showViewer(){ if(!viewer)return; if(viewer.show)viewer.show(); else viewer.render(); }
@@ -1412,6 +1596,8 @@ function installFrameSyncedMotion(targetViewer){
   // button swaps them, so no action is ever assigned to two buttons. (Wheel is fixed to zoom.)
   const MOUSE_ACTIONS=[['rotate','Rotate'],['pan','Pan'],['zoom','Zoom'],['select','Select']];
   const MOUSE_BTNS=[['left','Left'],['right','Right'],['middle','Middle']];
+  const MOUSE_ACTION_VALUES=new Set(MOUSE_ACTIONS.map(a=>a[0]).concat(['none']));
+  const WHEEL_ACTION_VALUES=new Set(['zoom','none']);
   function setMouseAction(btn,action){
     const cur=settings.mouse.buttons; if(cur[btn]===action){ buildMouseMatrix(); return; }
     const prev=cur[btn];
@@ -1421,6 +1607,7 @@ function installFrameSyncedMotion(targetViewer){
   }
   function buildMouseMatrix(){
     const wrap=$('mouseMatrix'); if(!wrap)return; wrap.innerHTML='';
+    updateMousePresetButtons();
     const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:84px repeat(4,1fr);gap:9px 8px;align-items:center';
     grid.appendChild(document.createElement('span'));
     MOUSE_ACTIONS.forEach(a=>{ const h=document.createElement('span'); h.textContent=a[1]; h.style.cssText='font-size:11px;color:#8f8f8f;text-align:center'; grid.appendChild(h); });
@@ -1436,6 +1623,12 @@ function installFrameSyncedMotion(targetViewer){
       });
     });
     wrap.appendChild(grid);
+  }
+  function updateMousePresetButtons(){
+    document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{
+      const on=btn.getAttribute('data-mouse-preset')===state.mousePreset;
+      btn.classList.toggle('is-active',on);
+    });
   }
   function openSettings(){
     buildMouseMatrix();
@@ -1462,16 +1655,38 @@ function installFrameSyncedMotion(targetViewer){
     if(next==='select-left'){ settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel=mousePresets['select-left'].wheel; }
     resetMouseDrag();
     buildMouseMatrix();
+    updateMousePresetButtons();
     setStatus('Mouse preset: '+next);
     return next;
   }
   function setMouseActions(actions){
-    const next=actions||{}, buttons=next.buttons||next;
-    ['left','right','middle'].forEach(btn=>{ if(buttons[btn]!=null)settings.mouse.buttons[btn]=normText(buttons[btn]).toLowerCase(); });
-    if(next.wheel!=null||next.wheelAction!=null)settings.mouse.wheel=normText(next.wheel!=null?next.wheel:next.wheelAction).toLowerCase();
+    if(!actions||typeof actions!=='object'||Array.isArray(actions))throw new Error('Mouse actions must be an object.');
+    const next=actions, buttons=next.buttons||next, nextButtons=Object.assign({},settings.mouse.buttons);
+    ['left','right','middle'].forEach(btn=>{
+      if(buttons[btn]==null)return;
+      const action=normText(buttons[btn]).toLowerCase();
+      if(!MOUSE_ACTION_VALUES.has(action))throw new Error('Unsupported mouse action for '+btn+': '+action);
+      nextButtons[btn]=action;
+    });
+    const used=new Set();
+    ['left','right','middle'].forEach(btn=>{
+      const action=nextButtons[btn];
+      if(action==='none')return;
+      if(used.has(action))throw new Error('Mouse button actions must be distinct: '+action);
+      used.add(action);
+    });
+    const wheelValue=next.wheel!=null?next.wheel:next.wheelAction;
+    let nextWheel=settings.mouse.wheel;
+    if(wheelValue!=null){
+      nextWheel=normText(wheelValue).toLowerCase();
+      if(!WHEEL_ACTION_VALUES.has(nextWheel))throw new Error('Unsupported wheel action: '+nextWheel);
+    }
+    settings.mouse.buttons=nextButtons;
+    settings.mouse.wheel=nextWheel;
     state.mousePreset='custom';
     resetMouseDrag();
     buildMouseMatrix();
+    updateMousePresetButtons();
     setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
     return cloneMouseSettings();
   }
@@ -1516,17 +1731,17 @@ function installFrameSyncedMotion(targetViewer){
     clearStyle:clearStyles, clearStyles, setBaseStyle, setProteinBackboneStyle, setProteinAtomStyle, setLigandStyle, setSolventStyle, setOtherStyle,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
-    getState:function(){ return {file:currentName,atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {file:currentName,entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false,active:e.name===currentName})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,elapsedMs:interactionIndex.elapsedMs,atoms:interactionIndex.atoms,rings:interactionIndex.rings,error:interactionIndex.error}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }
+    loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------
   $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; state.rangeAnchor=null; setStatus('Selection level: '+state.selectionMode); };
-  $('qsP').onclick=function(){ setSelection({predicateName:'protein',not:{hetflag:true}},{}); setSelection({hetflag:false},{}); };
+  $('qsP').onclick=function(){ setSelection({hetflag:false},{}); };
   $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel)setSelection(sel,{}); else setStatus('No ligand'); };
   $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
   $('qsAll').onclick=function(){ setSelection({},{}); };
@@ -1541,20 +1756,20 @@ function installFrameSyncedMotion(targetViewer){
   $('repLigand').onchange=function(){ setLigandStyle($('repLigand').value); };
   $('repSolvent').onchange=function(){ setSolventStyle($('repSolvent').value); buildHierarchy(); };
   $('repOther').onchange=function(){ setOtherStyle($('repOther').value); buildHierarchy(); };
-  $('repSelected').onchange=function(){ setSelectionHighlight({representation:$('repSelected').value}); };
   bindClipControl();
   $('clipReset').onclick=function(){ clip.near=-100; clip.far=100; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
+  document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{ btn.onclick=function(){ setMousePreset(btn.getAttribute('data-mouse-preset')); }; });
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); };
   $('setHbond').oninput=function(){ state.hbondCutoff=Number($('setHbond').value); $('hbondVal').textContent=state.hbondCutoff.toFixed(2); redrawInteractions(true); };
   $('setSalt').oninput=function(){ state.saltCutoff=Number($('setSalt').value); $('saltVal').textContent=state.saltCutoff.toFixed(1); redrawInteractions(true); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetChainColors').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); };
-  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; interState.enabled=true; updateInterToggle(); state.selectionRepresentation='line'; if($('repSelected'))$('repSelected').value='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
+  $('settingsReset').onclick=function(){ Object.keys(chainColors).forEach(k=>delete chainColors[k]); Object.assign(chainColors,defaultChainColors); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };

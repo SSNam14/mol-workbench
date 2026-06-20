@@ -217,6 +217,21 @@ class MolWideLineLayer{
     if(this.mesh)this.mesh.visible=false;
   }
 
+  disposeMesh(viewer){
+    if(this.mesh&&this.mesh.parent){
+      try{ this.mesh.parent.remove(this.mesh); }catch(e){
+        if(viewer&&viewer.modelGroup)try{ viewer.modelGroup.remove(this.mesh); }catch(_){}
+      }
+    }
+    if(this.geometry&&typeof this.geometry.dispose==='function')try{ this.geometry.dispose(); }catch(e){}
+    if(this.material&&typeof this.material.dispose==='function')try{ this.material.dispose(); }catch(e){}
+    this.mesh=null;
+    this.geometry=null;
+    this.material=null;
+    this.plan=[];
+    this.coords=[];
+  }
+
   addPrimitiveLine(spec){
     if(!spec||!finitePoint(spec.start)||!finitePoint(spec.end))return null;
     const id='primitive:'+this.nextPrimitiveId++;
@@ -279,7 +294,7 @@ class MolWideLineLayer{
       return false;
     }
     if(!this.resolveRuntime(viewer))return false;
-    if(this.mesh&&this.mesh.parent)viewer.modelGroup.remove(this.mesh);
+    this.disposeMesh(viewer);
     this.geometry=new this.Geometry(true);
     this.material=new this.Material({color:'#ffffff'});
     this.material.shaderID='basic';

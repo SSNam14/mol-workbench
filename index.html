@@ -55,10 +55,6 @@
         <span class="rep-ico" style="color:#CE93D8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="8.5" x2="12" y2="15.5" stroke-linecap="round"></line><line x1="8.5" y1="12" x2="15.5" y2="12" stroke-linecap="round"></line></svg></span>
         <select id="repOther" class="rep-sel"><option value="stick">stick</option><option value="line">line</option><option value="sphere">sphere</option><option value="cpk">cpk</option><option value="off">off</option></select>
       </div>
-      <div class="rep-ctl" title="Selected">
-        <span class="rep-ico" style="color:#FDD835"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"></rect></svg></span>
-        <select id="repSelected" class="rep-sel"><option value="line">line</option><option value="stick">stick</option><option value="sphere">sphere</option><option value="cpk">cpk</option><option value="off">off</option></select>
-      </div>
     </div>
     <div class="u-013">
       <button id="btnFit" data-btn class="u-017">Fit</button>
@@ -171,6 +167,11 @@
 
         <section class="u-079">
           <h3 class="u-080">Mouse actions</h3>
+          <div id="mousePresetRow" class="mouse-preset-row">
+            <button type="button" data-mouse-preset="select-left" data-btn class="mouse-preset-btn">App default</button>
+            <button type="button" data-mouse-preset="default" data-btn class="mouse-preset-btn">3Dmol default</button>
+            <button type="button" data-mouse-preset="custom" data-btn class="mouse-preset-btn">Custom</button>
+          </div>
           <div id="mouseMatrix"></div>
         </section>
 
