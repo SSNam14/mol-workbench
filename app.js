@@ -333,6 +333,14 @@ function boot(){
     if(rep==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:o.thickness||0.45,colorfunc:rc,opacity:op}};
     return {cartoon:{colorfunc:rc,opacity:op}};
   }
+  function mergeStyleSpecs(){
+    const out={};
+    Array.prototype.forEach.call(arguments,function(spec){
+      if(!spec)return;
+      Object.keys(spec).forEach(k=>{ out[k]=spec[k]; });
+    });
+    return out;
+  }
   const selectorArrayCache = new WeakMap();
   function isResiRangeValue(value){ return typeof value==='string'&&/^-?\d+\s*-\s*-?\d+$/.test(value.trim()); }
   function canUseSelectorArraySet(want,key){
@@ -677,7 +685,7 @@ function boot(){
   function applySelectionHighlight(selectedAtomsOverride){
     clearSelectionHighlight();
     if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
-    const rep=normText(state.selectionRepresentation||'line').toLowerCase(),opts=state.selectionOptions||{},selected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel);
+    const rep=normText(state.selectionRepresentation||'line').toLowerCase(),opts=state.selectionOptions||{},rawSelected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel),selected=rawSelected.filter(isAtomVisibleNow);
     if(!selected.length)return;
     const job=selectionHighlightJob;
     if(rep==='line'&&drawAdaptiveLineSelection(selected,opts,job))return;
@@ -709,8 +717,8 @@ function boot(){
     if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
     if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
     if(_catSer.other.length)viewer.setStyle({serial:_catSer.other}, otherStyleSpec());
-    for(const r of state.styleRules){ if(r.disabled)continue; try{ viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
-    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
+    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
+    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
     applyVisibility();
     redrawWideLineStyles();
     if(!opts.skipInteractions)redrawInteractions(false);
@@ -1625,6 +1633,100 @@ function boot(){
   function hideDragSelectBox(){ dragSelectBoxEl.style.display='none'; }
   function atomResidueKey(a){ return (a._entryName||'')+'\u0001'+(a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+(a.resn||''); }
   function serialSelectorForAtoms(list){ const ser=[],seen=new Set(); for(const a of list){ if(a.serial==null||seen.has(a.serial))continue; seen.add(a.serial); ser.push(a.serial); } return ser.length?{serial:ser}:null; }
+  function serialTextSet(list){ const out=new Set(); (list||[]).forEach(a=>{ if(a&&a.serial!=null)out.add(String(a.serial)); }); return out; }
+  function removeSerialsFromDirectRules(rules,serials){
+    return (rules||[]).filter(rule=>{
+      const sel=rule&&rule.selector;
+      if(!sel||typeof sel!=='object'||Array.isArray(sel)||!Object.prototype.hasOwnProperty.call(sel,'serial'))return true;
+      const raw=Array.isArray(sel.serial)?sel.serial:[sel.serial], kept=raw.filter(s=>!serials.has(String(s)));
+      if(!kept.length)return false;
+      rule.selector=Object.assign({},sel,{serial:kept});
+      return true;
+    });
+  }
+  function atomLevelStyleSpecForAtoms(rep,opts,selected){
+    const spec=styleSpec(rep,opts);
+    const protein=[],other=[];
+    selected.forEach(a=>{
+      if(a.serial==null)return;
+      if(isProtein(a))protein.push(a.serial);
+      else other.push(a.serial);
+    });
+    if(protein.length)viewer.setStyle({serial:protein},mergeStyleSpecs(proteinBackboneStyleSpec(),spec));
+    if(other.length)viewer.setStyle({serial:other},spec);
+  }
+  function atomLevelHideStyleForAtoms(selected){
+    const protein=[],other=[];
+    selected.forEach(a=>{
+      if(a.serial==null)return;
+      if(isProtein(a))protein.push(a.serial);
+      else other.push(a.serial);
+    });
+    if(protein.length)viewer.setStyle({serial:protein},proteinBackboneStyleSpec());
+    if(other.length)viewer.setStyle({serial:other},{});
+  }
+  function selectedAtomsForRule(rule){ const opts=rule&&rule.options||{}; return filterAtoms(styleSelection(rule&&rule.selector,opts)); }
+  function applyAtomLevelStyleRule(rule){
+    const rep=normText(rule.representation).toLowerCase();
+    if(!ATOM_REPS.has(rep))return;
+    const selected=selectedAtomsForRule(rule).filter(isAtomVisibleNow);
+    if(selected.length)atomLevelStyleSpecForAtoms(rep,rule.options||{},selected);
+  }
+  function applyAtomLevelHideRule(rule){
+    const selected=selectedAtomsForRule(rule);
+    if(selected.length)atomLevelHideStyleForAtoms(selected);
+  }
+  function currentSelectionToolbarAtoms(){
+    const selected=state.selectionSel?selectedAtomsForSelector(state.selectionSel):[];
+    if(!selected.length)setStatus('No selected atoms');
+    return selected;
+  }
+  function showSelectionToolbarAtoms(selected){
+    const serials=serialTextSet(selected);
+    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+  }
+  function hideSelectionToolbarAtoms(){
+    const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
+    if(!sel)return;
+    const serials=serialTextSet(selected);
+    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+    state.hiddenRules.push({selector:sel,representation:'hide',options:{source:'selection-toolbar',atomLevel:true}});
+    applyStylesFull(true);
+    setStatus('Hidden selected atoms: '+selected.length.toLocaleString());
+  }
+  function showSelectionToolbarAction(){
+    const selected=currentSelectionToolbarAtoms();
+    if(!selected.length)return;
+    showSelectionToolbarAtoms(selected);
+    applyStylesFull(true);
+    setStatus('Shown selected atoms: '+selected.length.toLocaleString());
+  }
+  function showSelectionToolbarHeavyOnly(){
+    const selected=currentSelectionToolbarAtoms();
+    if(!selected.length)return;
+    showSelectionToolbarAtoms(selected);
+    const hydrogens=selected.filter(a=>atomElem(a)==='H'), hsel=serialSelectorForAtoms(hydrogens);
+    if(hsel)state.hiddenRules.push({selector:hsel,representation:'hide',options:{source:'selection-toolbar',atomLevel:true}});
+    applyStylesFull(true);
+    setStatus('Selected heavy atoms visible: '+(selected.length-hydrogens.length).toLocaleString()+' / '+selected.length.toLocaleString());
+  }
+  function setSelectionToolbarRepresentation(rep){
+    const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
+    if(!sel)return;
+    const serials=serialTextSet(selected);
+    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+    state.styleRules=removeSerialsFromDirectRules(state.styleRules,serials);
+    state.styleRules.push({selector:sel,representation:rep,options:{source:'selection-toolbar',atomLevel:true}});
+    applyStylesFull(true);
+    setStatus('Selected atoms set to '+rep+': '+selected.length.toLocaleString());
+  }
+  function runSelectionToolbarAction(action){
+    action=normText(action).toLowerCase();
+    if(action==='hide')return hideSelectionToolbarAtoms();
+    if(action==='show')return showSelectionToolbarAction();
+    if(action==='heavy')return showSelectionToolbarHeavyOnly();
+    if(ATOM_REPS.has(action))return setSelectionToolbarRepresentation(action);
+  }
   function atomsInPageRect(rect){ if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return []; let pts=[]; try{ pts=viewer.modelToScreen(atoms); }catch(e){ return []; } const out=[]; for(let i=0;i<atoms.length;i++){ const p=pts[i]; if(!p||!Number.isFinite(p.x))continue; if(p.x>=rect.left&&p.x<=rect.right&&p.y>=rect.top&&p.y<=rect.bottom)out.push(atoms[i]); } return out; }
   function atomAtPagePoint(pt,maxDist){
     if(!viewer||!model||!atoms.length||!viewer.modelToScreen)return null;
@@ -2039,6 +2141,9 @@ function installFrameSyncedMotion(targetViewer){
   $('btnFit').onclick=function(){ if(viewer){ viewer.zoomTo(); viewer.render(); } };
   $('btnFocus').onclick=function(){ focus(state.selectionSel); };
   $('btnClear').onclick=clearSelection;
+  document.querySelectorAll('[data-selection-action]').forEach(btn=>{
+    btn.onclick=function(){ runSelectionToolbarAction(btn.getAttribute('data-selection-action')); };
+  });
   $('repBackbone').onchange=function(){ setProteinBackboneStyle($('repBackbone').value); };
   $('repProtein').onchange=function(){ setProteinAtomStyle($('repProtein').value); };
   $('repLigand').onchange=function(){ setLigandStyle($('repLigand').value); };
