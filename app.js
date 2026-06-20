@@ -821,9 +821,16 @@ function boot(){
     syncSeqHighlight(new Set());
     setStatus('Selection cleared.');
   }
+  function focusViewerKeyboardTarget(){
+    if(!viewerEl)return;
+    if(!viewerEl.hasAttribute('tabindex'))viewerEl.setAttribute('tabindex','-1');
+    try{ viewerEl.focus({preventScroll:true}); }
+    catch(e){ try{ viewerEl.focus(); }catch(_){} }
+  }
   function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo({},450); state.focusTarget={mode:'overview'}; return true; }
   function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s={}; viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
+  function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
 
   function gridKey(a,c){ return Math.floor(a.x/c)+','+Math.floor(a.y/c)+','+Math.floor(a.z/c); }
   function nearbyPairs(la,lb,minD,maxD,limit,pred){
@@ -2068,7 +2075,7 @@ function installFrameSyncedMotion(targetViewer){
     const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0}; const tol=3;
     function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0; hideDragSelectBox(); }
     resetMouseDrag=resetDrag;
-    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
+    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
     function rotateFromDrag(p){ if(!viewer||!drag.startQuaternion||!viewer.rotationGroup||!viewer.dq)return; const d=dragRatios(p,drag),dist=Math.hypot(d.x,d.y); if(!dist)return; const f=Math.sin(dist*Math.PI)/dist; viewer.dq.x=Math.cos(dist*Math.PI);viewer.dq.y=0;viewer.dq.z=f*d.x;viewer.dq.w=-f*d.y; viewer.rotationGroup.quaternion.set(1,0,0,0); viewer.rotationGroup.quaternion.multiply(viewer.dq); viewer.rotationGroup.quaternion.multiply(drag.startQuaternion); showViewer(); }
     function panFromDrag(p){ if(!viewer||!drag.startModelPos||!viewer.modelGroup||!viewer.screenOffsetToModel)return; const d=dragRatios(p,drag),off=viewer.screenOffsetToModel(d.xRatio*(p.x-drag.startX),d.yRatio*(p.y-drag.startY)); viewer.modelGroup.position.addVectors(drag.startModelPos,off); showViewer(); }
     function zoomFromDrag(p){ if(!viewer||!viewer.rotationGroup)return; const d=dragRatios(p,drag); let scale=0.85*(viewer.CAMERA_Z-viewer.rotationGroup.position.z); if(scale<80)scale=80; viewer.rotationGroup.position.z=drag.startZoom+d.y*scale; if(viewer.adjustZoomToLimits)viewer.rotationGroup.position.z=viewer.adjustZoomToLimits(viewer.rotationGroup.position.z); showViewer(); }
@@ -2086,6 +2093,7 @@ function installFrameSyncedMotion(targetViewer){
   function startFpsOverlay(){ const fpsEl=$('fpsOverlay'); let frames=0,last=performance.now(); function tick(){ frames++; requestAnimationFrame(tick); } function update(){ if(document.hidden){ fpsEl.textContent='FPS --'; frames=0; last=performance.now(); return; } const now=performance.now(),el=now-last; fpsEl.textContent='FPS '+Math.round(frames*1000/el); frames=0; last=now; } setInterval(update,500); requestAnimationFrame(tick); }
 
   function initViewer(){
+    focusViewerKeyboardTarget();
     viewer=$3Dmol.createViewer(viewerEl,{backgroundColor:'#000000',hoverDuration:0});
     if(viewer.setBackgroundColor)viewer.setBackgroundColor('#000000');
     installFrameSyncedMotion(viewer);
@@ -2403,7 +2411,7 @@ function installFrameSyncedMotion(targetViewer){
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
     const tag=ae&&ae.tagName;
-    if(e.key==='z'||e.key==='Z'){
+    if(isFocusHotkey(e)){
       if(ae&&ae.closest&&ae.closest('#findGo,#findPrev,#findNext,#findClear,#findType'))return;
       if(ae&&ae.id==='findInput')e.preventDefault();
       else if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
