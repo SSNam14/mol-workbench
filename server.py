@@ -6,7 +6,7 @@ import json
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parent
@@ -179,6 +179,29 @@ def upsert_session_entry(entry):
     return session
 
 
+def remove_session_entry(name):
+    session = load_session_or_legacy()
+    if not session:
+        return None
+    target = str(name or "").strip()
+    entries = [entry for entry in session.get("entries", []) if entry.get("name") != target]
+    if len(entries) == len(session.get("entries", [])):
+        return session
+    if not entries:
+        clear_session()
+        return None
+    names = {entry["name"] for entry in entries}
+    included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
+    if not included:
+        included = [entries[0]["name"]]
+    active = session.get("activeEntry")
+    if active not in names:
+        active = included[0]
+    next_session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": active})
+    write_session(next_session)
+    return next_session
+
+
 class ViewerHandler(SimpleHTTPRequestHandler):
     server_version = "MolecularViewerHTTP/1.0"
 
@@ -215,6 +238,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session":
             self.handle_put_session()
             return
+        if path == "/api/session-entry":
+            self.handle_put_session_entry()
+            return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
             return
@@ -227,6 +253,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/session":
             self.handle_put_session()
+            return
+        if path == "/api/session-entry":
+            self.handle_put_session_entry()
             return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
@@ -241,6 +270,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session":
             clear_session()
             self.send_json(200, {"ok": True, "session": session_meta(None)})
+            return
+        if path.startswith("/api/session-entry/"):
+            self.handle_delete_session_entry(unquote(path.rsplit("/", 1)[-1]))
             return
         self.send_error(404)
 
@@ -290,6 +322,28 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         write_session(session)
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+
+    def handle_put_session_entry(self):
+        payload = self.read_json_body(MAX_STRUCTURE_BYTES)
+        if payload is None:
+            return
+        entry = normalize_entry(payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload)
+        if not entry:
+            self.send_json(400, {"error": "invalid_structure"})
+            return
+        session = upsert_session_entry(entry)
+        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+
+    def handle_delete_session_entry(self, name):
+        if not name:
+            self.send_json(400, {"error": "invalid_entry_name"})
+            return
+        try:
+            session = remove_session_entry(name)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        self.send_json(200, {"ok": True, "entries": len(session["entries"]) if session else 0, "session": session_meta(session)})
 
     def handle_get_last_structure(self):
         try:

@@ -440,6 +440,13 @@ await molAgent.loadUrl("path/to/structure.pdb", "pdb", "structure-id", "Display 
 molAgent.getState();
 ```
 
+Remove an entry from the current viewer session:
+
+```js
+molAgent.removeEntry("structure-id");
+molAgent.removeEntry("Display Title");
+```
+
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
 
 Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
@@ -535,6 +542,58 @@ molAgent.models();
 ```
 
 `molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the first displayed 3Dmol model for backward compatibility. `molAgent.models()` returns all currently displayed 3Dmol models. Direct calls can bypass app state, so prefer the structured API first.
+
+## Server-Side Entry Commands
+
+Use these when an agent needs to update the shared viewer session without clicking the UI. Open clients with the current app code will pick up the change through `/api/session-meta`.
+
+Set `VIEWER_URL` to the running viewer server first:
+
+```bash
+export VIEWER_URL="http://127.0.0.1:${PORT}"
+```
+
+Load or replace one entry:
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+from pathlib import Path
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+entry = {
+    "name": "proteinprep_10AY",
+    "title": "proteinprep_10AY-out",
+    "pdbId": "10AY",
+    "fmt": "pdb",
+    "data": Path("data/proteinprep_10AY-out.pdb").read_text(),
+}
+body = json.dumps(entry).encode()
+req = urllib.request.Request(
+    f"{base_url}/api/session-entry",
+    data=body,
+    method="PUT",
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+Remove one entry:
+
+```bash
+python3 - <<'PY'
+import os, urllib.parse, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+name = urllib.parse.quote("proteinprep_10AY", safe="")
+req = urllib.request.Request(
+    f"{base_url}/api/session-entry/{name}",
+    method="DELETE",
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
 
 ## Development Notes
 

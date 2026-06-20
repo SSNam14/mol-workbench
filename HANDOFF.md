@@ -108,6 +108,7 @@ molAgent.reloadVisualConfig();
 molAgent.getInteractionIndex();
 molAgent.rebuildInteractionIndex();
 molAgent.loadUrl(url, fmt, name, title, pdbId);
+molAgent.removeEntry(nameOrTitleOrPdbId);
 molAgent.run(commandObject);
 molAgent.viewer();
 molAgent.model();
@@ -115,6 +116,14 @@ molAgent.models();
 ```
 
 String commands are intentionally disabled. Use structured objects only. `setSelection` accepts a selector object, an array of selector objects, or `null` to clear selection; invalid selector types should throw. `setMouseActions` should validate supported actions and reject duplicate non-`none` button actions.
+
+Server-side entry update endpoints:
+
+```text
+PUT /api/session-entry              # upsert one entry JSON object
+DELETE /api/session-entry/<name>    # remove one entry by entry name
+GET /api/session-meta               # lightweight revision for open-client sync
+```
 
 Common selector examples:
 

@@ -1432,7 +1432,7 @@ function boot(){
   }
   function deleteEntry(entry){
     const idx=entries.findIndex(e=>e.name===entry.name);
-    if(idx<0)return;
+    if(idx<0)return null;
     entries.splice(idx,1);
     delete entryChecked[entry.name];
     if(currentName===entry.name){
@@ -1444,6 +1444,18 @@ function boot(){
     rebuildDisplayedEntries({preserveView:true,zoom:false});
     saveViewerSession();
     setStatus('Deleted entry: '+entry.title);
+    return entry;
+  }
+  function entryByIdentifier(value){
+    if(value&&typeof value==='object')value=value.name||value.title||value.pdbId||value.entry||'';
+    const key=normText(value);
+    return entries.find(e=>e.name===key||e.title===key||e.pdbId===key)||null;
+  }
+  function removeEntry(value){
+    const entry=entryByIdentifier(value);
+    if(!entry)throw new Error('Entry not found: '+normText(value||''));
+    const removed=deleteEntry(entry);
+    return removed?{name:removed.name,title:removed.title,pdbId:removed.pdbId,fmt:removed.fmt}:null;
   }
   function activateEntry(entry){
     const wasIncluded=entryChecked[entry.name]!==false;
@@ -1848,6 +1860,7 @@ function installFrameSyncedMotion(targetViewer){
     if(type==='focus')return focus(command.selector||command.target||state.selectionSel);
     if(type==='style'){ state.styleRules.push({selector:command.selector||command.target||{},representation:command.representation||command.style||'cartoon',options:command.options||command}); applyStylesFull(true); return state.styleRules[state.styleRules.length-1]; }
     if(type==='hide'){ state.hiddenRules.push({selector:command.selector||command.target||{},representation:'hide',options:command.options||command}); applyStylesFull(true); return state.hiddenRules[state.hiddenRules.length-1]; }
+    if(type==='removeentry'||type==='deleteentry')return removeEntry(command.name||command.entry||command.target);
     throw new Error('Unsupported run() command type: '+(type||'-'));
   }
   window.molAgent={
@@ -1861,7 +1874,7 @@ function installFrameSyncedMotion(targetViewer){
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
+    loadUrl, removeEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------
