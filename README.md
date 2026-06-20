@@ -1,6 +1,6 @@
-# Molecular Viewer 8704
+# Molecular Viewer
 
-Static browser molecular viewer served from `/home/nam114/test_visualizer` on port 8704.
+Static browser molecular viewer for protein and molecular structure inspection.
 
 Runtime layout:
 
@@ -8,7 +8,6 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `assets/3Dmol-min.js`: local 3Dmol dependency
-- `data/8UCD.pdb`, `data/steap1_complex_seed2.pdb`: built-in structures
 
 ## Purpose Of This Manual
 
@@ -52,8 +51,6 @@ Expected initial state:
 
 ```js
 {
-  file: "8UCD",
-  atoms: 8058,
   mousePreset: "select-left",
   mouseActions: {
     buttons: {left: "select", right: "rotate", middle: "pan"},
@@ -335,25 +332,14 @@ Default `select-left` behavior:
 
 ## Loading Structures
 
-Load the built-in 8UCD:
+Load any structure URL that the deployed server makes available:
 
 ```js
-await molAgent.loadUrl("data/8UCD.pdb", "pdb", "8UCD", "8UCD", "8UCD");
+await molAgent.loadUrl("path/to/structure.pdb", "pdb", "structure-id", "Display Title", "");
 molAgent.getState();
 ```
 
-Load the built-in prediction structure:
-
-```js
-await molAgent.loadUrl(
-  "data/steap1_complex_seed2.pdb",
-  "pdb",
-  "steap1_complex_seed2",
-  "Prediction",
-  ""
-);
-molAgent.getState();
-```
+Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
 
 Loading a structure clears current selection/style/interactions and rebuilds Entries/Hierarchy.
 
@@ -418,8 +404,8 @@ When validating the visible UI manually or through any generic browser automatio
 
 1. Open the page.
 2. Wait until `window.molAgent` exists.
-3. Verify `molAgent.getState().file === "8UCD"`.
-4. Verify `molAgent.getState().atoms` is about `8058`.
+3. Verify `molAgent.getState().file` is populated.
+4. Verify `molAgent.getState().atoms` is greater than `0`.
 5. Open the visible `Settings` button.
 6. Confirm the Settings panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
 7. Confirm the browser console has no errors.
@@ -441,4 +427,3 @@ molAgent.model();
 - The file server only serves static files.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.
-- Do not delete `.cpu_prj.code-workspace`; it is the user's VS Code workspace and is intentionally gitignored.
