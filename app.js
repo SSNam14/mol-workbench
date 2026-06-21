@@ -84,6 +84,7 @@ function boot(){
   let lineSelectionStyleMaskActive = false;
   let hierarchyRows = [];
   let hierarchySelectionAnchorKey = '';
+  let hierarchyContextMenu = null;
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
@@ -2090,9 +2091,62 @@ function boot(){
     if(!serials||!serials.length){ clearSelection(); return; }
     setSelection({serial:serials},{});
   }
+  function closeHierarchyContextMenu(){
+    if(hierarchyContextMenu)hierarchyContextMenu.hidden=true;
+  }
+  function deleteHierarchySelection(){
+    const selected=currentSelectionToolbarAtoms();
+    if(!selected.length)return;
+    hideSelectionToolbarAtoms();
+    setStatus('Deleted from view: '+selected.length.toLocaleString()+' atoms');
+  }
+  function ensureHierarchyContextMenu(){
+    if(hierarchyContextMenu)return hierarchyContextMenu;
+    const menu=document.createElement('div');
+    menu.className='hierarchy-context-menu';
+    menu.hidden=true;
+    const del=document.createElement('button');
+    del.type='button';
+    del.textContent='Delete';
+    del.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      closeHierarchyContextMenu();
+      deleteHierarchySelection();
+    };
+    menu.appendChild(del);
+    menu.onclick=function(e){ e.stopPropagation(); };
+    document.body.appendChild(menu);
+    hierarchyContextMenu=menu;
+    return menu;
+  }
+  function showHierarchyContextMenu(x,y){
+    const menu=ensureHierarchyContextMenu();
+    menu.hidden=false;
+    menu.style.left='0px';
+    menu.style.top='0px';
+    const rect=menu.getBoundingClientRect();
+    const left=Math.min(Math.max(0,x),Math.max(0,window.innerWidth-rect.width-4));
+    const top=Math.min(Math.max(0,y),Math.max(0,window.innerHeight-rect.height-4));
+    menu.style.left=left+'px';
+    menu.style.top=top+'px';
+  }
+  function hierarchyContextRow(row,e){
+    const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
+    if(!serials||!serials.length)return;
+    e.preventDefault();
+    e.stopPropagation();
+    const selectedSerials=new Set(serialsForAtoms(selectionAtoms));
+    if(!hierarchyMatchSelected(match,selectedSerials)){
+      hierarchySelectionAnchorKey=hierarchyRowKey(row);
+      setHierarchySerialSelection(serials.slice());
+    }
+    showHierarchyContextMenu(e.clientX,e.clientY);
+  }
   function hierarchySelectRow(row,e){
     const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
     if(!serials||!serials.length)return;
+    closeHierarchyContextMenu();
     const key=hierarchyRowKey(row);
     if(e&&e.shiftKey){
       const rangeSerials=uniqueHierarchySerials(hierarchyRowsInRange(row));
@@ -2152,6 +2206,7 @@ function boot(){
     cnt.style.cssText='color:#777;font-size:10px;flex:none';
     row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
     row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
     return row;
   }
   function syncHierarchySelectionHighlight(){
@@ -2237,6 +2292,7 @@ function boot(){
       toggleHierarchyCollapse(entry.name,collapsed);
     };
     row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
     return row;
   }
   function hierarchySectionHeaderRow(opts){
@@ -2260,6 +2316,7 @@ function boot(){
       toggleHierarchyCollapse(opts.collapseKey,opts.collapsed);
     };
     row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
     return row;
   }
   function buildHierarchy(){
@@ -3773,8 +3830,12 @@ function installFrameSyncedMotion(targetViewer){
       return;
     }
     if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
-    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
+    if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
+  document.addEventListener('pointerdown',function(e){
+    if(hierarchyContextMenu&&!hierarchyContextMenu.hidden&&!hierarchyContextMenu.contains(e.target))closeHierarchyContextMenu();
+  },true);
+  document.addEventListener('scroll',closeHierarchyContextMenu,true);
 
   $('interPanel').hidden=true;
   buildInterPanel();
