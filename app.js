@@ -2067,7 +2067,7 @@ function boot(){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
     if(opts.match){
-      row.__hierarchyMatch=opts.match;
+      row.__hierarchyMatch=hierarchyMatch(opts.match.type,opts.match.key,opts.atoms);
       hierarchyRows.push(row);
     }
     row.style.cssText='display:flex;align-items:center;gap:7px;min-height:20px;padding:0 8px 0 '+(opts.indent||34)+'px;font-size:11.5px;cursor:pointer';
@@ -2096,25 +2096,11 @@ function boot(){
   function syncHierarchySelectionHighlight(){
     const tree=$('hierarchyTree');
     if(!tree)return;
-    const chainKeys=new Set(),groupKeys=new Set(),entryKeys=new Set(),sectionKeys=new Set();
-    (selectionAtoms||[]).forEach(a=>{
-      if(!a)return;
-      entryKeys.add(a._entryName||'');
-      sectionKeys.add(hierarchySectionKey(a._entryName||'',atomCategory(a)));
-      chainKeys.add(chainVisibilityKey(a._entryName,a.chain));
-      groupKeys.add(groupVisibilityKeyFromAtom(a));
-    });
+    const selectedSerials=new Set(serialsForAtoms(selectionAtoms));
     const rows=hierarchyRows.length?hierarchyRows:Array.from(tree.querySelectorAll('[data-row]'));
     rows.forEach(row=>{
       const m=row.__hierarchyMatch;
-      let on=false;
-      if(m){
-        if(m.type==='chain')on=chainKeys.has(m.key);
-        else if(m.type==='group')on=groupKeys.has(m.key);
-        else if(m.type==='entry')on=entryKeys.has(m.key);
-        else if(m.type==='section')on=sectionKeys.has(m.key);
-      }
-      row.classList.toggle('is-selected',on);
+      row.classList.toggle('is-selected',hierarchyMatchSelected(m,selectedSerials));
     });
   }
   function residueSortValue(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
@@ -2138,6 +2124,22 @@ function boot(){
   }
   function residueGroupKey(a){ return [a._entryName||'',a.chain||'',a.resn||'',a.resi==null?'':a.resi].join('\u0001'); }
   function hierarchySectionKey(entryName,section){ return (entryName||'')+'\u0001section\u0001'+(section||''); }
+  function hierarchySerials(list){
+    const out=[],seen=new Set();
+    (list||[]).forEach(a=>{
+      if(!a||a.serial==null||seen.has(a.serial))return;
+      seen.add(a.serial);
+      out.push(a.serial);
+    });
+    return out;
+  }
+  function hierarchyMatch(type,key,list){ return {type,key,serials:hierarchySerials(list)}; }
+  function hierarchyMatchSelected(match,selectedSerials){
+    const serials=match&&match.serials;
+    if(!serials||!serials.length||!selectedSerials||!selectedSerials.size)return false;
+    if(serials.length>selectedSerials.size)return false;
+    return serials.every(s=>selectedSerials.has(s));
+  }
   function hierarchyAtomsFromGroups(groups){
     const out=[];
     (groups||[]).forEach(g=>{ (g&&g.atoms||[]).forEach(a=>out.push(a)); });
@@ -2162,10 +2164,10 @@ function boot(){
     return arrow;
   }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
-  function entryHeaderRow(entry,count,collapsed){
+  function entryHeaderRow(entry,count,collapsed,entryAtoms){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
-    row.__hierarchyMatch={type:'entry',key:entry.name};
+    row.__hierarchyMatch=hierarchyMatch('entry',entry.name,entryAtoms);
     hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:700;border-top:1px solid #242424;background:#2d2d2d;cursor:pointer';
     row.title='Select entry';
@@ -2184,7 +2186,7 @@ function boot(){
   function hierarchySectionHeaderRow(opts){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
-    row.__hierarchyMatch={type:'section',key:hierarchySectionKey(opts.entryName,opts.section)};
+    row.__hierarchyMatch=hierarchyMatch('section',hierarchySectionKey(opts.entryName,opts.section),opts.atoms);
     hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:21px;padding:0 8px 0 '+(opts.indent||22)+'px;font-size:11.5px;cursor:pointer';
     row.title='Select '+opts.label;
@@ -2214,7 +2216,7 @@ function boot(){
       const hierarchy=record&&record.hierarchy?record.hierarchy:buildEntryHierarchyCache(entry,entryAtoms);
       const counts=hierarchy.counts||{protein:0,ligands:0,solvents:0,other:0};
       const collapsed=state.hierarchyCollapsed[entry.name]===true;
-      tree.appendChild(entryHeaderRow(entry,entryAtoms.length,collapsed));
+      tree.appendChild(entryHeaderRow(entry,entryAtoms.length,collapsed,entryAtoms));
       if(collapsed)return;
 
       if(counts.ligands){
@@ -2223,7 +2225,7 @@ function boot(){
         if(!collapsedSection){
           hierarchy.ligands.forEach(g=>{
             const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
           });
         }
       }
@@ -2241,6 +2243,7 @@ function boot(){
               color:chainColor(g.chain),
               indent:34,
               match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
+              atoms:g.atoms,
               checkbox:true,
               checked:chainVisibilityValue(g.entry,g.chain),
               oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
@@ -2256,7 +2259,7 @@ function boot(){
         if(!collapsedSection){
           hierarchy.solvents.forEach(g=>{
             const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
           });
         }
       }
@@ -2267,7 +2270,7 @@ function boot(){
         if(!collapsedSection){
           hierarchy.other.forEach(g=>{
             const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
           });
         }
       }
