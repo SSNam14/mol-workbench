@@ -17,6 +17,7 @@ PREFERENCES_PATH = STATE_DIR / "preferences.json"
 INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
 MAX_SESSION_BYTES = 500 * 1024 * 1024
+MAX_SESSION_STATE_BYTES = 64 * 1024
 MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 SESSION_SCHEMA = "viewer-session-v1"
@@ -295,6 +296,29 @@ def remove_session_entry(name):
     return next_session
 
 
+def update_session_state(value):
+    if not isinstance(value, dict):
+        return None
+    session = load_session_or_legacy()
+    if not session:
+        return None
+    entries = session.get("entries", [])
+    names = {entry["name"] for entry in entries}
+    included = value.get("includedEntries")
+    if isinstance(included, list):
+        included_entries = [str(name) for name in included if str(name) in names]
+    else:
+        included_entries = [name for name in session.get("includedEntries", []) if name in names]
+    if not included_entries and entries:
+        included_entries = [entries[0]["name"]]
+    active = str(value.get("activeEntry") or session.get("activeEntry") or "").strip()
+    if active not in names:
+        active = included_entries[0] if included_entries else (entries[0]["name"] if entries else "")
+    next_session = normalize_session({"entries": entries, "includedEntries": included_entries, "activeEntry": active})
+    write_session(next_session)
+    return next_session
+
+
 class ViewerHandler(SimpleHTTPRequestHandler):
     server_version = "MolecularViewerHTTP/1.0"
 
@@ -343,6 +367,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session-entry":
             self.handle_put_session_entry()
             return
+        if path == "/api/session-state":
+            self.handle_put_session_state()
+            return
         if path == "/api/preferences":
             self.handle_put_preferences()
             return
@@ -361,6 +388,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/session-entry":
             self.handle_put_session_entry()
+            return
+        if path == "/api/session-state":
+            self.handle_put_session_state()
             return
         if path == "/api/preferences":
             self.handle_put_preferences()
@@ -440,6 +470,20 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_structure"})
             return
         session = upsert_session_entry(entry)
+        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+
+    def handle_put_session_state(self):
+        payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
+        if payload is None:
+            return
+        try:
+            session = update_session_state(payload)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        if not session:
+            self.send_json(404, {"error": "not_found"})
+            return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_get_preferences(self):
