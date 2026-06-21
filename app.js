@@ -50,6 +50,9 @@ function boot(){
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
+  const ATOM_REP_VALUES = ['line','stick','sphere','cpk'];
+  const ATOM_REP_OPTIONS = new Set(ATOM_REP_VALUES);
+  const BACKBONE_REP_OPTIONS = new Set(['cartoon','tube','off']);
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT = 1500;
@@ -180,6 +183,13 @@ function boot(){
       schema:'viewer-preferences-v1',
       mousePreset:state.mousePreset,
       mouse:cloneMouseSettings(),
+      representations:{
+        proteinBackbone:state.baseProtein,
+        proteinAtoms:state.proteinAtoms,
+        ligand:state.ligand,
+        solvent:state.solvent,
+        other:state.other
+      },
       chainColors:Object.assign({},chainColors),
       atomColors:Object.assign({},elemColors),
       carbonByChain:state.carbonByChain
@@ -199,8 +209,36 @@ function boot(){
       savePreferencesNow();
     },150);
   }
+  function normalizedBackboneRepresentation(value,fallback){
+    let rep=normText(value||fallback).toLowerCase();
+    if(rep==='hide')rep='off';
+    return BACKBONE_REP_OPTIONS.has(rep)?rep:fallback;
+  }
+  function normalizedAtomRepresentation(value,fallback){
+    let rep=normText(value||fallback).toLowerCase();
+    if(rep==='hide')rep='off';
+    return rep==='off'||ATOM_REP_OPTIONS.has(rep)?rep:fallback;
+  }
+  function syncRepresentationControls(){
+    if($('repBackbone'))$('repBackbone').value=state.baseProtein;
+    if($('repProtein'))$('repProtein').value=state.proteinAtoms;
+    if($('repLigand'))$('repLigand').value=state.ligand;
+    if($('repSolvent'))$('repSolvent').value=state.solvent;
+    if($('repOther'))$('repOther').value=state.other;
+  }
+  function applyRepresentationPreferences(payload){
+    const reps=payload&&payload.representations;
+    if(!reps||typeof reps!=='object')return;
+    state.baseProtein=normalizedBackboneRepresentation(reps.proteinBackbone||reps.baseProtein,state.baseProtein);
+    state.proteinAtoms=normalizedAtomRepresentation(reps.proteinAtoms,state.proteinAtoms);
+    state.ligand=normalizedAtomRepresentation(reps.ligand,state.ligand);
+    state.solvent=normalizedAtomRepresentation(reps.solvent,state.solvent);
+    state.other=normalizedAtomRepresentation(reps.other,state.other);
+    syncRepresentationControls();
+  }
   function applyPreferences(payload){
     if(!payload||typeof payload!=='object')return null;
+    applyRepresentationPreferences(payload);
     if(payload.chainColors&&typeof payload.chainColors==='object'){
       Object.keys(chainColors).forEach(k=>delete chainColors[k]);
       Object.assign(chainColors,defaultChainColors);
@@ -1242,7 +1280,7 @@ function boot(){
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
-  const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
+  const ATOM_REPS=new Set(ATOM_REP_VALUES);
   let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
   function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; proteinResidueLikeCache=null; }
   function categorySerials(){
@@ -3304,30 +3342,34 @@ function installFrameSyncedMotion(targetViewer){
     return cloneMouseSettings();
   }
   function clearStyles(){ state.styleRules=[]; state.hiddenRules=[]; applyStylesFull(true); }
-  function setProteinBackboneStyle(representation){
+  function setProteinBackboneStyle(representation,opts){
+    opts=opts||{};
     let rep=normText(representation||'cartoon').toLowerCase();
     if(rep==='hide')rep='off';
     state.baseProtein=(rep==='tube'||rep==='off')?rep:'cartoon';
     if($('repBackbone'))$('repBackbone').value=state.baseProtein;
     applyStylesFull(true);
+    if(opts.persist!==false)savePreferencesNow();
     return state.baseProtein;
   }
-  function setProteinAtomStyle(representation){
+  function setProteinAtomStyle(representation,opts){
+    opts=opts||{};
     let rep=normText(representation||'off').toLowerCase();
     if(rep==='hide')rep='off';
     state.proteinAtoms=ATOM_REPS.has(rep)?rep:'off';
     if($('repProtein'))$('repProtein').value=state.proteinAtoms;
     applyStylesFull(true);
+    if(opts.persist!==false)savePreferencesNow();
     return state.proteinAtoms;
   }
-  function setBaseStyle(representation){
+  function setBaseStyle(representation,opts){
     const rep=normText(representation||'cartoon').toLowerCase();
-    if(ATOM_REPS.has(rep))return setProteinAtomStyle(rep);
-    return setProteinBackboneStyle(rep);
+    if(ATOM_REPS.has(rep))return setProteinAtomStyle(rep,opts);
+    return setProteinBackboneStyle(rep,opts);
   }
-  function setLigandStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.ligand=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repLigand'))$('repLigand').value=state.ligand; applyStylesFull(true); return state.ligand; }
-  function setSolventStyle(representation){ let rep=normText(representation||'off').toLowerCase(); if(rep==='hide')rep='off'; state.solvent=(rep==='off'||ATOM_REPS.has(rep))?rep:'off'; if($('repSolvent'))$('repSolvent').value=state.solvent; applyStylesFull(true); return state.solvent; }
-  function setOtherStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.other=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repOther'))$('repOther').value=state.other; applyStylesFull(true); return state.other; }
+  function setLigandStyle(representation,opts){ opts=opts||{}; let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.ligand=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repLigand'))$('repLigand').value=state.ligand; applyStylesFull(true); if(opts.persist!==false)savePreferencesNow(); return state.ligand; }
+  function setSolventStyle(representation,opts){ opts=opts||{}; let rep=normText(representation||'off').toLowerCase(); if(rep==='hide')rep='off'; state.solvent=(rep==='off'||ATOM_REPS.has(rep))?rep:'off'; if($('repSolvent'))$('repSolvent').value=state.solvent; applyStylesFull(true); if(opts.persist!==false)savePreferencesNow(); return state.solvent; }
+  function setOtherStyle(representation,opts){ opts=opts||{}; let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.other=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repOther'))$('repOther').value=state.other; applyStylesFull(true); if(opts.persist!==false)savePreferencesNow(); return state.other; }
   function shouldBusyForStyleChange(rep){
     const r=normText(rep).toLowerCase();
     return atoms.length>=HUGE_FIT_ATOM_LIMIT||(r==='line'&&atoms.length>=20000);

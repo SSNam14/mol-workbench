@@ -26,6 +26,9 @@ INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
 MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
 MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
 MOUSE_PRESETS = {"select-left", "custom", "default"}
+BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
+ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
+ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
 CHAIN_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 ELEMENT_IDS = (
     "H", "B", "C", "N", "O", "F", "SI", "P", "S", "CL", "BR", "I",
@@ -132,6 +135,32 @@ def normalize_preferences(value):
         if wheel not in MOUSE_WHEEL_ACTIONS:
             return None
         out["mouse"] = {"buttons": normalized_buttons, "wheel": wheel}
+
+    representations = value.get("representations")
+    if representations is not None:
+        if not isinstance(representations, dict):
+            return None
+        normalized_representations = {}
+        protein_backbone = str(
+            representations.get("proteinBackbone", representations.get("baseProtein", ""))
+        ).strip().lower()
+        if protein_backbone:
+            if protein_backbone == "hide":
+                protein_backbone = "off"
+            if protein_backbone not in BACKBONE_REPRESENTATIONS:
+                return None
+            normalized_representations["proteinBackbone"] = protein_backbone
+        for key in ("proteinAtoms", "ligand", "solvent", "other"):
+            rep = str(representations.get(key, "")).strip().lower()
+            if not rep:
+                continue
+            if rep == "hide":
+                rep = "off"
+            if rep not in ATOM_REPRESENTATIONS_WITH_OFF:
+                return None
+            normalized_representations[key] = rep
+        if normalized_representations:
+            out["representations"] = normalized_representations
 
     chain_colors = value.get("chainColors")
     if chain_colors is not None:

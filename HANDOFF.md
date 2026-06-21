@@ -41,6 +41,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 ## Must-Have Behavior
 
 - Initial load restores the full viewer session from server storage when available; otherwise it opens the bundled sample structure.
+- Global representation choices from the top toolbar are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.

@@ -77,7 +77,7 @@ Expected first-run default state:
 }
 ```
 
-The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`. If `/api/preferences` already contains saved settings, `mousePreset`, `mouseActions`, chain colors, and carbon-by-chain coloring are restored from the server during startup.
+The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`. If `/api/preferences` already contains saved settings, global representation choices, `mousePreset`, `mouseActions`, chain colors, and carbon-by-chain coloring are restored from the server during startup.
 
 ## Selector Objects
 
@@ -495,6 +495,7 @@ molAgent.resetColorSchemes();
 
 Preference persistence covers:
 
+- global representation choices for protein backbone, protein atoms, ligand, solvent, and other atoms
 - mouse preset/action assignment
 - chain colors `A` through `Z`
 - atom colors for the Maestro-derived editable element set returned by `Object.keys(molAgent.getAtomColors())`
