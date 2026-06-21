@@ -2153,6 +2153,14 @@ function boot(){
     else state.hierarchyCollapsed[key]=true;
     buildHierarchy();
   }
+  function hierarchyCollapseArrow(collapsed,title){
+    const arrow=document.createElement('span');
+    arrow.className='tree-arrow';
+    arrow.textContent=collapsed?'\u25b8':'\u25be';
+    arrow.title=title;
+    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#8f8f8f;font-weight:400;line-height:1';
+    return arrow;
+  }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
   function entryHeaderRow(entry,count,collapsed){
     const row=document.createElement('div');
@@ -2161,11 +2169,7 @@ function boot(){
     hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:700;border-top:1px solid #242424;background:#2d2d2d;cursor:pointer';
     row.title='Select entry';
-    const arrow=document.createElement('span');
-    arrow.className='tree-arrow';
-    arrow.textContent=collapsed?'\u25b8':'\u25be';
-    arrow.title=collapsed?'Expand entry':'Collapse entry';
-    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none';
+    const arrow=hierarchyCollapseArrow(collapsed,collapsed?'Expand entry':'Collapse entry');
     const lab=document.createElement('span'); lab.textContent=entryTitleForHierarchy(entry); lab.title='Select entry: '+entryTitleForHierarchy(entry); lab.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const cnt=document.createElement('span'); cnt.textContent=count?'('+count+')':''; cnt.style.cssText='color:#777;font-size:10px;font-weight:400;flex:none';
     row.appendChild(arrow); row.appendChild(lab); row.appendChild(cnt);
@@ -2184,11 +2188,7 @@ function boot(){
     hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:21px;padding:0 8px 0 '+(opts.indent||22)+'px;font-size:11.5px;cursor:pointer';
     row.title='Select '+opts.label;
-    const arrow=document.createElement('span');
-    arrow.className='tree-arrow';
-    arrow.textContent=opts.collapsed?'\u25b8':'\u25be';
-    arrow.title=opts.collapsed?'Expand '+opts.label:'Collapse '+opts.label;
-    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#cfcfcf';
+    const arrow=hierarchyCollapseArrow(opts.collapsed,opts.collapsed?'Expand '+opts.label:'Collapse '+opts.label);
     const lab=document.createElement('span');
     lab.textContent=opts.label;
     lab.style.cssText='color:#d4d4d4;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
