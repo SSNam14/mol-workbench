@@ -90,11 +90,12 @@ def normalize_session(value):
         included_entries = [str(name) for name in included if str(name) in names]
     else:
         included_entries = [entry["name"] for entry in entries]
-    if not included_entries:
-        included_entries = [entries[0]["name"]]
-    active = str(value.get("activeEntry") or value.get("currentName") or included_entries[0]).strip()
-    if active not in names:
-        active = included_entries[0]
+    active = str(value.get("activeEntry") or value.get("currentName") or "").strip()
+    if included_entries:
+        if active not in included_entries:
+            active = included_entries[0]
+    else:
+        active = ""
     return {
         "schema": SESSION_SCHEMA,
         "entries": entries,
@@ -248,11 +249,14 @@ def normalize_session_state(value, entries, fallback=None):
         included_entries = [str(name) for name in included if str(name) in names]
     else:
         included_entries = [name for name in fallback.get("includedEntries", []) if name in names]
-    if not included_entries:
+    if not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
     active = str((value if isinstance(value, dict) else {}).get("activeEntry") or fallback.get("activeEntry") or "").strip()
-    if active not in names:
-        active = included_entries[0] if included_entries else (entries[0]["name"] if entries else "")
+    if included_entries:
+        if active not in included_entries:
+            active = included_entries[0]
+    else:
+        active = ""
     return {"schema": SESSION_SCHEMA, "includedEntries": included_entries, "activeEntry": active}
 
 
@@ -352,11 +356,14 @@ def normalize_stored_session_meta(value):
     names = {entry["name"] for entry in entries}
     included = value.get("includedEntries")
     included_entries = [str(name) for name in included if str(name) in names] if isinstance(included, list) else []
-    if entries and not included_entries:
+    if entries and not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
     active = str(value.get("activeEntry") or "").strip()
-    if active not in names:
-        active = included_entries[0] if included_entries else ""
+    if included_entries:
+        if active not in included_entries:
+            active = included_entries[0]
+    else:
+        active = ""
     return {
         "schema": SESSION_SCHEMA,
         "revision": session_revision(),
@@ -458,11 +465,12 @@ def remove_session_entry(name):
             return None
         names = {entry["name"] for entry in entries}
         included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
-        if not included:
-            included = [entries[0]["name"]]
         active = session.get("activeEntry")
-        if active not in names:
-            active = included[0]
+        if included:
+            if active not in included:
+                active = included[0]
+        else:
+            active = ""
         next_session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": active})
         write_session(next_session)
         return next_session

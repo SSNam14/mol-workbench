@@ -18,7 +18,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
-- `data/`: optional bundled sample structures.
+- `data/`: ignored local-only structures. Do not commit molecular structure files to the public repository.
 
 Serve with:
 
@@ -41,12 +41,14 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 
 ## Must-Have Behavior
 
-- Initial load restores the full viewer session from server storage when available; otherwise it opens the bundled sample structure.
+- Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
 - Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
+- An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed and `activeEntry` must be `""`; only a missing `includedEntries` field uses legacy fallback to all entries.
 - Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
+- Persistence failures must be visible through console diagnostics and, for user-visible session/preference operations, status text. Large entry saves must not report success before the actual server write finishes.
 - Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
@@ -55,7 +57,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - CIF files that omit `_atom_site.group_PDB` must still classify standard amino-acid residues with N/CA/C backbone atoms as protein. This fallback is required for Schrodinger-style CIF exports where 3Dmol marks every atom as hetero by default.
 - If a protein CIF lacks HELIX/SHEET or mmCIF secondary-structure annotations, assign a conservative phi/psi-based `ss` fallback after parsing so cartoon display is not all-loop. Do not override structures that already provide helix/sheet annotation.
-- Do not expose hardcoded sample/predicted-structure shortcut buttons in the normal UI. The bundled sample structure is only the empty-session fallback.
+- Do not expose hardcoded sample/predicted-structure shortcut buttons in the normal UI. No molecular structure is bundled for empty-session fallback.
 - Default mouse preset is `select-left`:
   - left click selects
   - left drag performs screen-space range selection
@@ -138,12 +140,20 @@ PUT /api/session-state              # update includedEntries and activeEntry onl
 GET /api/session-meta               # lightweight revision for open-client sync
 ```
 
+`PUT /api/session-state` preserves explicit empty display state:
+
+```json
+{"includedEntries": [], "activeEntry": ""}
+```
+
+Do not convert that payload to "show the first/all entries"; only absent `includedEntries` is legacy fallback.
+
 Common selector examples:
 
 ```js
 {chain: 'H'}
 {chain: 'H', resi: '30-35'}
-{_entryName: 'sample_structure', chain: 'H'}
+{_entryName: 'entry-name', chain: 'H'}
 {serial: [1, 2, 3]}
 {not: {chain: 'A'}}
 {or: [{chain: 'H', resi: '30-35'}, {chain: 'L', resi: '90-95'}]}
@@ -168,6 +178,7 @@ PORT=8704
 node --check app.js
 node --check interaction-worker.js
 python3 -m py_compile server.py
+python3 -m unittest tests.test_session_state
 git diff --check
 curl -sI "http://127.0.0.1:${PORT}/" | head
 curl -sI "http://127.0.0.1:${PORT}/styles.css" | head
