@@ -4,6 +4,8 @@
 import argparse
 import json
 import os
+import tempfile
+import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -13,6 +15,8 @@ ROOT = Path(__file__).resolve().parent
 STATE_DIR = ROOT / ".viewer_state"
 LAST_STRUCTURE_PATH = STATE_DIR / "last_structure.json"
 SESSION_PATH = STATE_DIR / "session.json"
+SESSION_STATE_PATH = STATE_DIR / "session_state.json"
+SESSION_META_PATH = STATE_DIR / "session_meta.json"
 PREFERENCES_PATH = STATE_DIR / "preferences.json"
 INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
@@ -23,6 +27,9 @@ MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 SESSION_SCHEMA = "viewer-session-v1"
 PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
+STATE_LOCK = threading.RLock()
+BLOCKED_STATIC_NAMES = {"server.py", "HANDOFF.md", "README.md"}
+BLOCKED_STATIC_SUFFIXES = {".log", ".pid", ".pyc"}
 MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
 MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
 MOUSE_PRESETS = {"select-left", "custom", "default"}
@@ -192,6 +199,11 @@ def normalize_preferences(value):
 
     if "carbonByChain" in value:
         out["carbonByChain"] = bool(value.get("carbonByChain"))
+    if "backgroundColor" in value:
+        color = normalize_hex_color(value.get("backgroundColor"))
+        if color is None:
+            return None
+        out["backgroundColor"] = color
     return out
 
 
@@ -202,10 +214,19 @@ def load_json(path):
 
 def write_json_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
-    os.replace(tmp_path, path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def legacy_last_structure_session():
@@ -219,16 +240,48 @@ def legacy_last_structure_session():
     return normalize_session({"entries": [entry], "includedEntries": [entry["name"]], "activeEntry": entry["name"]})
 
 
-def load_session_or_legacy():
+def normalize_session_state(value, entries, fallback=None):
+    fallback = fallback or {}
+    names = {entry["name"] for entry in entries}
+    included = value.get("includedEntries") if isinstance(value, dict) else None
+    if isinstance(included, list):
+        included_entries = [str(name) for name in included if str(name) in names]
+    else:
+        included_entries = [name for name in fallback.get("includedEntries", []) if name in names]
+    if not included_entries:
+        included_entries = [entry["name"] for entry in entries]
+    active = str((value if isinstance(value, dict) else {}).get("activeEntry") or fallback.get("activeEntry") or "").strip()
+    if active not in names:
+        active = included_entries[0] if included_entries else (entries[0]["name"] if entries else "")
+    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries, "activeEntry": active}
+
+
+def apply_session_state(session):
+    if not session:
+        return session
     try:
-        session = normalize_session(load_json(SESSION_PATH))
-        if session:
-            return session
+        state = load_json(SESSION_STATE_PATH)
     except FileNotFoundError:
-        pass
+        return session
     except (OSError, json.JSONDecodeError):
         raise
-    return legacy_last_structure_session()
+    normalized = normalize_session_state(state, session.get("entries", []), session)
+    session["includedEntries"] = normalized["includedEntries"]
+    session["activeEntry"] = normalized["activeEntry"]
+    return session
+
+
+def load_session_or_legacy():
+    with STATE_LOCK:
+        try:
+            session = normalize_session(load_json(SESSION_PATH))
+            if session:
+                return apply_session_state(session)
+        except FileNotFoundError:
+            pass
+        except (OSError, json.JSONDecodeError):
+            raise
+        return legacy_last_structure_session()
 
 
 def file_revision(path):
@@ -240,6 +293,9 @@ def file_revision(path):
 
 
 def session_revision():
+    current = file_revision(SESSION_META_PATH)
+    if current:
+        return current
     current = file_revision(SESSION_PATH)
     if current:
         return current
@@ -248,7 +304,6 @@ def session_revision():
 
 
 def session_meta(session=None):
-    session = session or None
     entries = session.get("entries", []) if session else []
     return {
         "schema": SESSION_SCHEMA,
@@ -267,85 +322,165 @@ def session_meta(session=None):
     }
 
 
+def write_session_state(session):
+    state = normalize_session_state(session, session.get("entries", []), session)
+    write_json_atomic(SESSION_STATE_PATH, state)
+
+
+def write_session_meta(session):
+    meta = session_meta(session)
+    meta.pop("revision", None)
+    write_json_atomic(SESSION_META_PATH, meta)
+
+
+def normalize_stored_session_meta(value):
+    if not isinstance(value, dict):
+        return None
+    entries = []
+    for raw in value.get("entries", []):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        entries.append({
+            "name": name,
+            "title": str(raw.get("title") or name).strip() or name,
+            "pdbId": str(raw.get("pdbId") or "").strip(),
+            "fmt": str(raw.get("fmt") or "").strip().lower(),
+        })
+    names = {entry["name"] for entry in entries}
+    included = value.get("includedEntries")
+    included_entries = [str(name) for name in included if str(name) in names] if isinstance(included, list) else []
+    if entries and not included_entries:
+        included_entries = [entry["name"] for entry in entries]
+    active = str(value.get("activeEntry") or "").strip()
+    if active not in names:
+        active = included_entries[0] if included_entries else ""
+    return {
+        "schema": SESSION_SCHEMA,
+        "revision": session_revision(),
+        "entries": entries,
+        "includedEntries": included_entries,
+        "activeEntry": active,
+    }
+
+
+def load_session_meta():
+    with STATE_LOCK:
+        try:
+            meta = normalize_stored_session_meta(load_json(SESSION_META_PATH))
+        except FileNotFoundError:
+            meta = None
+        except (OSError, json.JSONDecodeError):
+            raise
+        if meta:
+            return meta
+        session = load_session_or_legacy()
+        if session:
+            write_session_meta(session)
+            return session_meta(session)
+        return session_meta(None)
+
+
+def load_preferences():
+    with STATE_LOCK:
+        return normalize_preferences(load_json(PREFERENCES_PATH))
+
+
+def write_preferences(preferences):
+    with STATE_LOCK:
+        write_json_atomic(PREFERENCES_PATH, preferences)
+
+
+def static_request_blocked(path):
+    norm = unquote(path or "")
+    segments = [seg for seg in norm.split("/") if seg]
+    if any(seg.startswith(".") or seg == "__pycache__" for seg in segments):
+        return True
+    name = segments[-1] if segments else ""
+    if name in BLOCKED_STATIC_NAMES:
+        return True
+    return any(name.endswith(suffix) for suffix in BLOCKED_STATIC_SUFFIXES)
+
+
 def write_session(session):
-    write_json_atomic(SESSION_PATH, session)
-    active_name = session.get("activeEntry")
-    active = next((entry for entry in session.get("entries", []) if entry.get("name") == active_name), None)
-    if active:
-        write_json_atomic(LAST_STRUCTURE_PATH, {"entry": active})
+    with STATE_LOCK:
+        write_json_atomic(SESSION_PATH, session)
+        write_session_state(session)
+        active_name = session.get("activeEntry")
+        active = next((entry for entry in session.get("entries", []) if entry.get("name") == active_name), None)
+        if active:
+            write_json_atomic(LAST_STRUCTURE_PATH, {"entry": active})
+        write_session_meta(session)
 
 
 def clear_session():
-    for path in (SESSION_PATH, LAST_STRUCTURE_PATH):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+    with STATE_LOCK:
+        for path in (SESSION_PATH, SESSION_STATE_PATH, SESSION_META_PATH, LAST_STRUCTURE_PATH):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def upsert_session_entry(entry):
-    session = load_session_or_legacy()
-    if not session:
-        session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "activeEntry": entry["name"]}
-    entries = session["entries"]
-    for idx, existing in enumerate(entries):
-        if existing.get("name") == entry["name"]:
-            entries[idx] = entry
-            break
-    else:
-        entries.append(entry)
-    included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
-    if entry["name"] not in included:
-        included.append(entry["name"])
-    session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": entry["name"]})
-    write_session(session)
-    return session
+    with STATE_LOCK:
+        session = load_session_or_legacy()
+        if not session:
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "activeEntry": entry["name"]}
+        entries = session["entries"]
+        for idx, existing in enumerate(entries):
+            if existing.get("name") == entry["name"]:
+                entries[idx] = entry
+                break
+        else:
+            entries.append(entry)
+        included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
+        if entry["name"] not in included:
+            included.append(entry["name"])
+        session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": entry["name"]})
+        write_session(session)
+        return session
 
 
 def remove_session_entry(name):
-    session = load_session_or_legacy()
-    if not session:
-        return None
-    target = str(name or "").strip()
-    entries = [entry for entry in session.get("entries", []) if entry.get("name") != target]
-    if len(entries) == len(session.get("entries", [])):
-        return session
-    if not entries:
-        clear_session()
-        return None
-    names = {entry["name"] for entry in entries}
-    included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
-    if not included:
-        included = [entries[0]["name"]]
-    active = session.get("activeEntry")
-    if active not in names:
-        active = included[0]
-    next_session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": active})
-    write_session(next_session)
-    return next_session
+    with STATE_LOCK:
+        session = load_session_or_legacy()
+        if not session:
+            return None
+        target = str(name or "").strip()
+        entries = [entry for entry in session.get("entries", []) if entry.get("name") != target]
+        if len(entries) == len(session.get("entries", [])):
+            return session
+        if not entries:
+            clear_session()
+            return None
+        names = {entry["name"] for entry in entries}
+        included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
+        if not included:
+            included = [entries[0]["name"]]
+        active = session.get("activeEntry")
+        if active not in names:
+            active = included[0]
+        next_session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": active})
+        write_session(next_session)
+        return next_session
 
 
 def update_session_state(value):
-    if not isinstance(value, dict):
-        return None
-    session = load_session_or_legacy()
-    if not session:
-        return None
-    entries = session.get("entries", [])
-    names = {entry["name"] for entry in entries}
-    included = value.get("includedEntries")
-    if isinstance(included, list):
-        included_entries = [str(name) for name in included if str(name) in names]
-    else:
-        included_entries = [name for name in session.get("includedEntries", []) if name in names]
-    if not included_entries and entries:
-        included_entries = [entries[0]["name"]]
-    active = str(value.get("activeEntry") or session.get("activeEntry") or "").strip()
-    if active not in names:
-        active = included_entries[0] if included_entries else (entries[0]["name"] if entries else "")
-    next_session = normalize_session({"entries": entries, "includedEntries": included_entries, "activeEntry": active})
-    write_session(next_session)
-    return next_session
+    with STATE_LOCK:
+        if not isinstance(value, dict):
+            return None
+        session = load_session_or_legacy()
+        if not session:
+            return None
+        entries = session.get("entries", [])
+        state = normalize_session_state(value, entries, session)
+        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"], "activeEntry": state["activeEntry"]})
+        write_session_state(next_session)
+        write_session_meta(next_session)
+        return next_session
 
 
 class ViewerHandler(SimpleHTTPRequestHandler):
@@ -385,6 +520,13 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/interaction-index/"):
             self.handle_get_interaction_index(path.rsplit("/", 1)[-1])
+            return
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+        if static_request_blocked(path):
+            self.send_error(404)
             return
         super().do_GET()
 
@@ -435,7 +577,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         if path == "/api/session":
-            clear_session()
+            try:
+                clear_session()
+            except OSError:
+                self.send_json(500, {"error": "state_write_failed"})
+                return
             self.send_json(200, {"ok": True, "session": session_meta(None)})
             return
         if path.startswith("/api/session-entry/"):
@@ -473,11 +619,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def handle_get_session_meta(self):
         try:
-            session = load_session_or_legacy()
+            meta = load_session_meta()
         except (OSError, json.JSONDecodeError):
             self.send_json(500, {"error": "state_read_failed"})
             return
-        self.send_json(200, session_meta(session))
+        self.send_json(200, meta)
 
     def handle_put_session(self):
         payload = self.read_json_body(MAX_SESSION_BYTES)
@@ -487,7 +633,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not session:
             self.send_json(400, {"error": "invalid_session"})
             return
-        write_session(session)
+        try:
+            write_session(session)
+        except OSError:
+            self.send_json(500, {"error": "state_write_failed"})
+            return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_put_session_entry(self):
@@ -498,7 +648,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not entry:
             self.send_json(400, {"error": "invalid_structure"})
             return
-        session = upsert_session_entry(entry)
+        try:
+            session = upsert_session_entry(entry)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_put_session_state(self):
@@ -517,7 +671,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def handle_get_preferences(self):
         try:
-            preferences = normalize_preferences(load_json(PREFERENCES_PATH))
+            preferences = load_preferences()
         except FileNotFoundError:
             self.send_json(404, {"error": "not_found"})
             return
@@ -538,7 +692,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_preferences"})
             return
         try:
-            write_json_atomic(PREFERENCES_PATH, preferences)
+            write_preferences(preferences)
         except OSError:
             self.send_json(500, {"error": "preferences_write_failed"})
             return
@@ -581,7 +735,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not entry:
             self.send_json(400, {"error": "invalid_structure"})
             return
-        session = upsert_session_entry(entry)
+        try:
+            session = upsert_session_entry(entry)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def interaction_index_path(self, key):
@@ -616,7 +774,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict) or payload.get("schema") != INTERACTION_INDEX_SCHEMA or payload.get("structureKey") != key:
             self.send_json(400, {"error": "invalid_interaction_index"})
             return
-        write_json_atomic(path, payload)
+        try:
+            write_json_atomic(path, payload)
+        except OSError:
+            self.send_json(500, {"error": "cache_write_failed"})
+            return
         self.send_json(200, {"ok": True})
 
 

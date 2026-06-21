@@ -15,7 +15,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
 - `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: shader-backed 3Dmol scene-mesh wide-line renderer. It keeps static segment/cap geometry in the scene and expands width in the vertex shader with world-space width, screen-pixel clamps, and depth testing.
-- `server.py`: static file server plus `/api/session`, lightweight `/api/session-state`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
+- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/`: optional bundled sample structures.
@@ -34,6 +34,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Prefer dense, work-focused molecular-viewer UI over landing-page or explanatory UI.
 - Preserve fast interactive camera behavior. Do not change camera semantics to hide performance problems.
 - Keep settings extensible; the settings panel should be able to host future visual/input preferences without restructuring.
+- The project server may be bound to a shared network address for workstation access, so it must not statically expose dot-directories, `.viewer_state`, git metadata, logs, server source, or project memory/docs.
 - Keep control surfaces explicit. Empty select clicks and empty range-select drags in the viewer clear the current selection.
 - Find/search misses should not clear the current selection; they should report no match and leave selection state unchanged.
 - Keep `window.molAgent` as the structured automation/API surface. Do not add free-form natural-language command execution.
@@ -41,13 +42,13 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 ## Must-Have Behavior
 
 - Initial load restores the full viewer session from server storage when available; otherwise it opens the bundled sample structure.
-- Global representation choices from the top toolbar are stored in server-side preferences and restored before the initial structure is displayed.
+- Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
-- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state` instead of rewriting full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
-- Entry row `X` buttons delete entries and must update the server-side session so deleted entries do not reappear after refresh.
-- Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh.
+- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
+- Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
+- Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
 - Loading/displaying entries starts nonbonded interaction indexing per visible entry in a Web Worker. Finished indexes are cached on the server by structure key and retained in memory by entry, so switching entries or adding another displayed entry does not discard existing interaction display.
 - When multiple entries are displayed, render the ready interaction indexes for each visible entry and never compute cross-entry interactions. Index worker builds are queued to avoid starting several heavy builds at once.
@@ -67,7 +68,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.
 - Box selection respects selection mode:
   - `atom`: atoms inside the box
-  - `residue` / legacy internal `range`: whole touched residues
+  - `residue`: whole touched residues
   - `chain`: whole touched chains
   - `model`: all atoms in touched entries
 - Pressing `z` toggles between focusing the current selection and overview.

@@ -9,7 +9,7 @@ Runtime layout:
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
 - `wide-lines.js`: shader-backed 3Dmol scene-mesh renderer for app-managed line representations with world-space width, screen-pixel clamps, and depth testing
-- `server.py`: static file server plus persisted viewer-session, preferences, and interaction-index APIs
+- `server.py`: static file server plus persisted viewer-session, preference, and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
 
@@ -28,7 +28,7 @@ PORT=8704
 python3 server.py --port "$PORT" --bind 0.0.0.0
 ```
 
-Use this server instead of `python3 -m http.server`; the generic static server cannot persist the loaded structure session, preferences, or server-side interaction indexes.
+Use this server instead of `python3 -m http.server`; the generic static server cannot persist the loaded structure session, preferences, or server-side interaction indexes. The project server also blocks static access to dot-directories, `.viewer_state`, git metadata, logs, server source, and project memory/docs when it is bound to a shared network address.
 
 ## Control Surface
 
@@ -77,7 +77,7 @@ Expected first-run default state:
 }
 ```
 
-The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`. If `/api/preferences` already contains saved settings, global representation choices, `mousePreset`, `mouseActions`, chain colors, and carbon-by-chain coloring are restored from the server during startup.
+The exact object also includes current `selection`, `selectionHighlight`, `styleRules`, and `hiddenRules`. If `/api/preferences` already contains saved settings, global representation choices, `mousePreset`, `mouseActions`, chain colors, atom colors, carbon-by-chain coloring, and background color are restored from the server during startup.
 
 ## Selector Objects
 
@@ -500,6 +500,7 @@ Preference persistence covers:
 - chain colors `A` through `Z`
 - atom colors for the Maestro-derived editable element set returned by `Object.keys(molAgent.getAtomColors())`
 - whether protein carbon atoms use chain colors
+- background color
 
 The bundled 3Dmol color scheme registry also contains these built-in `colorscheme` names: `default`, `rasmol`, `Jmol`, `greenCarbon`, `cyanCarbon`, `magentaCarbon`, `yellowCarbon`, `whiteCarbon`, `orangeCarbon`, `purpleCarbon`, `blueCarbon`, `ssPyMol`, `ssJmol`, `amino`, `shapely`, `nucleic`, `chain`, and `chainHetatm`. Separately, spectrum coloring uses the gradient registry (`rwb`, `RWB`, `roygb`, `ROYGB`, `sinebow`, `linear`, and `linear_<color>_<color>...` custom gradients).
 
@@ -523,15 +524,15 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
-Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry and updates the persisted server session.
+Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry, disposes its cached 3Dmol model, and updates the persisted server session.
 
 The viewer starts background interaction indexing for each displayed entry. When multiple entries are displayed, each ready entry's own interactions can be rendered at the same time; cross-entry interactions are intentionally not generated.
 
-The viewer stores the loaded entry list, included-entry state, and active entry on the server through `/api/session`. A browser refresh restores that full session first; the bundled sample structure is only used when no saved session exists.
+The viewer stores the loaded entry list on the server through `/api/session`; included-entry state and active entry are also mirrored in small server-side state/meta files. A browser refresh restores the full session first; the bundled sample structure is only used when no saved session exists.
 
-Entries checkbox toggles update only `includedEntries` and `activeEntry` through lightweight `/api/session-state`. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
+Entries checkbox toggles update only `includedEntries` and `activeEntry` through lightweight `/api/session-state`. This endpoint updates small state/meta files and does not rewrite full structure payloads. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
 
-Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
+Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. If a full session reload fails, the client retries the same revision on the next poll rather than marking it handled. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
 
 `/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
 
@@ -672,6 +673,7 @@ PY
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, lightweight `/api/session-state`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- Static serving intentionally blocks dot-directories, `.viewer_state`, git metadata, logs, pid files, server source, and project memory/docs. Do not bypass this with a generic static server for normal use.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.
