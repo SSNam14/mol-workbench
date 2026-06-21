@@ -18,7 +18,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
-- `data/`: optional bundled sample structures.
+- `data/`: ignored local-only structures. Do not commit molecular structure files to the public repository.
 
 Serve with:
 
@@ -41,7 +41,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 
 ## Must-Have Behavior
 
-- Initial load restores the full viewer session from server storage when available; otherwise it opens the bundled sample structure.
+- Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
 - Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
@@ -57,7 +57,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - CIF files that omit `_atom_site.group_PDB` must still classify standard amino-acid residues with N/CA/C backbone atoms as protein. This fallback is required for Schrodinger-style CIF exports where 3Dmol marks every atom as hetero by default.
 - If a protein CIF lacks HELIX/SHEET or mmCIF secondary-structure annotations, assign a conservative phi/psi-based `ss` fallback after parsing so cartoon display is not all-loop. Do not override structures that already provide helix/sheet annotation.
-- Do not expose hardcoded sample/predicted-structure shortcut buttons in the normal UI. The bundled sample structure is only the empty-session fallback.
+- Do not expose hardcoded sample/predicted-structure shortcut buttons in the normal UI. No molecular structure is bundled for empty-session fallback.
 - Default mouse preset is `select-left`:
   - left click selects
   - left drag performs screen-space range selection
@@ -153,7 +153,7 @@ Common selector examples:
 ```js
 {chain: 'H'}
 {chain: 'H', resi: '30-35'}
-{_entryName: 'sample_structure', chain: 'H'}
+{_entryName: 'entry-name', chain: 'H'}
 {serial: [1, 2, 3]}
 {not: {chain: 'A'}}
 {or: [{chain: 'H', resi: '30-35'}, {chain: 'L', resi: '90-95'}]}

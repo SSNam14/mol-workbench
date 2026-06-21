@@ -2864,7 +2864,9 @@ function boot(){
     if(saved){
       try{ restoreViewerSession(saved); return; }catch(err){}
     }
-    return loadUrl('data/sample_structure.pdb','pdb','sample_structure','Sample structure','');
+    restoreEmptyViewerSession();
+    setStatus('Open a structure file to begin.');
+    return null;
   }
 
   const CLIP_MIN=-200, CLIP_MAX=200, CLIP_GAP=2;

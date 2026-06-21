@@ -2,6 +2,7 @@ server_*.log
 server_*.pid
 .viewer_state/
 .cpu_prj.code-workspace
+data/
 *.backup
 *.bak
 *.tmp
