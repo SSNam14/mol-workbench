@@ -3417,9 +3417,6 @@ function installFrameSyncedMotion(targetViewer){
   $('interBtn').onclick=toggleInterPanel;
   $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
-  $('btnFit').onclick=function(){ fitVisible({render:true}); };
-  $('btnFocus').onclick=function(){ focus(state.selectionSel); };
-  $('btnClear').onclick=clearSelection;
   document.querySelectorAll('[data-selection-action]').forEach(btn=>{
     btn.onclick=function(){ runSelectionToolbarAction(btn.getAttribute('data-selection-action')); };
   });
