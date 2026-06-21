@@ -448,7 +448,7 @@ Default `select-left` behavior:
 - middle drag: pan
 - wheel: zoom
 
-Mouse action changes made through the Preference panel or `molAgent.setMouseActions(...)` are saved to the server through `/api/preferences`.
+Mouse action changes made through the Preference panel or `molAgent.setMouseActions(...)` are saved to the server through `/api/preferences`. Global representation choices changed through the top toolbar are saved through the same preferences API.
 
 ## Preference Commands
 
@@ -600,8 +600,8 @@ When validating the visible UI manually or through any generic browser automatio
 2. Wait until `window.molAgent` exists.
 3. Verify `molAgent.getState().file` is populated.
 4. Verify `molAgent.getState().atoms` is greater than `0`.
-5. Open the visible `Settings` button.
-6. Confirm the Settings panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
+5. Open the visible `Preference` button.
+6. Confirm the Preference panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
 7. Load a second entry if available and confirm `molAgent.getState().includedEntries.length` can be greater than `1`.
 8. Confirm the browser console has no errors.
 

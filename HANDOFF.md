@@ -62,7 +62,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - right drag rotates
   - middle-button drag pans
   - wheel zooms
-- Custom mouse actions are configurable from Settings and through `molAgent.setMouseActions(...)`.
+- Custom mouse actions are configurable from the Preference panel and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
 - Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.
 - Box selection respects selection mode:
@@ -75,6 +75,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.
 - With protein atom display `off`, selected protein atoms are highlighted as app-managed wide lines over the cartoon. If selected atoms are already displayed as atom-level `line`, `stick`, `sphere`, or `cpk`, selection follows that visible representation using the selection color.
 - Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.
+- The visible toolbar should stay compact. Global representation controls are text-label dropdowns, and redundant Fit/Focus/Clear buttons are intentionally omitted because `z`, empty-click/Escape, and `molAgent` cover those actions.
 - Selection changes must stay incremental. Default line selection uses the `wide-lines.js` selection collection for atom-level `none`/`line` groups and temporary 3Dmol style overlays for visible stick/sphere/cpk groups. Explicit non-line highlight modes may still use removable shapes for small selections and a temporary style overlay for large selections. Do not trigger full protein/ligand restyling on every selection event.
 - Large range selections must avoid O(atom count * selector size) matching. Large `serial: [...]` selectors use cached Set lookup and reuse the selected atom list for highlight/status updates.
 - `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to static segment/cap mesh geometry inside the 3Dmol scene, so they participate in depth testing. The vertex shader expands the geometry in screen space from world-space width, avoiding per-frame JavaScript projection/vertex rewrites. Width scales with zoom/depth; current screen-pixel clamps keep molecular lines around 2-4 px. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
@@ -186,4 +187,4 @@ Expected:
 - no console errors
 - `window.molAgent` exists
 - initial structure name is populated and atom count is greater than zero
-- `Settings` opens and shows mouse actions
+- `Preference` opens and shows mouse actions
