@@ -61,8 +61,8 @@ function boot(){
   const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick', solvent:'off', other:'stick',
-    styleRules:[], hiddenRules:[], interactionRules:[],
-    selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue', rangeAnchor:null,
+    styleRules:[], hiddenRules:[],
+    selectionSel:null, selectionRepresentation:'line', selectionOptions:defaultSelectionOptions(), selectionMode:'residue',
     focusTarget:null, mousePreset:'select-left',
     visibility:{protein:true,ligands:true,solvents:true,other:true}, chainVisible:{}, groupVisible:{}, hierarchyCollapsed:{},
     bgColor:'#000000', carbonByChain:true, hbondCutoff:2.8, saltCutoff:5.0,
@@ -188,7 +188,8 @@ function boot(){
       },
       chainColors:Object.assign({},chainColors),
       atomColors:Object.assign({},elemColors),
-      carbonByChain:state.carbonByChain
+      carbonByChain:state.carbonByChain,
+      backgroundColor:toHex(state.bgColor)
     };
   }
   function savePreferencesNow(){
@@ -252,6 +253,7 @@ function boot(){
       });
     }
     if(typeof payload.carbonByChain==='boolean')state.carbonByChain=payload.carbonByChain;
+    if(payload.backgroundColor)setBackground(payload.backgroundColor,{persist:false});
     if(payload.mousePreset==='default')setMousePreset('default',{persist:false,status:false});
     else if(payload.mouse)setMouseActions(payload.mouse,{persist:false,status:false,preset:payload.mousePreset||'custom'});
     else if(payload.mousePreset==='select-left')setMousePreset('select-left',{persist:false,status:false});
@@ -321,6 +323,11 @@ function boot(){
     suppressSessionPollUntil=Date.now()+1500;
     return fetch(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
   }
+  function deleteViewerSessionEntry(name){
+    if(!name)return Promise.resolve(false);
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetch(VIEWER_SESSION_ENTRY_API+'/'+encodeURIComponent(name),{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+  }
   function saveViewerSessionEntryDeferred(entry){
     const size=String(entry&&entry.data||'').length;
     if(size>=5*1024*1024){
@@ -344,11 +351,12 @@ function boot(){
       return res.json();
     }).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>saveViewerSession());
   }
-  function loadViewerSession(){
+  function loadViewerSession(opts){
+    opts=opts||{};
     return fetch(VIEWER_SESSION_API,{cache:'no-store'}).then(res=>{
       if(!res.ok)return null;
       return res.json();
-    }).then(payload=>{ rememberSessionResponse(payload); return normalizeViewerSession(payload); }).catch(()=>null);
+    }).then(payload=>{ if(opts.remember!==false)rememberSessionResponse(payload); return normalizeViewerSession(payload); }).catch(()=>null);
   }
   function loadLastStructure(){
     return fetch(LAST_STRUCTURE_API,{cache:'no-store'}).then(res=>{
@@ -364,6 +372,7 @@ function boot(){
     if(!session)throw new Error('Invalid viewer session');
     opts=opts||{};
     if(!viewer)initViewer();
+    disposeRecordsOutside(session.entries);
     entries.splice(0,entries.length);
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
@@ -374,6 +383,7 @@ function boot(){
     return session;
   }
   function restoreEmptyViewerSession(){
+    disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
     currentName='';
@@ -389,17 +399,20 @@ function boot(){
       const revision=String(meta.revision);
       if(lastSessionRevision==null){ lastSessionRevision=revision; return; }
       if(revision===lastSessionRevision)return;
-      lastSessionRevision=revision;
       if(!Array.isArray(meta.entries)||!meta.entries.length){
         restoreEmptyViewerSession();
+        lastSessionRevision=revision;
         setStatus('Viewer session cleared on server');
         return;
       }
-      const session=await loadViewerSession();
+      const session=await loadViewerSession({remember:false});
       if(session){
         restoreViewerSession(session,{realtime:true});
+        lastSessionRevision=revision;
         setStatus('Viewer session updated from server');
       }
+    }catch(e){
+      setStatus('Session sync failed; will retry.');
     }finally{
       sessionSyncInFlight=false;
     }
@@ -412,7 +425,7 @@ function boot(){
     if(!a)return '';
     if(a._elemKey)return a._elemKey;
     const out=normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,'');
-    try{ a._elemKey=out; }catch(e){}
+    a._elemKey=out;
     return out;
   }
   function atomName(a){ return normUpper(a&&a.atom); }
@@ -701,7 +714,6 @@ function boot(){
     }catch(e){}
     return info;
   }
-  function residueCount(sel){ return selectionInfo(sel).residueCount; }
   function combineSelectors(a,b){ const seen=new Set(); [a,b].forEach(s=>addSelectorSerials(seen,s,{})); return {serial:Array.from(seen)}; }
   function normalizeSelectorInput(s){
     if(s==null)return null;
@@ -992,8 +1004,8 @@ function boot(){
     if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
     if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
     if(_catSer.other.length)viewer.setStyle({serial:_catSer.other}, otherStyleSpec());
-    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
-    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
+    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
+    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){ console.warn('Hide rule failed',r,e); } }
     applyVisibility();
     redrawWideLineStyles();
     if(!opts.skipInteractions)redrawInteractions(false);
@@ -1064,19 +1076,10 @@ function boot(){
     seg('XYZ',Number(a.x).toFixed(2)+', '+Number(a.y).toFixed(2)+', '+Number(a.z).toFixed(2));
   }
   function handleAtomClick(a,e){
-    if(!a||state.selectionMode==='off')return;
-    if(state.selectionMode==='range'){ handleRangeSelection(a,e); return; }
+    if(!a)return;
     setSelection(selectionFromAtom(a,state.selectionMode), {source:'click',additive:e&&e.shiftKey});
   }
   function selectionFromAtom(a,m){ if(m==='atom')return {serial:a.serial}; if(m==='chain')return {_entryName:a._entryName,chain:a.chain}; if(m==='model')return {_entryName:a._entryName}; return {_entryName:a._entryName,chain:a.chain,resi:a.resi,resn:a.resn}; }
-  function handleRangeSelection(a,e){
-    const resi=Number(a.resi),chain=a.chain||'';
-    const entry=a._entryName||'';
-    if(!Number.isFinite(resi)){ setSelection({_entryName:entry,chain:a.chain,resi:a.resi,resn:a.resn},{additive:e&&e.shiftKey}); return; }
-    if(!state.rangeAnchor||state.rangeAnchor.chain!==chain||state.rangeAnchor.entry!==entry){ state.rangeAnchor={entry,chain,resi}; setStatus('Range start: '+(chain||'-')+' '+resi+' \u2014 click end residue'); return; }
-    const lo=Math.min(state.rangeAnchor.resi,resi),hi=Math.max(state.rangeAnchor.resi,resi); state.rangeAnchor=null;
-    setSelection({_entryName:entry,chain,resi:lo+'-'+hi},{additive:e&&e.shiftKey});
-  }
   function applySelectionOptionOverrides(opts){
     if(opts.representation)state.selectionRepresentation=normText(opts.representation).toLowerCase();
     const nextOpts=opts.options&&typeof opts.options==='object'?opts.options:opts;
@@ -1090,7 +1093,7 @@ function boot(){
     if(next==null){ clearSelection(); return null; }
     state.selectionSel = add&&state.selectionSel ? combineSelectors(state.selectionSel,next) : next;
     selectionAtoms=selectedAtomsForSelector(state.selectionSel);
-    state.rangeAnchor=null; state.focusTarget=null;
+    state.focusTarget=null;
     applySelectionOptionOverrides(opts);
     renderSelectionHighlight(true,selectionAtoms);
     if(opts.focus)focus(state.selectionSel);
@@ -1106,7 +1109,7 @@ function boot(){
     return {representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)};
   }
   function clearSelection(){
-    state.selectionSel=null; selectionAtoms=[]; state.rangeAnchor=null; state.focusTarget=null;
+    state.selectionSel=null; selectionAtoms=[]; state.focusTarget=null;
     renderSelectionHighlight(true,selectionAtoms);
     updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
     syncHierarchySelectionHighlight();
@@ -1646,9 +1649,9 @@ function boot(){
           if(T.ugly.on)(c.ugly||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.ugly.color,record); });
         }
       });
-    }catch(e){}
+    }catch(e){ console.warn('Interaction redraw failed',e); }
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
-    updateInteractionSummary(interactionWideLines.length);
+    updateInteractionSummary(wideLineLayer?interactionWideLines.length:interactionShapes.length);
     if(render!==false)presentOverlayFrame();
   }
   function interIcon(kind){ const s=document.createElement('span'); s.style.cssText='display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex:none;background:#159aad;color:#fff;font-size:13px;font-weight:700'; s.textContent=kind==='noncov'?'H':(kind==='pi'?'\u03c0':'\u2731'); return s; }
@@ -1857,8 +1860,8 @@ function boot(){
     if(by.other.length&&state.other!=='off')setModelStyleForAtoms(model,by.other,otherStyleSpec(),false);
   }
   function applyRuleOverlays(){
-    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
-    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
+    for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
+    for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){ console.warn('Hide rule failed',r,e); } }
   }
   let visibilityRefreshTimer=null, visibilityInteractionTimer=null;
   function scheduleVisibilityLayerRefresh(){
@@ -2095,12 +2098,18 @@ function boot(){
     atoms.forEach(a=>{
       let v = key==='elem'?atomElem(a):a[key];
       if(v==null)return;
-      if(matchScalar(v,(type==='resi'?(/^-?\d+(\s*-\s*-?\d+)?$/.test(q)?q:q):q),key)){
+      if(matchScalar(v,q,key)){
         const entry=a._entryName||'',prefix=entries.length>1?(a._entryTitle||entry)+' ':'';
         if(type==='atom'){
           if(!seen.has(a.serial)){
             seen.add(a.serial);
             findMatches.push({sel:{serial:a.serial},label:prefix+(a.chain||'')+' '+(a.resn||'')+a.resi+' '+a.atom});
+          }
+        }else if(type==='chain'){
+          const gk=entry+':'+(a.chain||'');
+          if(!seen.has(gk)){
+            seen.add(gk);
+            findMatches.push({sel:{_entryName:entry,chain:a.chain},label:prefix+'Chain '+(a.chain||'-')});
           }
         }else{
           const gk=entry+':'+(a.chain||'')+':'+a.resi;
@@ -2152,14 +2161,12 @@ function boot(){
   function resetSelectionState(){
     state.selectionSel=null;
     selectionAtoms=[];
-    state.rangeAnchor=null;
     state.focusTarget=null;
     state.selectionOptions=defaultSelectionOptions();
   }
   function resetDisplayRulesForStructure(){
     state.styleRules=[];
     state.hiddenRules=[];
-    state.interactionRules=[];
     resetSelectionState();
     state.visibility={protein:true,ligands:true,solvents:true,other:true};
     state.chainVisible={};
@@ -2171,7 +2178,6 @@ function boot(){
     return !!(
       state.styleRules.length||
       state.hiddenRules.length||
-      state.interactionRules.length||
       hasObjectKeys(state.chainVisible)||
       hasObjectKeys(state.groupVisible)||
       state.visibility.protein!==true||
@@ -2296,11 +2302,51 @@ function boot(){
     record.sceneBuilt=false;
     record._molAgentShown=false;
   }
+  function disposeInteractionIndexForKey(key){
+    if(!key)return;
+    removeQueuedInteractionBuild(key);
+    const worker=interactionWorkers.get(key);
+    if(worker){ try{ worker.terminate(); }catch(e){} interactionWorkers.delete(key); }
+    interactionIndexByKey.delete(key);
+  }
+  function structureKeyStillReferenced(key,exceptName,sourceEntries){
+    if(!key)return false;
+    return (sourceEntries||entries).some(e=>e.name!==exceptName&&structureCacheKey(e)===key);
+  }
+  function disposeEntryRecord(entryNameOrRecord,referenceEntries){
+    const record=typeof entryNameOrRecord==='string'?entryModelCache.get(entryNameOrRecord):entryNameOrRecord;
+    if(!record)return;
+    const name=record.entry&&record.entry.name;
+    hideCachedEntry(record);
+    if(viewer&&record.model&&typeof viewer.removeModel==='function'){
+      try{ viewer.removeModel(record.model); }catch(e){}
+    }
+    if(name)entryModelCache.delete(name);
+    if(record.cacheKey&&!structureKeyStillReferenced(record.cacheKey,name,referenceEntries))disposeInteractionIndexForKey(record.cacheKey);
+  }
+  function disposeAllEntryRecords(){
+    Array.from(entryModelCache.values()).forEach(record=>disposeEntryRecord(record,[]));
+    interactionWorkers.forEach(worker=>{ try{ worker.terminate(); }catch(e){} });
+    interactionWorkers.clear();
+    interactionBuildQueue.splice(0,interactionBuildQueue.length);
+    interactionIndexByKey.clear();
+    if(wideLineLayer)wideLineLayer.clear();
+    if(viewer)clearInteractionShapes();
+    else{ interactionShapes=[]; interactionWideLines=[]; }
+    updateInteractionAggregate([]);
+  }
+  function disposeRecordsOutside(entriesToKeep){
+    const nextByName=new Map((entriesToKeep||[]).map(e=>[e.name,structureCacheKey(e)]));
+    Array.from(entryModelCache.values()).forEach(record=>{
+      const name=record.entry&&record.entry.name;
+      if(!nextByName.has(name)||nextByName.get(name)!==record.cacheKey)disposeEntryRecord(record,entriesToKeep);
+    });
+  }
   function ensureEntryModel(entry){
     const cacheKey=structureCacheKey(entry);
     const cached=entryModelCache.get(entry.name);
     if(cached&&cached.cacheKey===cacheKey)return cached;
-    if(cached)hideCachedEntry(cached);
+    if(cached)disposeEntryRecord(cached);
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
     const list=m.selectedAtoms({});
     nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
@@ -2344,7 +2390,6 @@ function boot(){
       atomsByEntryChainResidueName:new Map()
     };
     (list||[]).forEach((a,i)=>{
-      a._atomOrdinal=i;
       atomElem(a);
       if(a.index!=null){
         if(!bundle.atomByIndex.has(a.index))bundle.atomByIndex.set(a.index,a);
@@ -2590,6 +2635,11 @@ function boot(){
       displayedCount=atoms.filter(isAtomVisibleNow).length;
     }
     redrawWideLineStyles();
+    if(state.selectionSel){
+      selectionAtoms=selectedAtomsForSelector(state.selectionSel);
+      applySelectionHighlight(selectionAtoms);
+      updateSelectionStatus(selectionInfo(state.selectionSel,selectionAtoms));
+    }
     clearInteractionShapes();
     const needsFullRender=recordsNeedSceneRender(visibleRecords);
     if(opts.preserveView&&view)restoreViewNoRender(view);
@@ -2615,7 +2665,6 @@ function boot(){
   }
   function setEntryIncluded(entry,on){
     entryChecked[entry.name]=!!on;
-    resetSelectionState();
     refreshDisplayedEntriesFast({preserveView:true,zoom:false});
     saveViewerSessionState();
   }
@@ -2637,10 +2686,11 @@ function boot(){
       const nextActive=entries.find(e=>entryChecked[e.name]!==false) || entries[0];
       currentName=nextActive?nextActive.name:'';
     }
-    resetDisplayRulesForStructure();
+    disposeEntryRecord(entry.name);
+    resetSelectionState();
     if(entries.length&&includedEntries().length===0)entryChecked[entries[0].name]=true;
     rebuildDisplayedEntries({preserveView:true,zoom:false});
-    saveViewerSession();
+    deleteViewerSessionEntry(entry.name).then(ok=>{ if(!ok)saveViewerSession(); });
     setStatus('Deleted entry: '+entry.title);
     return entry;
   }
@@ -2867,7 +2917,7 @@ function boot(){
     return best;
   }
   function selectorFromDragHits(hits){
-    if(!hits.length||state.selectionMode==='off')return null;
+    if(!hits.length)return null;
     if(state.selectionMode==='model'){
       const entriesHit=new Set(hits.map(a=>a._entryName||''));
       return serialSelectorForAtoms(atoms.filter(a=>entriesHit.has(a._entryName||'')));
@@ -2880,7 +2930,7 @@ function boot(){
     const res=new Set(hits.map(atomResidueKey));
     return serialSelectorForAtoms(atoms.filter(a=>res.has(atomResidueKey(a))));
   }
-  function selectDragRange(start,end,e){ if(state.selectionMode==='off')return; const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ clearSelection(); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
+  function selectDragRange(start,end,e){ const rect=normalizedPageRect(start,end),hits=atomsInPageRect(rect),sel=selectorFromDragHits(hits); if(!sel){ clearSelection(); return; } setSelection(sel,{additive:e&&e.shiftKey}); }
   function isCustomMousePreset(){ return !(mousePresets[state.mousePreset]&&mousePresets[state.mousePreset].passThrough); }
   function showViewer(){ if(!viewer)return; if(viewer.show)viewer.show(); else viewer.render(); }
 function tweenVector(from, to, amount){
@@ -2983,7 +3033,14 @@ function installFrameSyncedMotion(targetViewer){
   function overUiPanel(e){ const t=e&&e.target; return !!(t&&t.closest&&t.closest('#interPanel,#settingsOverlay')); }
   function bindWheelZoom(){ viewerEl.addEventListener('wheel',function(e){ if(overUiPanel(e))return; if(!viewer||state.locked)return; if(!isCustomMousePreset())return; if(settings.mouse.wheel!=='zoom')return; stopMouseEvent(e); const delta=e.deltaY||-e.wheelDelta||1,amount=Math.max(1,Math.min(4,Math.abs(delta)/100)),step=Math.pow(1.12,amount); viewer.zoom(delta<0?step:1/step); },{capture:true,passive:false}); }
 
-  function startFpsOverlay(){ const fpsEl=$('fpsOverlay'); let frames=0,last=performance.now(); function tick(){ frames++; requestAnimationFrame(tick); } function update(){ if(document.hidden){ fpsEl.textContent='FPS --'; frames=0; last=performance.now(); return; } const now=performance.now(),el=now-last; fpsEl.textContent='FPS '+Math.round(frames*1000/el); frames=0; last=now; } setInterval(update,500); requestAnimationFrame(tick); }
+  function startFpsOverlay(){
+    const fpsEl=$('fpsOverlay'); let frames=0,last=performance.now(),running=false;
+    function tick(){ if(document.hidden){ running=false; return; } frames++; requestAnimationFrame(tick); }
+    function start(){ if(running||document.hidden)return; running=true; requestAnimationFrame(tick); }
+    function update(){ if(document.hidden){ fpsEl.textContent='FPS --'; frames=0; last=performance.now(); return; } const now=performance.now(),el=now-last; fpsEl.textContent='FPS '+Math.round(frames*1000/el); frames=0; last=now; start(); }
+    document.addEventListener('visibilitychange',function(){ frames=0; last=performance.now(); if(!document.hidden)start(); });
+    setInterval(update,500); start();
+  }
 
   function initViewer(){
     focusViewerKeyboardTarget();
@@ -3000,7 +3057,14 @@ function installFrameSyncedMotion(targetViewer){
 
   // ---------- Settings ----------
   function toHex(col){ if(/^#[0-9a-f]{6}$/i.test(col))return col; try{ const cx=document.createElement('canvas').getContext('2d'); cx.fillStyle=col; if(/^#[0-9a-f]{6}$/i.test(cx.fillStyle))return cx.fillStyle; }catch(e){} return '#888888'; }
-  function setBackground(c){ state.bgColor=c; if(viewer&&viewer.setBackgroundColor){ viewer.setBackgroundColor(c); viewer.render(); } if($('bgCustom'))$('bgCustom').value=toHex(c); document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.style.borderColor=(b.getAttribute('data-bg').toLowerCase()===String(c).toLowerCase())?'#3a7bd5':'#777'; }); }
+  function setBackground(c,opts){
+    opts=opts||{};
+    state.bgColor=toHex(c);
+    if(viewer&&viewer.setBackgroundColor){ viewer.setBackgroundColor(state.bgColor); viewer.render(); }
+    if($('bgCustom'))$('bgCustom').value=state.bgColor;
+    document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.style.borderColor=(b.getAttribute('data-bg').toLowerCase()===state.bgColor.toLowerCase())?'#3a7bd5':'#777'; });
+    if(opts.persist!==false)savePreferences();
+  }
   function normalizeEditableColor(color){
     const value=normText(color);
     if(!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Color must be a #RRGGBB value.');
@@ -3132,7 +3196,7 @@ function installFrameSyncedMotion(targetViewer){
   function openSettings(){
     buildMouseMatrix();
     $('setCarbonByChain').checked=state.carbonByChain;
-    setBackground(state.bgColor); buildChainColorList(); buildAtomColorList();
+    setBackground(state.bgColor,{persist:false}); buildChainColorList(); buildAtomColorList();
     $('settingsOverlay').style.display='flex'; setBtnActive($('settingsBtn'),true);
   }
   function closeSettings(){ $('settingsOverlay').style.display='none'; setBtnActive($('settingsBtn'),false); }
@@ -3261,10 +3325,10 @@ function installFrameSyncedMotion(targetViewer){
   };
 
   // ---------- Wire UI ----------
-  $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; state.rangeAnchor=null; setStatus('Selection level: '+state.selectionMode); };
+  $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; setStatus('Selection level: '+state.selectionMode); };
   $('qsP').onclick=function(){ const prot=atoms.filter(isProtein),sel=serialSelectorForAtoms(prot); if(sel)setSelection(sel,{}); else setStatus('No protein'); };
   $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel)setSelection(sel,{}); else setStatus('No ligand'); };
-  $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
+  $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); if(state.solvent==='off')setStatus('Solvents selected; solvent representation is off.'); };
   $('qsAll').onclick=function(){ setSelection({},{}); };
   $('interBtn').onclick=toggleInterPanel;
   $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
@@ -3284,10 +3348,10 @@ function installFrameSyncedMotion(targetViewer){
   $('settingsDone').onclick=closeSettings;
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); savePreferencesNow(); };
-  document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
-  $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
+  document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg'),{persist:true}); }; });
+  $('bgCustom').oninput=function(){ setBackground($('bgCustom').value,{persist:true}); };
   $('resetColorSchemes').onclick=function(){ resetColorSchemes(); };
-  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); savePreferencesNow(); openSettings(); };
+  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000',{persist:false}); applyStylesFull(true); buildHierarchy(); savePreferencesNow(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
@@ -3339,8 +3403,14 @@ function installFrameSyncedMotion(targetViewer){
     startSessionSync();
   }).catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
 }
+const waitFor3DmolStartedAt = Date.now();
 function waitFor3Dmol(){
   if(window.$3Dmol){ boot(); return; }
+  if(Date.now()-waitFor3DmolStartedAt>10000){
+    const status=document.getElementById('status');
+    if(status)status.textContent='3Dmol failed to load; check assets/3Dmol-min.js.';
+    return;
+  }
   setTimeout(waitFor3Dmol, 40);
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', waitFor3Dmol);

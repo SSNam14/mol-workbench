@@ -20,27 +20,6 @@ function colorValue(color){
   return {r:((n>>16)&255)/255,g:((n>>8)&255)/255,b:(n&255)/255};
 }
 
-function sub(a,b){
-  return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};
-}
-
-function scale(v,s){
-  return {x:v.x*s,y:v.y*s,z:v.z*s};
-}
-
-function cross(a,b){
-  return {x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x};
-}
-
-function length(v){
-  return Math.hypot(v.x,v.y,v.z);
-}
-
-function normalize(v){
-  const d=length(v)||1;
-  return {x:v.x/d,y:v.y/d,z:v.z/d};
-}
-
 function finiteNumber(value,fallback){
   const n=Number(value);
   return Number.isFinite(n)?n:fallback;
@@ -52,16 +31,6 @@ function lerpPoint(a,b,t){
 
 function pointDistance(a,b){
   return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
-}
-
-function viewKey(viewer){
-  const q=viewer&&viewer.rotationGroup&&viewer.rotationGroup.quaternion;
-  const mp=viewer&&viewer.modelGroup&&viewer.modelGroup.position;
-  const zp=viewer&&viewer.rotationGroup&&viewer.rotationGroup.position;
-  if(!q||!mp||!zp)return '';
-  return [
-    q.x,q.y,q.z,q.w,mp.x,mp.y,mp.z,zp.z,viewer.WIDTH,viewer.HEIGHT
-  ].map(v=>Number(v||0).toFixed(4)).join(':');
 }
 
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
@@ -166,12 +135,9 @@ class MolWideLineLayer{
     this.mesh=null;
     this.geometry=null;
     this.material=null;
-    this.plan=[];
-    this.coords=[];
     this.itemsCache=[];
     this.itemsDirty=true;
     this.meshDirty=true;
-    this.lastViewKey='';
     this.nextPrimitiveId=1;
     this.Geometry=null;
     this.Mesh=null;
@@ -196,7 +162,6 @@ class MolWideLineLayer{
       const nativeResize=viewer.resize.bind(viewer);
       viewer.resize=function(){
         const ret=nativeResize.apply(null,arguments);
-        layer.lastViewKey='';
         layer.syncToScene();
         return ret;
       };
@@ -334,8 +299,6 @@ class MolWideLineLayer{
     this.mesh=null;
     this.geometry=null;
     this.material=null;
-    this.plan=[];
-    this.coords=[];
   }
 
   addPrimitiveLine(spec){
@@ -364,7 +327,6 @@ class MolWideLineLayer{
   markDirty(){
     this.itemsDirty=true;
     this.meshDirty=true;
-    this.lastViewKey='';
   }
 
   flattenedItems(){
@@ -425,15 +387,12 @@ class MolWideLineLayer{
     this.mesh.name='MolWideLineMesh';
     this.mesh.__molWideLineMesh=true;
     this.mesh.visible=true;
-    this.plan=[];
-    this.coords=[];
     items.forEach(item=>{
       const group=this.geometry.updateGeoGroup(4);
       const base=group.vertices;
       const color=colorValue(item.data.color||item.options.color);
       if(item.type==='line')this.fillLineQuad(group,base,item,color);
       else this.fillPointQuad(group,base,item,color);
-      this.plan.push({group,base,item,coordOffset:this.coords.length});
       group.vertices+=4;
       group.faceidx+=6;
     });
@@ -558,123 +517,6 @@ class MolWideLineLayer{
     }
   }
 
-  writeVertex(group,idx,p,n){
-    const vi=idx*3;
-    group.vertexArray[vi]=p.x;
-    group.vertexArray[vi+1]=p.y;
-    group.vertexArray[vi+2]=p.z;
-    group.normalArray[vi]=n.x;
-    group.normalArray[vi+1]=n.y;
-    group.normalArray[vi+2]=n.z;
-  }
-
-  modelUnitsPerPixel(viewer){
-    if(!viewer||typeof viewer.screenOffsetToModel!=='function')return 1;
-    const off=viewer.screenOffsetToModel(1,0), d=off&&length(off);
-    return Number.isFinite(d)&&d>1e-9?d:1;
-  }
-
-  frameBasis(viewer){
-    let right={x:1,y:0,z:0}, up={x:0,y:1,z:0}, modelPerPixel=1;
-    if(viewer&&typeof viewer.screenOffsetToModel==='function'){
-      const x=viewer.screenOffsetToModel(1,0), y=viewer.screenOffsetToModel(0,1);
-      const xl=x&&length(x), yl=y&&length(y);
-      if(Number.isFinite(xl)&&xl>1e-9){
-        right=scale(x,1/xl);
-        modelPerPixel=xl;
-      }
-      if(Number.isFinite(yl)&&yl>1e-9)up=scale(y,1/yl);
-    }
-    return {right,up,modelPerPixel};
-  }
-
-  clampModelSize(viewer,size,minPx,maxPx,frame){
-    let out=Math.max(0.001,Number(size)||0);
-    const modelPerPixel=frame&&Number.isFinite(frame.modelPerPixel)?frame.modelPerPixel:this.modelUnitsPerPixel(viewer);
-    if(Number.isFinite(minPx)&&minPx>0)out=Math.max(out,modelPerPixel*minPx);
-    if(Number.isFinite(maxPx)&&maxPx>0)out=Math.min(out,modelPerPixel*maxPx);
-    return out;
-  }
-
-  screenDirection(viewer,x,y,fallback,frame){
-    if(frame&&frame.right&&frame.up){
-      const dir={
-        x:frame.right.x*x+frame.up.x*y,
-        y:frame.right.y*x+frame.up.y*y,
-        z:frame.right.z*x+frame.up.z*y
-      };
-      if(length(dir)>1e-9)return normalize(dir);
-    }
-    if(viewer&&typeof viewer.screenOffsetToModel==='function'){
-      const off=viewer.screenOffsetToModel(x,y);
-      if(off&&length(off)>1e-9)return normalize(off);
-    }
-    return normalize(fallback||{x:1,y:0,z:0});
-  }
-
-  lineHalfWidthModel(viewer,line,options,frame){
-    const explicit=finiteNumber(line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,NaN);
-    const width=Number.isFinite(explicit)?explicit:finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
-    const minPx=finiteNumber(line.minPixelWidth||options&&options.minPixelWidth,MIN_SCREEN_LINE_WIDTH);
-    const maxPx=finiteNumber(line.maxPixelWidth||options&&options.maxPixelWidth,MAX_SCREEN_LINE_WIDTH);
-    return this.clampModelSize(viewer,width/2,minPx/2,maxPx/2,frame);
-  }
-
-  pointRadiusModel(viewer,point,options,frame){
-    const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
-    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_POINT_RADIUS;
-    const minPx=finiteNumber(point.minPixelRadius||options&&options.minPixelRadius,MIN_SCREEN_POINT_RADIUS);
-    const maxPx=finiteNumber(point.maxPixelRadius||options&&options.maxPixelRadius,MAX_SCREEN_POINT_RADIUS);
-    return this.clampModelSize(viewer,radius,minPx,maxPx,frame);
-  }
-
-  writeLineQuad(viewer,entry,projected,frame){
-    const line=entry.item.data, a=line.start, b=line.end, pa=projected[entry.coordOffset], pb=projected[entry.coordOffset+1];
-    if(!pa||!pb||!Number.isFinite(pa.x)||!Number.isFinite(pb.x))return;
-    let dx=pb.x-pa.x, dy=pb.y-pa.y, len=Math.hypot(dx,dy);
-    if(len<1e-4){ dx=1; dy=0; len=1; }
-    const dir=this.screenDirection(viewer,-dy/len,dx/len,{x:0,y:1,z:0},frame);
-    const half=this.lineHalfWidthModel(viewer,line,entry.item.options,frame);
-    const off=scale(dir,half), bond=sub(b,a), bondLen=length(bond), bondDir=normalize(bond);
-    const cap=Math.min(half*LINE_CAP_OVERLAP,bondLen*0.08);
-    const a0={x:a.x-bondDir.x*cap,y:a.y-bondDir.y*cap,z:a.z-bondDir.z*cap};
-    const b0={x:b.x+bondDir.x*cap,y:b.y+bondDir.y*cap,z:b.z+bondDir.z*cap};
-    const v0={x:a0.x+off.x,y:a0.y+off.y,z:a0.z+off.z};
-    const v1={x:a0.x-off.x,y:a0.y-off.y,z:a0.z-off.z};
-    const v2={x:b0.x+off.x,y:b0.y+off.y,z:b0.z+off.z};
-    const v3={x:b0.x-off.x,y:b0.y-off.y,z:b0.z-off.z};
-    const n=normalize(cross(sub(b,a),off));
-    this.writeVertex(entry.group,entry.base,v0,n);
-    this.writeVertex(entry.group,entry.base+1,v1,n);
-    this.writeVertex(entry.group,entry.base+2,v2,n);
-    this.writeVertex(entry.group,entry.base+3,v3,n);
-  }
-
-  writePointQuad(viewer,entry,frame){
-    const p=entry.item.data, radius=this.pointRadiusModel(viewer,p,entry.item.options,frame);
-    const ox=scale(this.screenDirection(viewer,1,0,{x:1,y:0,z:0},frame),radius), oy=scale(this.screenDirection(viewer,0,1,{x:0,y:1,z:0},frame),radius);
-    const n=normalize(cross(ox,oy));
-    this.writeVertex(entry.group,entry.base,{x:p.x-ox.x-oy.x,y:p.y-ox.y-oy.y,z:p.z-ox.z-oy.z},n);
-    this.writeVertex(entry.group,entry.base+1,{x:p.x+ox.x-oy.x,y:p.y+ox.y-oy.y,z:p.z+ox.z-oy.z},n);
-    this.writeVertex(entry.group,entry.base+2,{x:p.x-ox.x+oy.x,y:p.y-ox.y+oy.y,z:p.z-ox.z+oy.z},n);
-    this.writeVertex(entry.group,entry.base+3,{x:p.x+ox.x+oy.x,y:p.y+ox.y+oy.y,z:p.z+ox.z+oy.z},n);
-  }
-
-  updateVertices(viewer){
-    let projected=[];
-    try{ projected=viewer.modelToScreen(this.coords); }catch(e){ return false; }
-    const frame=this.frameBasis(viewer);
-    this.plan.forEach(entry=>{
-      if(entry.item.type==='line')this.writeLineQuad(viewer,entry,projected,frame);
-      else this.writePointQuad(viewer,entry,frame);
-    });
-    if(this.geometry){
-      this.geometry.verticesNeedUpdate=true;
-      this.geometry.normalsNeedUpdate=true;
-    }
-    return true;
-  }
-
   syncToScene(){
     const viewer=this.getViewer&&this.getViewer();
     if(!viewer||!viewer.modelGroup)return;
@@ -683,15 +525,12 @@ class MolWideLineLayer{
       if(this.mesh)this.mesh.visible=false;
       return;
     }
-    const key=viewKey(viewer);
     if(this.meshDirty||!this.mesh){
       if(!this.ensureMesh(viewer,items))return;
       this.meshDirty=false;
-      this.lastViewKey='';
     }
     if(!this.mesh)return;
     this.mesh.visible=true;
-    this.lastViewKey=key;
   }
 }
 
