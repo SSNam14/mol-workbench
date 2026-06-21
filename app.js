@@ -128,6 +128,24 @@ function boot(){
   }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
+  function sourceSerialText(value){
+    const text=normText(value);
+    return text===''?'':text;
+  }
+  function compareSourceSerialText(a,b){
+    const an=Number(a),bn=Number(b);
+    if(Number.isFinite(an)&&Number.isFinite(bn)&&an!==bn)return an-bn;
+    return a<b?-1:(a>b?1:0);
+  }
+  function normalizeDeletedSourceSerials(value){
+    if(!Array.isArray(value))return [];
+    const seen=new Set();
+    value.forEach(item=>{
+      const text=sourceSerialText(item);
+      if(text)seen.add(text);
+    });
+    return Array.from(seen).sort(compareSourceSerialText);
+  }
   function fnv1aHex(text){
     let h=0x811c9dc5;
     for(let i=0;i<text.length;i++){
@@ -138,7 +156,8 @@ function boot(){
   }
   function structureCacheKey(e){
     const data=String(e&&e.data||''),fmt=normText(e&&e.fmt||'pdb').toLowerCase();
-    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data);
+    const deleted=normalizeDeletedSourceSerials(e&&e.deletedSourceSerials).join(',');
+    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data)+'-d'+deleted.length.toString(36)+'-'+fnv1aHex(deleted);
   }
   function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
   function mergePlain(base,extra){
@@ -313,7 +332,10 @@ function boot(){
   function normalizeStructureEntry(e){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
-    return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const deleted=normalizeDeletedSourceSerials(e.deletedSourceSerials);
+    if(deleted.length)out.deletedSourceSerials=deleted;
+    return out;
   }
   function uniqueEntryName(base){
     const root=normText(base||'structure')||'structure';
@@ -382,7 +404,9 @@ function boot(){
     const clean=normalizeStructureEntry(entry);
     if(!clean)return Promise.resolve(false);
     suppressSessionPollUntil=Date.now()+1500;
-    return fetchJsonResult(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(result=>{
+    const payload={entry:clean};
+    if(opts.replace)payload.replace=true;
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(result=>{
       if(!result.ok)return reportPersistenceFailure('Viewer session entry',result,opts);
       rememberSessionResponse(result.data);
       return true;
@@ -786,6 +810,19 @@ function boot(){
     return ak<bk?ak+'|'+bk:bk+'|'+ak;
   }
   function atomSourceSerial(a){ return a&&a._sourceSerial!=null?a._sourceSerial:(a&&a.index!=null?a.index:(a&&a.serial)); }
+  function entryDeletedSourceSerialSet(entry){
+    return new Set(normalizeDeletedSourceSerials(entry&&entry.deletedSourceSerials));
+  }
+  function splitEntryDeletedAtoms(entry,list){
+    const deleted=entryDeletedSourceSerialSet(entry), visible=[], hiddenSerials=[];
+    if(!deleted.size)return {visible:list||[],hiddenSerials};
+    (list||[]).forEach(a=>{
+      if(deleted.has(sourceSerialText(atomSourceSerial(a)))){
+        if(a&&a.serial!=null)hiddenSerials.push(a.serial);
+      }else visible.push(a);
+    });
+    return {visible,hiddenSerials};
+  }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
@@ -826,6 +863,7 @@ function boot(){
     }
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
+    clearDeletedAtomStyles();
   }
   function setLineSelectionStyleMask(keys){
     const next=keys&&keys.size?keys:new Set();
@@ -1139,6 +1177,7 @@ function boot(){
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){ console.warn('Hide rule failed',r,e); } }
     applyVisibility();
+    clearDeletedAtomStyles();
     redrawWideLineStyles();
     if(!opts.skipInteractions)redrawInteractions(false);
     if(!opts.skipSelection){
@@ -1367,6 +1406,7 @@ function boot(){
   function fitVisible(opts){
     opts=opts||{};
     if(!viewer||!model)return false;
+    if(!atoms.length)return false;
     if(shouldUseFastFit(atoms)){
       const box=visibleAtomExtent();
       return fastFitAtoms(atoms,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
@@ -1996,6 +2036,16 @@ function boot(){
     const serials=serialsForAtoms(list);
     if(serials.length)model.setStyle({serial:serials},spec,!!add);
   }
+  function clearDeletedAtomStyles(records){
+    if(!viewer)return;
+    (records||visibleEntryRecords()).forEach(record=>{
+      const serials=record&&record.deletedSerials;
+      if(!serials||!serials.length)return;
+      const modelRef=record.model&&typeof record.model.setStyle==='function'?record.model:null;
+      if(modelRef)modelRef.setStyle({serial:serials},{});
+      else viewer.setStyle({serial:serials},{});
+    });
+  }
   function applyBaseStylesForRecord(record){
     if(!record||!record.model||!record.atoms)return;
     const model=record.model, by={ligands:[],solvents:[],other:[]};
@@ -2013,6 +2063,7 @@ function boot(){
     if(by.ligands.length)setModelStyleForAtoms(model,by.ligands,ligandStyleSpec(),false);
     if(by.solvents.length&&state.solvent!=='off')setModelStyleForAtoms(model,by.solvents,solventStyleSpec(),false);
     if(by.other.length&&state.other!=='off')setModelStyleForAtoms(model,by.other,otherStyleSpec(),false);
+    clearDeletedAtomStyles([record]);
   }
   function applyRuleOverlays(){
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
@@ -2094,11 +2145,39 @@ function boot(){
   function closeHierarchyContextMenu(){
     if(hierarchyContextMenu)hierarchyContextMenu.hidden=true;
   }
-  function deleteHierarchySelection(){
+  function selectedSourceSerialsByEntry(selected){
+    const out=new Map();
+    (selected||[]).forEach(a=>{
+      const entryName=normText(a&&a._entryName), serial=sourceSerialText(atomSourceSerial(a));
+      if(!entryName||!serial)return;
+      if(!out.has(entryName))out.set(entryName,new Set());
+      out.get(entryName).add(serial);
+    });
+    return out;
+  }
+  async function deleteHierarchySelection(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
-    hideSelectionToolbarAtoms();
-    setStatus('Deleted from view: '+selected.length.toLocaleString()+' atoms');
+    const byEntry=selectedSourceSerialsByEntry(selected), updated=[];
+    byEntry.forEach((serials,entryName)=>{
+      const entry=entries.find(e=>e.name===entryName);
+      if(!entry)return;
+      const merged=new Set(normalizeDeletedSourceSerials(entry.deletedSourceSerials));
+      serials.forEach(serial=>merged.add(serial));
+      entry.deletedSourceSerials=normalizeDeletedSourceSerials(Array.from(merged));
+      updated.push(entry);
+    });
+    if(!updated.length){ setStatus('No deletable selected atoms'); return; }
+    resetSelectionState();
+    updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    setStatus('Deleted from hierarchy: '+selected.length.toLocaleString()+' atoms');
+    let savedAll=true;
+    for(const entry of updated){
+      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+      if(!saved)savedAll=false;
+    }
+    if(!savedAll)setStatus('Deleted locally but not saved on server.');
   }
   function ensureHierarchyContextMenu(){
     if(hierarchyContextMenu)return hierarchyContextMenu;
@@ -2112,7 +2191,7 @@ function boot(){
       e.preventDefault();
       e.stopPropagation();
       closeHierarchyContextMenu();
-      deleteHierarchySelection();
+      deleteHierarchySelection().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
     };
     menu.appendChild(del);
     menu.onclick=function(e){ e.stopPropagation(); };
@@ -2730,16 +2809,18 @@ function boot(){
     if(cached&&cached.cacheKey===cacheKey)return cached;
     validateStructureCoordinates(entry);
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
-    const list=m.selectedAtoms({});
-    if(!list||!list.length){
+    const parsed=m.selectedAtoms({});
+    if(!parsed||!parsed.length){
       if(viewer&&typeof viewer.removeModel==='function'){
         try{ viewer.removeModel(m); }catch(e){}
       }
       throw new Error('No atoms parsed from '+entry.name+'.');
     }
-    nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
+    nextAtomSerial=prepareDisplayedAtoms(entry,parsed,nextAtomSerial);
+    const split=splitEntryDeletedAtoms(entry,parsed);
+    const list=split.visible;
     normalizeParsedAtoms(list);
-    const record={entry,model:m,atoms:list,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
+    const record={entry,model:m,atoms:list,deletedSerials:split.hiddenSerials,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
     if(cached)disposeEntryRecord(cached);
     entryModelCache.set(entry.name,record);
     return record;
