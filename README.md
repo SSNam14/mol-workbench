@@ -535,6 +535,10 @@ The viewer stores the loaded entry list on the server through `/api/session`; in
 
 Entries checkbox toggles update only `includedEntries` and `activeEntry` through lightweight `/api/session-state`. This endpoint updates small state/meta files and does not rewrite full structure payloads. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
 
+An explicit empty display set is valid. `includedEntries: []` means no entries are displayed, and `activeEntry` should be an empty string. Agents must not treat an empty array as "show all"; only a missing `includedEntries` field is legacy fallback.
+
+If a session, entry, preference, or interaction-cache write fails, the app logs a diagnostic. User-visible session and preference failures also update the status text. Large entry saves complete only after the server write finishes; do not assume `loadUrl(...)` persistence succeeded until the returned promise resolves.
+
 Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. If a full session reload fails, the client retries the same revision on the next poll rather than marking it handled. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
 
 `/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
@@ -607,7 +611,8 @@ When validating the visible UI manually or through any generic browser automatio
 5. Open the visible `Preference` button.
 6. Confirm the Preference panel contains mouse action choices: `Rotate`, `Pan`, `Zoom`, `Select`.
 7. Load a second entry if available and confirm `molAgent.getState().includedEntries.length` can be greater than `1`.
-8. Confirm the browser console has no errors.
+8. Turn off every Entries `In` checkbox and confirm `molAgent.getState().includedEntries` is an empty array rather than auto-restoring the first entry.
+9. Confirm the browser console has no errors.
 
 ## Direct 3Dmol Escape Hatch
 

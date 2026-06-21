@@ -199,7 +199,10 @@ function boot(){
       clearTimeout(preferencesSaveTimer);
       preferencesSaveTimer=null;
     }
-    return fetch(PREFERENCES_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(preferencesPayload())}).then(res=>res.ok?res.json():null).catch(()=>null);
+    return fetchJsonResult(PREFERENCES_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(preferencesPayload())}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Preferences',result);
+      return result.data;
+    });
   }
   function savePreferences(){
     if(preferencesSaveTimer)clearTimeout(preferencesSaveTimer);
@@ -267,6 +270,41 @@ function boot(){
       return res.json();
     }).then(payload=>applyPreferences(payload)).catch(()=>null);
   }
+  async function fetchJsonResult(url,options){
+    try{
+      const res=await fetch(url,options||{});
+      const text=await res.text();
+      let data=null;
+      if(text){
+        try{ data=JSON.parse(text); }catch(err){ data=null; }
+      }
+      if(res.ok)return {ok:true,status:res.status,data};
+      return {ok:false,status:res.status,statusText:res.statusText,data,error:(data&&(data.error||data.message))||text||res.statusText||('HTTP '+res.status)};
+    }catch(err){
+      return {ok:false,status:0,statusText:'Network error',error:(err&&err.message)||String(err)};
+    }
+  }
+  function persistenceErrorText(result){
+    if(!result)return 'unknown error';
+    return result.error||result.statusText||('HTTP '+result.status);
+  }
+  function reportPersistenceFailure(label,result,opts){
+    const message=label+' not saved: '+persistenceErrorText(result);
+    console.warn(message,result||'');
+    if(!opts||opts.status!==false)setStatus(message);
+    return false;
+  }
+  function sameStringArray(a,b){
+    if(!Array.isArray(a)||!Array.isArray(b)||a.length!==b.length)return false;
+    for(let i=0;i<a.length;i++)if(String(a[i])!==String(b[i]))return false;
+    return true;
+  }
+  function afterNextFrame(){
+    return new Promise(resolve=>{
+      if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>resolve());
+      else setTimeout(resolve,0);
+    });
+  }
   function normalizeStructureEntry(e){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
@@ -284,10 +322,14 @@ function boot(){
     });
     if(!out.length)return null;
     const names=new Set(out.map(e=>e.name));
-    let included=Array.isArray(payload.includedEntries)?payload.includedEntries.map(String).filter(name=>names.has(name)):[];
-    if(!included.length)included=out.map(e=>e.name);
-    let active=normText(payload.activeEntry||payload.currentName||included[0]||out[0].name);
-    if(!names.has(active))active=included[0]||out[0].name;
+    const hasIncluded=Array.isArray(payload.includedEntries);
+    let included=hasIncluded?payload.includedEntries.map(String).filter(name=>names.has(name)):out.map(e=>e.name);
+    let active=normText(payload.activeEntry||payload.currentName||'');
+    if(included.length){
+      if(!included.includes(active))active=included[0];
+    }else{
+      active='';
+    }
     return {entries:out,includedEntries:included,activeEntry:active};
   }
   function rememberSessionMeta(meta){
@@ -309,49 +351,70 @@ function boot(){
     if(!clean.length)return null;
     const names=new Set(clean.map(e=>e.name));
     let included=clean.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    if(!included.length)included=[clean[0].name];
-    let active=names.has(currentName)?currentName:included[0];
+    let active=names.has(currentName)&&included.includes(currentName)?currentName:(included[0]||'');
     return {entries:clean,includedEntries:included,activeEntry:active};
   }
-  function saveViewerSession(){
+  function saveViewerSession(opts){
+    opts=opts||{};
     const payload=viewerSessionPayload();
     suppressSessionPollUntil=Date.now()+1500;
-    if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
-    return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+    const request=payload?fetchJsonResult(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):fetchJsonResult(VIEWER_SESSION_API,{method:'DELETE'});
+    return request.then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
   }
-  function saveViewerSessionEntry(entry){
+  function saveViewerSessionEntry(entry,opts){
+    opts=opts||{};
     const clean=normalizeStructureEntry(entry);
     if(!clean)return Promise.resolve(false);
     suppressSessionPollUntil=Date.now()+1500;
-    return fetch(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session entry',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
   }
-  function deleteViewerSessionEntry(name){
+  function deleteViewerSessionEntry(name,opts){
+    opts=opts||{};
     if(!name)return Promise.resolve(false);
     suppressSessionPollUntil=Date.now()+1500;
-    return fetch(VIEWER_SESSION_ENTRY_API+'/'+encodeURIComponent(name),{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_API+'/'+encodeURIComponent(name),{method:'DELETE'}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session entry delete',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
   }
-  function saveViewerSessionEntryDeferred(entry){
+  function saveViewerSessionEntryDeferred(entry,opts){
     const size=String(entry&&entry.data||'').length;
     if(size>=5*1024*1024){
-      setTimeout(function(){ saveViewerSessionEntry(entry); },0);
-      return Promise.resolve(true);
+      return afterNextFrame().then(()=>saveViewerSessionEntry(entry,opts));
     }
-    return saveViewerSessionEntry(entry);
+    return saveViewerSessionEntry(entry,opts);
   }
   function viewerSessionStatePayload(){
     const names=new Set(entries.map(e=>e.name));
     const included=entries.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    let active=names.has(currentName)?currentName:(included[0]||(entries[0]&&entries[0].name)||'');
+    let active=names.has(currentName)&&included.includes(currentName)?currentName:(included[0]||'');
     return {includedEntries:included,activeEntry:active};
   }
-  function saveViewerSessionState(){
-    if(!entries.length)return saveViewerSession();
+  async function saveViewerSessionState(opts){
+    opts=opts||{};
+    if(!entries.length)return saveViewerSession(opts);
     const payload=viewerSessionStatePayload();
     suppressSessionPollUntil=Date.now()+1500;
-    return fetch(VIEWER_SESSION_STATE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>{
-      if(!res.ok)return saveViewerSession();
-      return res.json();
-    }).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>saveViewerSession());
+    const result=await fetchJsonResult(VIEWER_SESSION_STATE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(result.ok){
+      rememberSessionResponse(result.data);
+      return true;
+    }
+    const full=viewerSessionPayload();
+    if(full&&sameStringArray(full.includedEntries,payload.includedEntries)&&full.activeEntry===payload.activeEntry){
+      console.warn('Session state endpoint failed; trying full-session fallback.',result);
+      if(await saveViewerSession({status:false}))return true;
+    }
+    return reportPersistenceFailure('Session state',result,opts);
   }
   function loadViewerSession(opts){
     opts=opts||{};
@@ -1482,7 +1545,10 @@ function boot(){
   }
   function saveInteractionIndexPayload(payload,key){
     if(!payload||!key)return Promise.resolve(false);
-    return fetch(interactionIndexCacheUrl(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
+    return fetchJsonResult(interactionIndexCacheUrl(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Interaction cache',result,{status:false});
+      return true;
+    });
   }
   function removeQueuedInteractionBuild(key){
     for(let i=interactionBuildQueue.length-1;i>=0;i--){
@@ -2203,7 +2269,9 @@ function boot(){
   async function persistAndLoadEntry(e){
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
-    return loadEntry(e,{persist:true});
+    const loaded=loadEntry(e,{persist:false});
+    if(!await saveViewerSessionEntryDeferred(loaded,{status:false}))setStatus('Loaded but not saved on server: '+loaded.title);
+    return loaded;
   }
   function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
   function entryStructureKey(e){
@@ -2744,14 +2812,15 @@ function boot(){
     entries.splice(idx,1);
     delete entryChecked[entry.name];
     if(currentName===entry.name){
-      const nextActive=entries.find(e=>entryChecked[e.name]!==false) || entries[0];
+      const nextActive=entries.find(e=>entryChecked[e.name]!==false);
       currentName=nextActive?nextActive.name:'';
     }
     disposeEntryRecord(entry.name);
     resetSelectionState();
-    if(entries.length&&includedEntries().length===0)entryChecked[entries[0].name]=true;
     rebuildDisplayedEntries({preserveView:true,zoom:false});
-    deleteViewerSessionEntry(entry.name).then(ok=>{ if(!ok)saveViewerSession(); });
+    deleteViewerSessionEntry(entry.name,{status:false}).then(ok=>{
+      if(!ok)saveViewerSession().then(saved=>{ if(!saved)setStatus('Deleted locally but not saved on server: '+entry.title); });
+    });
     setStatus('Deleted entry: '+entry.title);
     return entry;
   }
@@ -2786,7 +2855,7 @@ function boot(){
     resetDisplayRulesForStructure();
     if(existingEntry>=0||hadOverrides)rebuildDisplayedEntries({zoom:true});
     else refreshDisplayedEntriesFast({zoom:true});
-    if(opts.persist!==false)saveViewerSessionEntryDeferred(e);
+    if(opts.persist!==false)saveViewerSessionEntryDeferred(e,{status:false}).then(ok=>{ if(!ok)setStatus('Loaded but not saved on server: '+e.title); });
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }

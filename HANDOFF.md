@@ -46,7 +46,9 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
+- An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed and `activeEntry` must be `""`; only a missing `includedEntries` field uses legacy fallback to all entries.
 - Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
+- Persistence failures must be visible through console diagnostics and, for user-visible session/preference operations, status text. Large entry saves must not report success before the actual server write finishes.
 - Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
@@ -138,6 +140,14 @@ PUT /api/session-state              # update includedEntries and activeEntry onl
 GET /api/session-meta               # lightweight revision for open-client sync
 ```
 
+`PUT /api/session-state` preserves explicit empty display state:
+
+```json
+{"includedEntries": [], "activeEntry": ""}
+```
+
+Do not convert that payload to "show the first/all entries"; only absent `includedEntries` is legacy fallback.
+
 Common selector examples:
 
 ```js
@@ -168,6 +178,7 @@ PORT=8704
 node --check app.js
 node --check interaction-worker.js
 python3 -m py_compile server.py
+python3 -m unittest tests.test_session_state
 git diff --check
 curl -sI "http://127.0.0.1:${PORT}/" | head
 curl -sI "http://127.0.0.1:${PORT}/styles.css" | head
