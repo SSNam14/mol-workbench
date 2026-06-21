@@ -67,11 +67,12 @@ function viewKey(viewer){
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
 const DEFAULT_LINE_WIDTH = 2;
-const MODEL_UNITS_PER_LINE_WIDTH = 0.32;
+const MODEL_UNITS_PER_LINE_WIDTH = 0.14;
 const MIN_SCREEN_LINE_WIDTH = 0.6;
-const MAX_SCREEN_LINE_WIDTH = 7;
+const MAX_SCREEN_LINE_WIDTH = 4.5;
 const MIN_SCREEN_POINT_RADIUS = 0.6;
-const MAX_SCREEN_POINT_RADIUS = 8;
+const MAX_SCREEN_POINT_RADIUS = 5;
+const LINE_CAP_OVERLAP = 0.55;
 
 class MolWideLineLayer{
   constructor(host,getViewer){
@@ -421,11 +422,15 @@ class MolWideLineLayer{
     let dx=pb.x-pa.x, dy=pb.y-pa.y, len=Math.hypot(dx,dy);
     if(len<1e-4){ dx=1; dy=0; len=1; }
     const dir=this.screenDirection(viewer,-dy/len,dx/len,{x:0,y:1,z:0});
-    const off=scale(dir,this.lineHalfWidthModel(viewer,line,entry.item.options));
-    const v0={x:a.x+off.x,y:a.y+off.y,z:a.z+off.z};
-    const v1={x:a.x-off.x,y:a.y-off.y,z:a.z-off.z};
-    const v2={x:b.x+off.x,y:b.y+off.y,z:b.z+off.z};
-    const v3={x:b.x-off.x,y:b.y-off.y,z:b.z-off.z};
+    const half=this.lineHalfWidthModel(viewer,line,entry.item.options);
+    const off=scale(dir,half), bond=sub(b,a), bondLen=length(bond), bondDir=normalize(bond);
+    const cap=Math.min(half*LINE_CAP_OVERLAP,bondLen*0.08);
+    const a0={x:a.x-bondDir.x*cap,y:a.y-bondDir.y*cap,z:a.z-bondDir.z*cap};
+    const b0={x:b.x+bondDir.x*cap,y:b.y+bondDir.y*cap,z:b.z+bondDir.z*cap};
+    const v0={x:a0.x+off.x,y:a0.y+off.y,z:a0.z+off.z};
+    const v1={x:a0.x-off.x,y:a0.y-off.y,z:a0.z-off.z};
+    const v2={x:b0.x+off.x,y:b0.y+off.y,z:b0.z+off.z};
+    const v3={x:b0.x-off.x,y:b0.y-off.y,z:b0.z-off.z};
     const n=normalize(cross(sub(b,a),off));
     this.writeVertex(entry.group,entry.base,v0,n);
     this.writeVertex(entry.group,entry.base+1,v1,n);
