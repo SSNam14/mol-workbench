@@ -51,6 +51,7 @@ function boot(){
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const SELECTION_DRAW_BUDGET_MS = 10;
+  const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick', solvent:'off', other:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
@@ -329,11 +330,18 @@ function boot(){
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
   function atomName(a){ return normUpper(a&&a.atom); }
+  function hslHex(h,s,l){
+    s/=100; l/=100;
+    const k=n=>(n+h/30)%12,a=s*Math.min(l,1-l);
+    const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+    const toHex=v=>('0'+Math.round(255*v).toString(16)).slice(-2);
+    return '#'+toHex(f(0))+toHex(f(8))+toHex(f(4));
+  }
   function chainColor(ch){
     const c=normText(ch||'?'),u=c.toUpperCase();
     if(chainColors[u])return chainColors[u];
     if(u.length>1&&chainColors[u[1]])return chainColors[u[1]];
-    let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)';
+    let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return hslHex(h%360,72,64);
   }
   function elementColor(a){ return elemColors[atomElem(a)]||'#D1D5DB'; }
   function isStandardAminoResidueName(r){ return Object.prototype.hasOwnProperty.call(aa3to1,normUpper(r)); }
@@ -792,8 +800,8 @@ function boot(){
     _catSer=categorySerials();
     viewer.setStyle({},{});
     if(_catSer.protein.length){
-      viewer.setStyle({serial:_catSer.protein}, proteinBackboneStyleSpec());
-      if(state.proteinAtoms!=='off')viewer.addStyle({serial:_catSer.protein}, proteinAtomStyleSpec());
+      viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
+      if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
     }
     if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
     if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
@@ -1075,15 +1083,17 @@ function boot(){
     const ready=slots.filter(slot=>slot.record&&slot.record.status==='ready'&&slot.record.interactions);
     const loading=slots.some(slot=>slot.record&&/^(loading-cache|building)$/.test(slot.record.status));
     const errorCount=slots.filter(slot=>slot.record&&slot.record.status==='error').length;
+    const unavailableCount=slots.filter(slot=>slot.record&&slot.record.status==='unavailable').length;
     const missing=slots.filter(slot=>!slot.record).length;
     interactionIndex={
-      status:ready.length?'ready':(loading?'loading':(missing?'pending':(errorCount?'error':'empty'))),
+      status:ready.length?'ready':(loading?'loading':(missing?'pending':(errorCount?'error':(unavailableCount?'unavailable':'empty')))),
       jobId:interactionBuildSeq,
       source:'entry-indexes',
       structureKey:currentStructureKey,
       counts:aggregateInteractionCounts(ready),
       readyEntries:ready.length,
       totalEntries:slots.length,
+      unavailableEntries:unavailableCount,
       error:errorCount?errorCount+' interaction index job(s) failed':''
     };
   }
@@ -1165,6 +1175,15 @@ function boot(){
     const key=entryStructureKey(entry);
     if(!key)return;
     const sourceAtoms=entryAtomsForInteractionIndex(entry);
+    if(sourceAtoms.length>LARGE_INTERACTION_INDEX_ATOM_LIMIT){
+      const current=interactionIndexByKey.get(key);
+      if(current&&current.status==='unavailable'&&current.reason==='too-large'&&current.atoms===sourceAtoms.length)return;
+      removeQueuedInteractionBuild(key);
+      const oldWorker=interactionWorkers.get(key);
+      if(oldWorker){ try{ oldWorker.terminate(); }catch(e){} interactionWorkers.delete(key); }
+      setInteractionRecord(key,{status:'unavailable',reason:'too-large',structureKey:key,entryName:entry.name,entryTitle:entry.title,counts:{},atoms:sourceAtoms.length,limit:LARGE_INTERACTION_INDEX_ATOM_LIMIT});
+      return;
+    }
     const signature=interactionSourceSignature(sourceAtoms);
     const current=interactionIndexByKey.get(key);
     if(current&&current.sourceSerialSignature===signature&&/^(ready|loading-cache|building)$/.test(current.status))return;
@@ -1409,6 +1428,8 @@ function boot(){
       btn.title='Indexed '+indexed+' interactions for '+ready+'/'+total+' displayed entr'+(total===1?'y':'ies')+'; '+visible+' currently visible with atom-level display';
     }else if(interactionIndex&&/^(loading|pending)$/.test(interactionIndex.status)){
       btn.title='Interaction indexes are loading for displayed entries';
+    }else if(interactionIndex&&interactionIndex.status==='unavailable'){
+      btn.title='Interaction indexing skipped for large displayed entries';
     }else{
       btn.title='Interactions not indexed yet';
     }
