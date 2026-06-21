@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, hoverClearTimer = null;
+  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentStructureKey = '', savedView = null, hoverClearTimer = null;
   let atomsByEntry = new Map(), atomsByChain = new Map(), atomsByEntryChain = new Map(), atomsByEntryChainResidue = new Map(), atomsByEntryChainResidueName = new Map();
   const entryModelCache = new Map();
   let nextAtomSerial = 1;
@@ -41,6 +41,7 @@ function boot(){
   };
   const VIEWER_SESSION_API = 'api/session';
   const VIEWER_SESSION_ENTRY_API = 'api/session-entry';
+  const VIEWER_SESSION_ENTRY_TITLE_API = 'api/session-entry-title';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const VIEWER_SESSION_STATE_API = 'api/session-state';
   const LAST_STRUCTURE_API = 'api/last-structure';
@@ -341,13 +342,7 @@ function boot(){
     const names=new Set(out.map(e=>e.name));
     const hasIncluded=Array.isArray(payload.includedEntries);
     let included=hasIncluded?payload.includedEntries.map(String).filter(name=>names.has(name)):out.map(e=>e.name);
-    let active=normText(payload.activeEntry||payload.currentName||'');
-    if(included.length){
-      if(!included.includes(active))active=included[0];
-    }else{
-      active='';
-    }
-    return {entries:out,includedEntries:included,activeEntry:active};
+    return {entries:out,includedEntries:included};
   }
   function rememberSessionMeta(meta){
     if(meta&&meta.revision!=null)lastSessionRevision=String(meta.revision);
@@ -366,10 +361,8 @@ function boot(){
   function viewerSessionPayload(){
     const clean=entries.map(normalizeStructureEntry).filter(Boolean);
     if(!clean.length)return null;
-    const names=new Set(clean.map(e=>e.name));
     let included=clean.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    let active=names.has(currentName)&&included.includes(currentName)?currentName:(included[0]||'');
-    return {entries:clean,includedEntries:included,activeEntry:active};
+    return {entries:clean,includedEntries:included};
   }
   function saveViewerSession(opts){
     opts=opts||{};
@@ -403,6 +396,17 @@ function boot(){
       return true;
     });
   }
+  function saveViewerSessionEntryTitle(name,title,opts){
+    opts=opts||{};
+    const cleanName=normText(name), cleanTitle=normText(title);
+    if(!cleanName||!cleanTitle)return Promise.resolve(false);
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_TITLE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cleanName,title:cleanTitle})}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session entry title',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
+  }
   function saveViewerSessionEntryDeferred(entry,opts){
     const size=String(entry&&entry.data||'').length;
     if(size>=5*1024*1024){
@@ -411,10 +415,8 @@ function boot(){
     return saveViewerSessionEntry(entry,opts);
   }
   function viewerSessionStatePayload(){
-    const names=new Set(entries.map(e=>e.name));
     const included=entries.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    let active=names.has(currentName)&&included.includes(currentName)?currentName:(included[0]||'');
-    return {includedEntries:included,activeEntry:active};
+    return {includedEntries:included};
   }
   async function saveViewerSessionState(opts){
     opts=opts||{};
@@ -427,7 +429,7 @@ function boot(){
       return true;
     }
     const full=viewerSessionPayload();
-    if(full&&sameStringArray(full.includedEntries,payload.includedEntries)&&full.activeEntry===payload.activeEntry){
+    if(full&&sameStringArray(full.includedEntries,payload.includedEntries)){
       console.warn('Session state endpoint failed; trying full-session fallback.',result);
       if(await saveViewerSession({status:false}))return true;
     }
@@ -446,7 +448,7 @@ function boot(){
       return res.json();
     }).then(payload=>{
       const entry=normalizeStructureEntry(payload&&payload.entry?payload.entry:payload);
-      return entry?{entries:[entry],includedEntries:[entry.name],activeEntry:entry.name}:null;
+      return entry?{entries:[entry],includedEntries:[entry.name]}:null;
     }).catch(()=>null);
   }
   function restoreViewerSession(session,opts){
@@ -459,7 +461,6 @@ function boot(){
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
-    currentName=session.activeEntry;
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
     return session;
@@ -468,7 +469,6 @@ function boot(){
     disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
-    currentName='';
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
   }
@@ -1180,7 +1180,7 @@ function boot(){
     if(!a){
       const empty=document.createElement('span');
       empty.className='hover-empty';
-      empty.textContent='Hover an atom to inspect'+(currentName?' \u2014 '+currentName:'');
+      empty.textContent='Hover an atom to inspect';
       bar.appendChild(empty);
       return;
     }
@@ -1557,7 +1557,7 @@ function boot(){
     const counts=countInteractionIndex(payload.interactions);
     const sourceEntry=entry||entryForStructureKey(key);
     setInteractionRecord(key,{status:'ready',jobId,structureKey:key,source:source||payload.source||'worker',entryName:sourceEntry&&sourceEntry.name||payload.entryName||'',entryTitle:sourceEntry&&sourceEntry.title||payload.entryTitle||'',serialMode:'sourceSerial',sourceSerialSignature:signature||payload.sourceSerialSignature||interactionSourceSignature(sourceAtoms),interactions:payload.interactions||{},counts,elapsedMs:payload.elapsedMs,atoms:payload.atoms,rings:payload.rings,cachedAt:payload.cachedAt});
-    setStatus((sourceEntry&&sourceEntry.title||currentName)+' \u00b7 '+Number(payload.atoms||0).toLocaleString()+' atoms \u00b7 interactions indexed'+(source==='server'?' (server cache)':''));
+    setStatus((sourceEntry&&sourceEntry.title||payload.entryTitle||'Entry')+' \u00b7 '+Number(payload.atoms||0).toLocaleString()+' atoms \u00b7 interactions indexed'+(source==='server'?' (server cache)':''));
     redrawInteractions(true);
   }
   function saveInteractionIndexPayload(payload,key){
@@ -1886,13 +1886,39 @@ function boot(){
   }
 
   // ---------- Hierarchy & Entries ----------
+  function beginEntryTitleEdit(entry,labelEl){
+    if(!entry||!labelEl)return;
+    const input=document.createElement('input');
+    input.type='text';
+    input.value=entry.title||entry.name||'';
+    input.style.cssText='width:100%;min-width:0;height:18px;box-sizing:border-box;background:#101010;color:#fff;border:1px solid #3a7bd5;border-radius:3px;padding:0 4px;font:inherit;outline:none';
+    labelEl.replaceWith(input);
+    let done=false;
+    function finish(save){
+      if(done)return;
+      done=true;
+      const next=normText(input.value);
+      if(save&&next&&next!==entry.title){
+        renameEntry(entry.name,next).catch(err=>{ setStatus('Rename failed: '+(err&&err.message||err)); buildEntriesList(); });
+      }else{
+        buildEntriesList();
+      }
+    }
+    input.onclick=function(ev){ ev.stopPropagation(); };
+    input.ondblclick=function(ev){ ev.stopPropagation(); };
+    input.onkeydown=function(ev){
+      if(ev.key==='Enter'){ ev.preventDefault(); finish(true); }
+      else if(ev.key==='Escape'){ ev.preventDefault(); finish(false); }
+    };
+    input.onblur=function(){ finish(true); };
+    setTimeout(()=>{ input.focus(); input.select(); },0);
+  }
   function buildEntriesList(){
     const el=$('entriesList'); el.innerHTML='';
     entries.forEach((e,i)=>{
       const row=document.createElement('div');
-      const active=e.name===currentName;
       row.setAttribute('data-row','');
-      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:pointer;font-size:11.5px;border-left:3px solid '+(active?'#3a7bd5':'transparent')+';background:'+(active?'#16456e':'transparent');
+      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent';
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
       const chk=document.createElement('input'); chk.type='checkbox';
       chk.checked=entryChecked[e.name]!==false;
@@ -1902,7 +1928,9 @@ function boot(){
       paintChk();
       chk.onclick=function(ev){ ev.stopPropagation(); };
       chk.onchange=function(){ setEntryIncludedWithBusy(e,chk.checked); };
-      const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
+      const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'; ttl.title='Double-click to rename: '+e.title;
+      ttl.onclick=function(ev){ ev.stopPropagation(); };
+      ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
       const del=document.createElement('button');
       del.type='button';
       del.textContent='\u00d7';
@@ -1912,7 +1940,6 @@ function boot(){
       del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
       del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); deleteEntry(e); };
       row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
-      row.onclick=function(){ activateEntry(e); };
       el.appendChild(row);
     });
   }
@@ -2724,7 +2751,7 @@ function boot(){
     buildEntriesList(); buildHierarchy(); updateStatusBar();
     showHover(null);
     if(visible.length){
-      setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
+      setStatus(visible.length===1?(visible[0].title||visible[0].name)+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
       startInteractionIndexBuild();
     }else{
       clearInteractionShapes();
@@ -2738,11 +2765,6 @@ function boot(){
     if(!viewer)initViewer();
     const view=opts.preserveView&&viewer&&viewer.getView?viewer.getView():null;
     const visible=includedEntries();
-    if(currentName&&entryChecked[currentName]===false){
-      currentName=visible.length?visible[0].name:'';
-    }else if(!currentName&&visible.length){
-      currentName=visible[0].name;
-    }
     const visibleNames=new Set(visible.map(e=>e.name));
     entryModelCache.forEach((record,name)=>{ if(!visibleNames.has(name))hideEntryRecord(record); });
     if(wideLineLayer)wideLineLayer.clear();
@@ -2780,11 +2802,6 @@ function boot(){
     if(!viewer)initViewer();
     const view=opts.preserveView&&viewer&&viewer.getView?viewer.getView():null;
     const visible=includedEntries();
-    if(currentName&&entryChecked[currentName]===false){
-      currentName=visible.length?visible[0].name:'';
-    }else if(!currentName&&visible.length){
-      currentName=visible[0].name;
-    }
     const visibleNames=new Set(visible.map(e=>e.name));
     entryModelCache.forEach((record,name)=>{ if(!visibleNames.has(name))hideEntryRecord(record); });
     if(wideLineLayer)wideLineLayer.clearCollection('selection');
@@ -2842,7 +2859,7 @@ function boot(){
     showHover(null);
     schedulePanelRefresh(40);
     if(visible.length){
-      setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
+      setStatus(visible.length===1?(visible[0].title||visible[0].name)+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
       if(readyInteractionSlots(visible).length)redrawInteractions(true);
       else{
         updateInteractionAggregate(visible);
@@ -2875,10 +2892,6 @@ function boot(){
     if(idx<0)return null;
     entries.splice(idx,1);
     delete entryChecked[entry.name];
-    if(currentName===entry.name){
-      const nextActive=entries.find(e=>entryChecked[e.name]!==false);
-      currentName=nextActive?nextActive.name:'';
-    }
     disposeEntryRecord(entry.name);
     resetSelectionState();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
@@ -2893,18 +2906,44 @@ function boot(){
     const key=normText(value);
     return entries.find(e=>e.name===key||e.title===key||e.pdbId===key)||null;
   }
+  function refreshEntryTitleReferences(entry){
+    const record=entryModelCache.get(entry&&entry.name);
+    if(record){
+      record.entry=entry;
+      (record.atoms||[]).forEach(a=>{ a._entryTitle=entry.title; });
+      record.hierarchy=buildEntryHierarchyCache(entry,record.atoms||[]);
+    }
+    interactionIndexByKey.forEach(rec=>{
+      if(rec&&rec.entryName===entry.name)rec.entryTitle=entry.title;
+    });
+  }
+  async function renameEntry(value,title,opts){
+    opts=opts||{};
+    const entry=entryByIdentifier(value);
+    if(!entry)throw new Error('Entry not found: '+normText(value||''));
+    const nextTitle=normText(title);
+    if(!nextTitle)throw new Error('Entry title cannot be empty.');
+    if(entry.title===nextTitle)return {name:entry.name,title:entry.title,pdbId:entry.pdbId,fmt:entry.fmt};
+    entry.title=nextTitle;
+    refreshEntryTitleReferences(entry);
+    buildEntriesList();
+    buildHierarchy();
+    updateInteractionAggregate();
+    updateStatusBar();
+    if(opts.persist!==false){
+      const saved=await saveViewerSessionEntryTitle(entry.name,nextTitle,{status:false});
+      if(!saved)setStatus('Renamed locally but not saved on server: '+nextTitle);
+      else setStatus('Renamed entry: '+nextTitle);
+    }else{
+      setStatus('Renamed entry: '+nextTitle);
+    }
+    return {name:entry.name,title:entry.title,pdbId:entry.pdbId,fmt:entry.fmt};
+  }
   function removeEntry(value){
     const entry=entryByIdentifier(value);
     if(!entry)throw new Error('Entry not found: '+normText(value||''));
     const removed=deleteEntry(entry);
     return removed?{name:removed.name,title:removed.title,pdbId:removed.pdbId,fmt:removed.fmt}:null;
-  }
-  function activateEntry(entry){
-    const wasIncluded=entryChecked[entry.name]!==false;
-    currentName=entry.name;
-    if(!wasIncluded)entryChecked[entry.name]=true;
-    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); saveViewerSessionState(); }
-    else{ resetSelectionState(); refreshDisplayedEntriesFast({preserveView:true,zoom:false}); saveViewerSessionState(); }
   }
   function loadEntry(e,opts){
     opts=opts||{};
@@ -2915,7 +2954,6 @@ function boot(){
     const hadOverrides=displayStateHasOverrides();
     const existingEntry=entries.findIndex(x=>x.name===e.name);
     if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
-    currentName=e.name;
     entryChecked[e.name]=true;
     resetDisplayRulesForStructure();
     if(existingEntry>=0||hadOverrides)rebuildDisplayedEntries({zoom:true});
@@ -3544,6 +3582,7 @@ function installFrameSyncedMotion(targetViewer){
     if(type==='focus')return focus(command.selector||command.target||state.selectionSel);
     if(type==='style'){ state.styleRules.push({selector:command.selector||command.target||{},representation:command.representation||command.style||'cartoon',options:command.options||command}); applyStylesFull(true); return state.styleRules[state.styleRules.length-1]; }
     if(type==='hide'){ state.hiddenRules.push({selector:command.selector||command.target||{},representation:'hide',options:command.options||command}); applyStylesFull(true); return state.hiddenRules[state.hiddenRules.length-1]; }
+    if(type==='renameentry'||type==='setentrytitle')return renameEntry(command.name||command.entry||command.target,command.title||command.newTitle||command.value,command.options||command);
     if(type==='removeentry'||type==='deleteentry')return removeEntry(command.name||command.entry||command.target);
     throw new Error('Unsupported run() command type: '+(type||'-'));
   }
@@ -3556,12 +3595,12 @@ function installFrameSyncedMotion(targetViewer){
     getPreferences:preferencesPayload, savePreferences:savePreferencesNow,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
-    getState:function(){ return {file:currentName,entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false,active:e.name===currentName})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, removeEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
+    loadUrl, removeEntry, renameEntry, setEntryTitle:renameEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------
