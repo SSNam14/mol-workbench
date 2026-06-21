@@ -22,7 +22,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-003{padding:2px 10px;border-radius:3px;color:#cfcfcf;cursor:pointer}
 .u-004{display:none}
 .u-005{height:20px;padding:0 10px;border:0;border-radius:3px;background:transparent;color:#cfcfcf;font:inherit;cursor:pointer}
-.u-006{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;background:#424242;border-bottom:1px solid #1a1a1a}
+.u-006{display:flex;align-items:center;gap:4px;height:30px;padding:0 8px;background:#424242;border-bottom:1px solid #1a1a1a}
 .u-007{display:flex;align-items:center;gap:4px;height:24px;padding-right:8px;border-right:1px solid #2a2a2a}
 .u-008{font-size:11px;color:#a7a7a7}
 .u-007>.u-008:nth-of-type(2){display:none}
@@ -36,7 +36,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-016{font-size:10px}
 .u-017{height:24px;padding:0 12px;border:1px solid #555;border-radius:5px;background:#2d2d2d;color:#d4d4d4;cursor:pointer}
 .u-018{flex:1}
-.u-019{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;background:#2f2f2f;border-bottom:1px solid #1a1a1a}
+.u-019{display:flex;align-items:center;gap:4px;height:30px;padding:0 8px;background:#2f2f2f;border-bottom:1px solid #1a1a1a}
 .u-020{font-size:11px;color:#8f8f8f}
 .u-021{height:24px;background:#2d2d2d;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:0 4px;font-size:12px;font-family:inherit}
 .u-022{display:flex;align-items:center;height:24px;background:#1f1f1f;border:1px solid #555;border-radius:4px;overflow:hidden}
@@ -141,7 +141,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .color-tile-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 14px/1 ui-monospace,Menlo,Consolas,monospace;text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
 
 /* Clip plane control (toolbar, right end of Fit/Focus/Clear row). */
-.clip-control{display:flex;align-items:center;gap:8px;height:24px;padding-left:10px;border-left:1px solid #2a2a2a}
+.clip-control{display:flex;align-items:center;gap:4px;height:24px;padding-left:10px;border-left:1px solid #2a2a2a}
 .clip-cap{font-size:11px;color:#cfcfcf;font-weight:600}
 .clip-control.is-active .clip-cap{color:#7fd4ff}
 .clip-control.is-active .clip-range{background:#64b5f6}
@@ -160,7 +160,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-100 svg{width:13px;height:13px;display:block}
 
 /* Selected atom action icons in the top toolbar. */
-.svg-icon-strip{display:flex;align-items:center;gap:3px;flex:0 0 190px;height:24px;padding:0 6px 0 0;border-right:1px solid #2a2a2a;overflow:hidden}
+.svg-icon-strip{display:flex;align-items:center;gap:4px;flex:0 0 190px;height:24px;padding:0 6px 0 0;border-right:1px solid #2a2a2a;overflow:hidden}
 .svg-icon-chip{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border:1px solid #555;border-radius:4px;background:#2d2d2d;color:inherit;cursor:pointer;font:inherit;padding:0;appearance:none}
 .svg-icon-chip img{display:block;width:18px;height:18px;object-fit:contain}
 .svg-icon-chip:focus-visible{outline:1px solid #6cb0e0;outline-offset:1px}
@@ -170,7 +170,7 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .find-view-controls .u-017{height:24px;padding:0 8px;border-radius:4px;font-size:11px}
 
 /* Compact per-category representation dropdowns (toolbar, replaces Style popover). */
-.rep-group{display:flex;align-items:center;gap:8px;padding-right:9px;border-right:1px solid #2a2a2a}
+.rep-group{display:flex;align-items:center;gap:4px;padding-right:9px;border-right:1px solid #2a2a2a}
 .rep-ctl{display:flex;align-items:center;gap:4px;height:24px}
 .rep-label{font-size:11px;color:#a7a7a7;line-height:1;white-space:nowrap}
 .rep-sel{width:68px;height:24px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:12px;font-family:inherit;padding:0 3px;cursor:pointer}
