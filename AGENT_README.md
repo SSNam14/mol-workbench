@@ -21,6 +21,12 @@ This README is a tool-agnostic operation manual for agents. It assumes only that
 
 Tool-specific debugging commands are intentionally not included here.
 
+## Agent Operating Rule
+
+When a user asks for a direct viewer operation, do only the actions required to satisfy that request and then report the result. Examples include loading files, removing entries, renaming entries, selecting atoms, changing visibility, changing representation, or updating preferences.
+
+Do not expand simple operation requests into broad code review, design analysis, browser visual inspection, optimization work, or unrelated cleanup unless the user explicitly asks for that work or the requested operation fails. Prefer the existing structured APIs (`window.molAgent` or the server HTTP APIs) over manual UI clicks for routine session operations.
+
 ## Serving The App
 
 Run the project server from the repository root:
