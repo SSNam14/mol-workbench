@@ -74,6 +74,89 @@ const MIN_SCREEN_POINT_RADIUS = 0.10;
 const MAX_SCREEN_POINT_RADIUS = 2.12;
 const LINE_CAP_OVERLAP = 0.55;
 
+const WIDE_LINE_VERTEX_SHADER = `
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform float vWidth;
+uniform float vHeight;
+
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec3 color;
+attribute float radius;
+
+varying vec3 vColor;
+varying vec4 mvPosition;
+
+const float MIN_LINE_HALF_PX = ${Number(MIN_SCREEN_LINE_WIDTH/2).toFixed(4)};
+const float MAX_LINE_HALF_PX = ${Number(MAX_SCREEN_LINE_WIDTH/2).toFixed(4)};
+const float MIN_POINT_RADIUS_PX = ${Number(MIN_SCREEN_POINT_RADIUS).toFixed(4)};
+const float MAX_POINT_RADIUS_PX = ${Number(MAX_SCREEN_POINT_RADIUS).toFixed(4)};
+const float LINE_CAP_OVERLAP_PX = ${Number(LINE_CAP_OVERLAP).toFixed(4)};
+
+float worldToPixels(float worldSize, float depth) {
+  float safeDepth = max(0.0001, -depth);
+  return abs(worldSize) * projectionMatrix[1][1] * vHeight / (2.0 * safeDepth);
+}
+
+void main() {
+  vColor = color;
+  vec2 pixelToNdc = vec2(2.0 / max(vWidth, 1.0), 2.0 / max(vHeight, 1.0));
+  mvPosition = modelViewMatrix * vec4(position, 1.0);
+  vec4 clip = projectionMatrix * mvPosition;
+
+  if(abs(radius) < 0.0000001) {
+    float pointPx = clamp(worldToPixels(normal.z, mvPosition.z), MIN_POINT_RADIUS_PX, MAX_POINT_RADIUS_PX);
+    clip.xy += normal.xy * pointPx * pixelToNdc * clip.w;
+    gl_Position = clip;
+    return;
+  }
+
+  vec4 otherMv = modelViewMatrix * vec4(normal, 1.0);
+  vec4 otherClip = projectionMatrix * otherMv;
+  vec2 here = clip.xy / clip.w;
+  vec2 there = otherClip.xy / otherClip.w;
+  vec2 along = here - there;
+  float screenLen = length(along);
+  if(screenLen < 0.000001) along = vec2(1.0, 0.0);
+  else along /= screenLen;
+  vec2 side = vec2(-along.y, along.x) * sign(radius);
+  float halfPx = clamp(worldToPixels(radius, mvPosition.z), MIN_LINE_HALF_PX, MAX_LINE_HALF_PX);
+  vec2 offsetPx = side * halfPx + along * (halfPx * LINE_CAP_OVERLAP_PX);
+  clip.xy += offsetPx * pixelToNdc * clip.w;
+  gl_Position = clip;
+}
+`.trim();
+
+const WIDE_LINE_FRAGMENT_SHADER = `
+uniform float opacity;
+uniform vec3 fogColor;
+uniform float fogNear;
+uniform float fogFar;
+
+varying vec3 vColor;
+varying vec4 mvPosition;
+
+//DEFINEFRAGCOLOR
+void main() {
+  gl_FragColor = vec4(vColor, opacity);
+  if(fogNear != fogFar) {
+    float depth = -mvPosition.z;
+    float fogFactor = smoothstep(fogNear, fogFar, depth);
+    gl_FragColor = mix(gl_FragColor, vec4(fogColor, gl_FragColor.w), fogFactor);
+  }
+}
+`.trim();
+
+function cloneWideLineUniforms(){
+  return {
+    opacity:{type:'f',value:1},
+    fogColor:{type:'c',value:{r:1,g:1,b:1}},
+    fogNear:{type:'f',value:1},
+    fogFar:{type:'f',value:2000}
+  };
+}
+
 class MolWideLineLayer{
   constructor(host,getViewer){
     this.host=host;
@@ -331,10 +414,8 @@ class MolWideLineLayer{
     }
     if(!this.resolveRuntime(viewer))return false;
     this.disposeMesh(viewer);
-    this.geometry=new this.Geometry(true);
-    this.material=new this.Material({color:'#ffffff'});
-    this.material.shaderID='basic';
-    this.material.vertexColors=VERTEX_COLORS;
+    this.geometry=new this.Geometry(true,true);
+    this.material=this.createWideLineMaterial();
     this.material.depthTest=true;
     this.material.depthWrite=true;
     this.material.transparent=false;
@@ -349,10 +430,9 @@ class MolWideLineLayer{
       const group=this.geometry.updateGeoGroup(4);
       const base=group.vertices;
       const color=colorValue(item.data.color||item.options.color);
-      this.fillStaticQuad(group,base,color);
+      if(item.type==='line')this.fillLineQuad(group,base,item,color);
+      else this.fillPointQuad(group,base,item,color);
       this.plan.push({group,base,item,coordOffset:this.coords.length});
-      if(item.type==='line')this.coords.push(item.data.start,item.data.end);
-      else this.coords.push(item.data);
       group.vertices+=4;
       group.faceidx+=6;
     });
@@ -365,19 +445,115 @@ class MolWideLineLayer{
     return true;
   }
 
-  fillStaticQuad(group,base,color){
-    const fi=group.faceidx,ci=base*3;
+  createWideLineMaterial(){
+    const material=new this.Material({color:'#ffffff'});
+    material.shaderID='';
+    material.vertexShader=WIDE_LINE_VERTEX_SHADER;
+    material.fragmentShader=WIDE_LINE_FRAGMENT_SHADER;
+    material.uniforms=cloneWideLineUniforms();
+    material.vertexColors=VERTEX_COLORS;
+    material.depthTest=true;
+    material.depthWrite=true;
+    material.transparent=false;
+    material.opacity=1;
+    material.needsUpdate=true;
+    const Material=this.Material;
+    material.clone=function(){
+      const clone=new Material({color:'#ffffff'});
+      clone.shaderID='';
+      clone.vertexShader=WIDE_LINE_VERTEX_SHADER;
+      clone.fragmentShader=WIDE_LINE_FRAGMENT_SHADER;
+      clone.uniforms=cloneWideLineUniforms();
+      clone.vertexColors=VERTEX_COLORS;
+      clone.depthTest=material.depthTest;
+      clone.depthWrite=material.depthWrite;
+      clone.transparent=material.transparent;
+      clone.opacity=material.opacity;
+      clone.visible=material.visible;
+      clone.side=material.side;
+      clone.wireframe=material.wireframe;
+      clone.needsUpdate=true;
+      return clone;
+    };
+    return material;
+  }
+
+  fillQuadIndices(group,base){
+    const fi=group.faceidx;
     group.faceArray[fi]=base;
     group.faceArray[fi+1]=base+2;
     group.faceArray[fi+2]=base+1;
     group.faceArray[fi+3]=base+2;
     group.faceArray[fi+4]=base+3;
     group.faceArray[fi+5]=base+1;
+  }
+
+  fillColor(group,base,color){
+    const ci=base*3;
     for(let i=0;i<4;i++){
       const p=ci+i*3;
       group.colorArray[p]=color.r;
       group.colorArray[p+1]=color.g;
       group.colorArray[p+2]=color.b;
+    }
+  }
+
+  writePoint(group,idx,p){
+    const vi=idx*3;
+    group.vertexArray[vi]=p.x;
+    group.vertexArray[vi+1]=p.y;
+    group.vertexArray[vi+2]=p.z;
+  }
+
+  writeOther(group,idx,p){
+    const vi=idx*3;
+    group.normalArray[vi]=p.x;
+    group.normalArray[vi+1]=p.y;
+    group.normalArray[vi+2]=p.z;
+  }
+
+  lineWorldHalf(line,options){
+    const explicit=finiteNumber(line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,NaN);
+    const width=Number.isFinite(explicit)?explicit:finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    return Math.max(0.001,width/2);
+  }
+
+  pointWorldRadius(point,options){
+    const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
+    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    return Math.max(0.001,radius);
+  }
+
+  fillLineQuad(group,base,item,color){
+    this.fillQuadIndices(group,base);
+    this.fillColor(group,base,color);
+    const line=item.data, a=line.start, b=line.end, half=this.lineWorldHalf(line,item.options);
+    this.writePoint(group,base,a);
+    this.writePoint(group,base+1,a);
+    this.writePoint(group,base+2,b);
+    this.writePoint(group,base+3,b);
+    this.writeOther(group,base,b);
+    this.writeOther(group,base+1,b);
+    this.writeOther(group,base+2,a);
+    this.writeOther(group,base+3,a);
+    group.radiusArray[base]=half;
+    group.radiusArray[base+1]=-half;
+    group.radiusArray[base+2]=half;
+    group.radiusArray[base+3]=-half;
+  }
+
+  fillPointQuad(group,base,item,color){
+    this.fillQuadIndices(group,base);
+    this.fillColor(group,base,color);
+    const point=item.data, radius=this.pointWorldRadius(point,item.options);
+    for(let i=0;i<4;i++)this.writePoint(group,base+i,point);
+    const corners=[[-1,-1],[1,-1],[-1,1],[1,1]];
+    for(let i=0;i<4;i++){
+      const vi=(base+i)*3;
+      group.normalArray[vi]=corners[i][0];
+      group.normalArray[vi+1]=corners[i][1];
+      group.normalArray[vi+2]=radius;
+      group.radiusArray[base+i]=0;
     }
   }
 
@@ -397,15 +573,37 @@ class MolWideLineLayer{
     return Number.isFinite(d)&&d>1e-9?d:1;
   }
 
-  clampModelSize(viewer,size,minPx,maxPx){
+  frameBasis(viewer){
+    let right={x:1,y:0,z:0}, up={x:0,y:1,z:0}, modelPerPixel=1;
+    if(viewer&&typeof viewer.screenOffsetToModel==='function'){
+      const x=viewer.screenOffsetToModel(1,0), y=viewer.screenOffsetToModel(0,1);
+      const xl=x&&length(x), yl=y&&length(y);
+      if(Number.isFinite(xl)&&xl>1e-9){
+        right=scale(x,1/xl);
+        modelPerPixel=xl;
+      }
+      if(Number.isFinite(yl)&&yl>1e-9)up=scale(y,1/yl);
+    }
+    return {right,up,modelPerPixel};
+  }
+
+  clampModelSize(viewer,size,minPx,maxPx,frame){
     let out=Math.max(0.001,Number(size)||0);
-    const modelPerPixel=this.modelUnitsPerPixel(viewer);
+    const modelPerPixel=frame&&Number.isFinite(frame.modelPerPixel)?frame.modelPerPixel:this.modelUnitsPerPixel(viewer);
     if(Number.isFinite(minPx)&&minPx>0)out=Math.max(out,modelPerPixel*minPx);
     if(Number.isFinite(maxPx)&&maxPx>0)out=Math.min(out,modelPerPixel*maxPx);
     return out;
   }
 
-  screenDirection(viewer,x,y,fallback){
+  screenDirection(viewer,x,y,fallback,frame){
+    if(frame&&frame.right&&frame.up){
+      const dir={
+        x:frame.right.x*x+frame.up.x*y,
+        y:frame.right.y*x+frame.up.y*y,
+        z:frame.right.z*x+frame.up.z*y
+      };
+      if(length(dir)>1e-9)return normalize(dir);
+    }
     if(viewer&&typeof viewer.screenOffsetToModel==='function'){
       const off=viewer.screenOffsetToModel(x,y);
       if(off&&length(off)>1e-9)return normalize(off);
@@ -413,29 +611,29 @@ class MolWideLineLayer{
     return normalize(fallback||{x:1,y:0,z:0});
   }
 
-  lineHalfWidthModel(viewer,line,options){
+  lineHalfWidthModel(viewer,line,options,frame){
     const explicit=finiteNumber(line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,NaN);
     const width=Number.isFinite(explicit)?explicit:finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
     const minPx=finiteNumber(line.minPixelWidth||options&&options.minPixelWidth,MIN_SCREEN_LINE_WIDTH);
     const maxPx=finiteNumber(line.maxPixelWidth||options&&options.maxPixelWidth,MAX_SCREEN_LINE_WIDTH);
-    return this.clampModelSize(viewer,width/2,minPx/2,maxPx/2);
+    return this.clampModelSize(viewer,width/2,minPx/2,maxPx/2,frame);
   }
 
-  pointRadiusModel(viewer,point,options){
+  pointRadiusModel(viewer,point,options,frame){
     const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
     const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
     const minPx=finiteNumber(point.minPixelRadius||options&&options.minPixelRadius,MIN_SCREEN_POINT_RADIUS);
     const maxPx=finiteNumber(point.maxPixelRadius||options&&options.maxPixelRadius,MAX_SCREEN_POINT_RADIUS);
-    return this.clampModelSize(viewer,radius,minPx,maxPx);
+    return this.clampModelSize(viewer,radius,minPx,maxPx,frame);
   }
 
-  writeLineQuad(viewer,entry,projected){
+  writeLineQuad(viewer,entry,projected,frame){
     const line=entry.item.data, a=line.start, b=line.end, pa=projected[entry.coordOffset], pb=projected[entry.coordOffset+1];
     if(!pa||!pb||!Number.isFinite(pa.x)||!Number.isFinite(pb.x))return;
     let dx=pb.x-pa.x, dy=pb.y-pa.y, len=Math.hypot(dx,dy);
     if(len<1e-4){ dx=1; dy=0; len=1; }
-    const dir=this.screenDirection(viewer,-dy/len,dx/len,{x:0,y:1,z:0});
-    const half=this.lineHalfWidthModel(viewer,line,entry.item.options);
+    const dir=this.screenDirection(viewer,-dy/len,dx/len,{x:0,y:1,z:0},frame);
+    const half=this.lineHalfWidthModel(viewer,line,entry.item.options,frame);
     const off=scale(dir,half), bond=sub(b,a), bondLen=length(bond), bondDir=normalize(bond);
     const cap=Math.min(half*LINE_CAP_OVERLAP,bondLen*0.08);
     const a0={x:a.x-bondDir.x*cap,y:a.y-bondDir.y*cap,z:a.z-bondDir.z*cap};
@@ -451,9 +649,9 @@ class MolWideLineLayer{
     this.writeVertex(entry.group,entry.base+3,v3,n);
   }
 
-  writePointQuad(viewer,entry){
-    const p=entry.item.data, radius=this.pointRadiusModel(viewer,p,entry.item.options);
-    const ox=scale(this.screenDirection(viewer,1,0,{x:1,y:0,z:0}),radius), oy=scale(this.screenDirection(viewer,0,1,{x:0,y:1,z:0}),radius);
+  writePointQuad(viewer,entry,frame){
+    const p=entry.item.data, radius=this.pointRadiusModel(viewer,p,entry.item.options,frame);
+    const ox=scale(this.screenDirection(viewer,1,0,{x:1,y:0,z:0},frame),radius), oy=scale(this.screenDirection(viewer,0,1,{x:0,y:1,z:0},frame),radius);
     const n=normalize(cross(ox,oy));
     this.writeVertex(entry.group,entry.base,{x:p.x-ox.x-oy.x,y:p.y-ox.y-oy.y,z:p.z-ox.z-oy.z},n);
     this.writeVertex(entry.group,entry.base+1,{x:p.x+ox.x-oy.x,y:p.y+ox.y-oy.y,z:p.z+ox.z-oy.z},n);
@@ -464,9 +662,10 @@ class MolWideLineLayer{
   updateVertices(viewer){
     let projected=[];
     try{ projected=viewer.modelToScreen(this.coords); }catch(e){ return false; }
+    const frame=this.frameBasis(viewer);
     this.plan.forEach(entry=>{
-      if(entry.item.type==='line')this.writeLineQuad(viewer,entry,projected);
-      else this.writePointQuad(viewer,entry);
+      if(entry.item.type==='line')this.writeLineQuad(viewer,entry,projected,frame);
+      else this.writePointQuad(viewer,entry,frame);
     });
     if(this.geometry){
       this.geometry.verticesNeedUpdate=true;
@@ -491,10 +690,7 @@ class MolWideLineLayer{
     }
     if(!this.mesh)return;
     this.mesh.visible=true;
-    if(key!==this.lastViewKey){
-      this.updateVertices(viewer);
-      this.lastViewKey=key;
-    }
+    this.lastViewKey=key;
   }
 }
 
