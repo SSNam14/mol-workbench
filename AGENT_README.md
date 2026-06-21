@@ -155,9 +155,9 @@ molAgent.selectAtoms({chain: "H", resi: "30-35"}).slice(0, 5);
 
 Useful `getState()` fields:
 
-- `file`: current structure name
-- `entries`: loaded entries with `name`, `title`, `included`, and `active`
-- `includedEntries`: entry names currently displayed in the viewer
+- `file`: current active entry id
+- `entries`: loaded entries with unique internal `name`, human-facing `title`, `included`, and `active`
+- `includedEntries`: unique entry ids currently displayed in the viewer
 - `atoms`: total loaded atom count
 - `proteinBackbone`: protein backbone representation, usually `cartoon`, `tube`, or `off`
 - `proteinAtoms`: protein atom-level representation, usually `off`, `line`, `stick`, `sphere`, or `cpk`
@@ -518,6 +518,8 @@ await molAgent.loadUrl("path/to/structure.pdb", "pdb", "structure-id", "Display 
 molAgent.getState();
 ```
 
+The `name` argument is an identity base, not a guaranteed final id. Every UI or `molAgent.loadUrl(...)` load receives a fresh internal entry id by appending a timestamp-like suffix. The visible filename/title is kept in `title`. If you need to delete or target a newly loaded entry, read the actual id from `molAgent.getState().entries`.
+
 Remove an entry from the current viewer session:
 
 ```js
@@ -529,7 +531,7 @@ Supported format inference in the UI includes common molecular files such as `pd
 
 Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
-Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry, disposes its cached 3Dmol model, and updates the persisted server session.
+Loading a new structure adds a new unique entry and includes it in the displayed set. Loading the same filename again later creates another entry rather than replacing the existing one. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry, disposes its cached 3Dmol model, and updates the persisted server session.
 
 The viewer starts background interaction indexing for each displayed entry. When multiple entries are displayed, each ready entry's own interactions can be rendered at the same time; cross-entry interactions are intentionally not generated.
 
@@ -665,6 +667,8 @@ req = urllib.request.Request(
 print(urllib.request.urlopen(req).read().decode())
 PY
 ```
+
+`/api/session-entry` also treats `name` as an entry id. If the id already exists, the server appends a unique suffix and returns the stored `entry` in the response. To intentionally replace an existing id, send `{"entry": entry, "replace": true}` or add `?replace=1`.
 
 Remove one entry:
 

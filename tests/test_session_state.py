@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import sys
+import tempfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -73,6 +74,38 @@ class SessionStateTests(unittest.TestCase):
             self.assertEqual(handler.sent, (404, {"error": "not_found"}))
         finally:
             server.load_session_or_legacy = original
+
+    def test_session_entry_name_conflict_creates_unique_entry(self):
+        originals = {
+            "STATE_DIR": server.STATE_DIR,
+            "LAST_STRUCTURE_PATH": server.LAST_STRUCTURE_PATH,
+            "SESSION_PATH": server.SESSION_PATH,
+            "SESSION_STATE_PATH": server.SESSION_STATE_PATH,
+            "SESSION_META_PATH": server.SESSION_META_PATH,
+            "PREFERENCES_PATH": server.PREFERENCES_PATH,
+            "INTERACTION_INDEX_DIR": server.INTERACTION_INDEX_DIR,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.STATE_DIR = root
+            server.LAST_STRUCTURE_PATH = root / "last_structure.json"
+            server.SESSION_PATH = root / "session.json"
+            server.SESSION_STATE_PATH = root / "session_state.json"
+            server.SESSION_META_PATH = root / "session_meta.json"
+            server.PREFERENCES_PATH = root / "preferences.json"
+            server.INTERACTION_INDEX_DIR = root / "interaction_indexes"
+            try:
+                first_session, first = server.upsert_session_entry(entry("same"))
+                second_session, second = server.upsert_session_entry(entry("same"))
+                self.assertEqual(len(first_session["entries"]), 1)
+                self.assertEqual(len(second_session["entries"]), 2)
+                self.assertEqual(first["name"], "same")
+                self.assertNotEqual(second["name"], "same")
+                self.assertTrue(second["name"].startswith("same__"))
+                self.assertEqual([item["title"] for item in second_session["entries"]], ["same", "same"])
+            finally:
+                for key, value in originals.items():
+                    setattr(server, key, value)
 
 
 if __name__ == "__main__":

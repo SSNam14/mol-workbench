@@ -78,6 +78,7 @@ function boot(){
   let selectionStyleActive = false;
   let selectionShapes = [];
   let selectionHighlightJob = 0;
+  let entryLoadSeq = 0;
   let selectedLineBondKeys = new Set();
   let lineSelectionStyleMaskActive = false;
   let hierarchyRows = [];
@@ -310,6 +311,21 @@ function boot(){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
     return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+  }
+  function uniqueEntryName(base){
+    const root=normText(base||'structure')||'structure';
+    const stamp=new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,17);
+    let candidate=root+'__'+stamp+'-'+(++entryLoadSeq);
+    while(entries.some(entry=>entry.name===candidate)||entryModelCache.has(candidate)){
+      candidate=root+'__'+stamp+'-'+(++entryLoadSeq);
+    }
+    return candidate;
+  }
+  function entryWithFreshIdentity(entry,title){
+    entry=normalizeStructureEntry(entry);
+    if(!entry)return null;
+    const displayTitle=normText(title||entry.title||entry.name)||entry.name;
+    return Object.assign({},entry,{name:uniqueEntryName(entry.name||displayTitle),title:displayTitle});
   }
   function normalizeViewerSession(payload){
     if(!payload||typeof payload!=='object'||!Array.isArray(payload.entries))return null;
@@ -2293,17 +2309,18 @@ function boot(){
   }
   async function loadUrl(url,fmt,name,title,pdbId){
     const entryName=name||urlFileName(url)||url;
+    const displayTitle=title||entryName;
     const explicitFmt=normText(fmt).toLowerCase();
     let sourceFmt=explicitFmt||inferFormat(entryName);
     if(!explicitFmt&&sourceFmt==='pdb'&&entryName!==url)sourceFmt=inferFormat(url);
-    setStatus('Loading: '+(entryName||url));
+    setStatus('Loading: '+(displayTitle||url));
     const res=await fetch(url); if(!res.ok)throw new Error(res.status+' '+res.statusText);
     if(isMaestroFormat(sourceFmt)){
-      const entry=await convertStructureBuffer(await res.arrayBuffer(),sourceFmt,entryName,title||entryName,pdbId||'');
-      return persistAndLoadEntry(entry);
+      const entry=await convertStructureBuffer(await res.arrayBuffer(),sourceFmt,entryName,displayTitle,pdbId||'');
+      return persistAndLoadEntry(entryWithFreshIdentity(entry,displayTitle));
     }
     const data=await res.text();
-    const e={name:entryName,title:title||entryName,pdbId:pdbId||'',data,fmt:sourceFmt||'pdb'};
+    const e=entryWithFreshIdentity({name:entryName,title:displayTitle,pdbId:pdbId||'',data,fmt:sourceFmt||'pdb'},displayTitle);
     return persistAndLoadEntry(e);
   }
   async function persistAndLoadEntry(e){
@@ -2931,8 +2948,8 @@ function boot(){
       try{
         const fmt=inferFormat(f.name);
         let e2;
-        if(isMaestroFormat(fmt))e2=await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,'');
-        else e2={name:f.name,title:f.name,pdbId:'',data:await f.text(),fmt};
+        if(isMaestroFormat(fmt))e2=entryWithFreshIdentity(await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,''),f.name);
+        else e2=entryWithFreshIdentity({name:f.name,title:f.name,pdbId:'',data:await f.text(),fmt},f.name);
         await persistAndLoadEntry(e2);
         loaded.push(f.name);
       }catch(err){

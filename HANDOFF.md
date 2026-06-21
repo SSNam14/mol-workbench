@@ -45,8 +45,9 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
 - Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
+- Each load must create a unique internal entry id (`entry.name`) while preserving the original filename or requested display name as `entry.title`. Loading the same filename again later must add another entry, not replace the existing one.
 - Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, and MAEGZ. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing.
-- Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
+- Loading a new structure adds a unique entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
 - An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed and `activeEntry` must be `""`; only a missing `includedEntries` field uses legacy fallback to all entries.
 - Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
@@ -136,7 +137,7 @@ String commands are intentionally disabled. Use structured objects only. `setSel
 Server-side entry update endpoints:
 
 ```text
-PUT /api/session-entry              # upsert one entry JSON object
+PUT /api/session-entry              # add one entry JSON object; duplicate ids get a unique suffix unless replace=true
 DELETE /api/session-entry/<name>    # remove one entry by entry name
 PUT /api/session-state              # update includedEntries and activeEntry only
 GET /api/session-meta               # lightweight revision for open-client sync

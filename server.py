@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -65,6 +66,26 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     return {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+
+
+def truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "replace"}
+
+
+def unique_entry_name(name, entries):
+    names = {entry.get("name") for entry in entries}
+    if name not in names:
+        return name
+    base = str(name or "structure").strip() or "structure"
+    stamp = str(time.time_ns())
+    counter = 1
+    while True:
+        candidate = f"{base}__{stamp}-{counter}"
+        if candidate not in names:
+            return candidate
+        counter += 1
 
 
 def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
@@ -457,24 +478,25 @@ def clear_session():
                 pass
 
 
-def upsert_session_entry(entry):
+def upsert_session_entry(entry, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
             session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "activeEntry": entry["name"]}
         entries = session["entries"]
-        for idx, existing in enumerate(entries):
-            if existing.get("name") == entry["name"]:
-                entries[idx] = entry
-                break
+        stored_entry = dict(entry)
+        existing_idx = next((idx for idx, existing in enumerate(entries) if existing.get("name") == stored_entry["name"]), None)
+        if existing_idx is not None and replace:
+            entries[existing_idx] = stored_entry
         else:
-            entries.append(entry)
+            stored_entry["name"] = unique_entry_name(stored_entry["name"], entries)
+            entries.append(stored_entry)
         included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
-        if entry["name"] not in included:
-            included.append(entry["name"])
-        session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": entry["name"]})
+        if stored_entry["name"] not in included:
+            included.append(stored_entry["name"])
+        session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": stored_entry["name"]})
         write_session(session)
-        return session
+        return session, stored_entry
 
 
 def remove_session_entry(name):
@@ -693,16 +715,19 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         payload = self.read_json_body(MAX_STRUCTURE_BYTES)
         if payload is None:
             return
-        entry = normalize_entry(payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload)
+        raw_entry = payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload
+        query = parse_qs(urlparse(self.path).query)
+        replace = truthy((payload if isinstance(payload, dict) else {}).get("replace")) or truthy((query.get("replace") or [""])[0])
+        entry = normalize_entry(raw_entry)
         if not entry:
             self.send_json(400, {"error": "invalid_structure"})
             return
         try:
-            session = upsert_session_entry(entry)
+            session, stored_entry = upsert_session_entry(entry, replace=replace)
         except (OSError, json.JSONDecodeError):
             self.send_json(500, {"error": "state_write_failed"})
             return
-        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+        self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_put_session_state(self):
         payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
@@ -803,11 +828,11 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_structure"})
             return
         try:
-            session = upsert_session_entry(entry)
+            session, stored_entry = upsert_session_entry(entry, replace=True)
         except (OSError, json.JSONDecodeError):
             self.send_json(500, {"error": "state_write_failed"})
             return
-        self.send_json(200, {"ok": True, "entries": len(session["entries"]), "session": session_meta(session)})
+        self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def interaction_index_path(self, key):
         if not key or not all(ch.isalnum() or ch in "._-" for ch in key):
