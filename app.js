@@ -7,6 +7,7 @@ function boot(){
   const statusEl = $('status');
 
   let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let atomsByEntry = new Map(), atomsByChain = new Map(), atomsByEntryChain = new Map(), atomsByEntryChainResidue = new Map(), atomsByEntryChainResidueName = new Map();
   const entryModelCache = new Map();
   let nextAtomSerial = 1;
   let styleGeneration = 1;
@@ -50,8 +51,11 @@ function boot(){
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
   const LARGE_SELECTOR_ARRAY_LIMIT = 32;
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
+  const LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT = 1500;
+  const LARGE_SELECTION_REPRESENTATIVE_ATOM_LIMIT = 600;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
+  const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
   const state = {
     baseProtein:'cartoon', proteinAtoms:'off', ligand:'stick', solvent:'off', other:'stick',
     styleRules:[], hiddenRules:[], interactionRules:[],
@@ -71,6 +75,7 @@ function boot(){
   let selectionStyleActive = false;
   let selectionShapes = [];
   let selectionHighlightJob = 0;
+  let hierarchyRows = [];
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
@@ -328,7 +333,13 @@ function boot(){
     if(sessionSyncTimer)return;
     sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
-  function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
+  function atomElem(a){
+    if(!a)return '';
+    if(a._elemKey)return a._elemKey;
+    const out=normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,'');
+    try{ a._elemKey=out; }catch(e){}
+    return out;
+  }
   function atomName(a){ return normUpper(a&&a.atom); }
   function hslHex(h,s,l){
     s/=100; l/=100;
@@ -490,18 +501,41 @@ function boot(){
     Object.keys(sel).forEach(k=>{ const v=sel[k]; if(v===undefined||v===null)return; if(k==='not')out.not=resolveSelector(v); else if(k==='or')out.or=(Array.isArray(v)?v:[v]).map(resolveSelector); else if(k==='and')out.and=(Array.isArray(v)?v:[v]).map(resolveSelector); else out[k]=v; });
     return out;
   }
+  function selectorTextKey(v){ return normUpper(v); }
+  function selectorResiKey(v){ return normText(v); }
+  function selectorEntryChainKey(entry,chain){ return selectorTextKey(entry)+'\u0001'+selectorTextKey(chain); }
+  function selectorEntryChainResidueKey(entry,chain,resi){ return selectorEntryChainKey(entry,chain)+'\u0001'+selectorResiKey(resi); }
+  function selectorEntryChainResidueNameKey(entry,chain,resi,resn){ return selectorEntryChainResidueKey(entry,chain,resi)+'\u0001'+selectorTextKey(resn); }
+  function pushAtomIndex(map,key,a){
+    let list=map.get(key);
+    if(!list){ list=[]; map.set(key,list); }
+    list.push(a);
+  }
+  function uniqueAtomsInOrder(lists){
+    const seen=new Set(),out=[];
+    (lists||[]).forEach(list=>{
+      (list||[]).forEach(a=>{
+        if(!a)return;
+        const k=a.serial!=null?'s:'+a.serial:'i:'+(a._entryName||'')+'\u0001'+a.index;
+        if(seen.has(k))return;
+        seen.add(k);
+        out.push(a);
+      });
+    });
+    out.sort((a,b)=>(a.serial||0)-(b.serial||0));
+    return out;
+  }
   function matchesResolvedSelector(a,sel){
     sel=sel||{};
     if(sel.not&&matchesResolvedSelector(a,sel.not))return false;
     if(sel.or&&!sel.or.some(p=>matchesResolvedSelector(a,p)))return false;
     if(sel.and&&!sel.and.every(p=>matchesResolvedSelector(a,p)))return false;
-    const special=new Set(['not','or','and']);
-    for(const k of Object.keys(sel)){ if(special.has(k))continue; let av=a[k]; if(k==='elem')av=atomElem(a); if(!matchScalar(av,sel[k],k))return false; }
+    for(const k of Object.keys(sel)){ if(SELECTOR_SPECIAL_KEYS.has(k))continue; let av=a[k]; if(k==='elem')av=atomElem(a); if(!matchScalar(av,sel[k],k))return false; }
     return true;
   }
   function serialsForSelector(sel,opts){
-    const resolved=resolveSelector(sel), sc=opts&&opts.sidechainOnly, out=[];
-    for(const a of atoms){ if(!matchesResolvedSelector(a,resolved))continue; if(sc&&(!isProtein(a)||backboneAtoms.has(a.atom)))continue; if(a.serial!=null)out.push(a.serial); }
+    const selected=filterAtoms(sel), sc=opts&&opts.sidechainOnly, out=[];
+    for(const a of selected){ if(sc&&(!isProtein(a)||backboneAtoms.has(a.atom)))continue; if(a.serial!=null)out.push(a.serial); }
     return out;
   }
   function styleSelection(sel,opts){ return {serial:serialsForSelector(sel,opts)}; }
@@ -516,17 +550,62 @@ function boot(){
     return uniqueSerials(serialsForSelector(sel,opts));
   }
   function addSelectorSerials(set,sel,opts){ serialsFromSelector(sel,opts).forEach(s=>set.add(s)); }
-  function isPureSerialSelector(sel){ return !!(sel&&typeof sel==='object'&&!Array.isArray(sel)&&sel.serial!=null&&Object.keys(sel).length===1); }
   function filterAtomsBySerial(want){
-    if(Array.isArray(want)&&canUseSelectorArraySet(want,'serial')){
-      const set=selectorArraySet(want,'serial','number');
-      return atoms.filter(a=>{ const n=Number(a.serial); return !Number.isNaN(n)&&set.has(n); });
+    const raw=Array.isArray(want)?want:[want],out=[],seen=new Set();
+    for(const s of raw){
+      const n=Number(s);
+      if(Number.isNaN(n)||seen.has(n))continue;
+      seen.add(n);
+      const a=atomBySerial.get(n);
+      if(a)out.push(a);
     }
-    return atoms.filter(a=>matchScalar(a.serial,want,'serial'));
+    if(out.length>1)out.sort((a,b)=>(Number(a.serial)||0)-(Number(b.serial)||0));
+    return out;
+  }
+  function filterAtomsFastResolved(r){
+    r=r||{};
+    const keys=Object.keys(r).filter(k=>!SELECTOR_SPECIAL_KEYS.has(k));
+    if(!keys.length&&!r.or&&!r.and&&!r.not)return atoms.slice();
+    if(r.not||r.and)return null;
+    if(r.or){
+      const lists=[];
+      for(const part of r.or){
+        const list=filterAtomsFastResolved(part);
+        if(list==null)return null;
+        lists.push(list);
+      }
+      return uniqueAtomsInOrder(lists);
+    }
+    if(r.serial!=null&&keys.length===1)return filterAtomsBySerial(r.serial);
+    const hasEntry=r._entryName!=null, hasChain=r.chain!=null, hasResi=r.resi!=null, hasResn=r.resn!=null;
+    const directEntry=hasEntry&&!Array.isArray(r._entryName), directChain=hasChain&&!Array.isArray(r.chain);
+    const directResi=hasResi&&!Array.isArray(r.resi)&&!isResiRangeValue(r.resi);
+    const directResn=hasResn&&!Array.isArray(r.resn);
+    let pool=null, usedIndex=false;
+    if(directEntry&&directChain&&directResi&&directResn){
+      usedIndex=true;
+      pool=atomsByEntryChainResidueName.get(selectorEntryChainResidueNameKey(r._entryName,r.chain,r.resi,r.resn));
+    }else if(directEntry&&directChain&&directResi){
+      usedIndex=true;
+      pool=atomsByEntryChainResidue.get(selectorEntryChainResidueKey(r._entryName,r.chain,r.resi));
+    }else if(directEntry&&directChain){
+      usedIndex=true;
+      pool=atomsByEntryChain.get(selectorEntryChainKey(r._entryName,r.chain));
+    }else if(directEntry){
+      usedIndex=true;
+      pool=atomsByEntry.get(selectorTextKey(r._entryName));
+    }else if(directChain){
+      usedIndex=true;
+      pool=atomsByChain.get(selectorTextKey(r.chain));
+    }
+    if(usedIndex&&!pool)return [];
+    if(!pool)return null;
+    return pool.filter(a=>matchesResolvedSelector(a,r));
   }
   function filterAtoms(sel){
     const r=resolveSelector(sel||{});
-    if(isPureSerialSelector(r))return filterAtomsBySerial(r.serial);
+    const fast=filterAtomsFastResolved(r);
+    if(fast!=null)return fast;
     return atoms.filter(a=>matchesResolvedSelector(a,r));
   }
   function residueUiKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi; }
@@ -702,6 +781,31 @@ function boot(){
     });
     return groups;
   }
+  function representativeSelectionAtoms(selected){
+    if(atoms.length<LARGE_INTERACTION_INDEX_ATOM_LIMIT||selected.length<=LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT)return selected;
+    const maxAtoms=LARGE_SELECTION_REPRESENTATIVE_ATOM_LIMIT;
+    const residues=new Map();
+    selected.forEach(a=>{
+      const key=residueUiKey(a), name=atomName(a);
+      let rec=residues.get(key);
+      if(!rec){ rec={backbone:[],atoms:[]}; residues.set(key,rec); }
+      rec.atoms.push(a);
+      if(isProtein(a)&&backboneAtoms.has(name))rec.backbone.push(a);
+    });
+    const keys=Array.from(residues.keys());
+    const perResidue=4;
+    const stride=Math.max(1,Math.ceil(keys.length/Math.max(1,Math.floor(maxAtoms/perResidue))));
+    const out=[];
+    for(let i=0;i<keys.length&&out.length<maxAtoms;i+=stride){
+      const rec=residues.get(keys[i]);
+      const source=rec.backbone.length?rec.backbone:rec.atoms;
+      for(let j=0;j<source.length&&out.length<maxAtoms;j++)out.push(source[j]);
+    }
+    if(out.length)return out;
+    const step=Math.max(1,Math.ceil(selected.length/maxAtoms));
+    for(let i=0;i<selected.length&&out.length<maxAtoms;i+=step)out.push(selected[i]);
+    return out;
+  }
   function drawSelectionRepGroup(selected,rep,opts,job){
     if(!selected.length)return;
     if((rep==='stick'||rep==='sphere'||rep==='cpk')&&applySelectionStyleOverlay(selected,rep,opts))return;
@@ -716,7 +820,8 @@ function boot(){
   }
   function drawAdaptiveLineSelection(selected,o,job){
     if(!wideLineLayer)return false;
-    const groups=partitionSelectionByDisplay(selected),lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
+    const displayAtoms=representativeSelectionAtoms(selected);
+    const groups=partitionSelectionByDisplay(displayAtoms),lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
     appendWideAtomLines(lines,points,groups.none,o,function(){ return o.color||'#fdd835'; },width,false);
     appendWideAtomLines(lines,points,groups.line,o,function(){ return o.color||'#fdd835'; },width,false);
     if(lines.length||points.length)wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
@@ -1219,9 +1324,11 @@ function boot(){
       updateInteractionSummary(0);
       return;
     }
+    const hadInteractionGraphics=(interactionWideLines&&interactionWideLines.length)||(interactionShapes&&interactionShapes.length);
     visible.forEach(ensureInteractionIndexForEntry);
     updateInteractionAggregate(visible);
-    redrawInteractions(true);
+    if(hadInteractionGraphics||readyInteractionSlots(visible).length)redrawInteractions(true);
+    else updateInteractionSummary(0);
   }
   function scheduleInteractionIndexBuild(delay){
     cancelScheduledInteractionIndexBuild();
@@ -1604,7 +1711,10 @@ function boot(){
   function hierarchyChildRow(opts){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
-    if(opts.atoms)row.dataset.hierarchySerials=serialsForAtoms(opts.atoms).map(String).join(',');
+    if(opts.match){
+      row.__hierarchyMatch=opts.match;
+      hierarchyRows.push(row);
+    }
     row.style.cssText='display:flex;align-items:center;gap:7px;min-height:20px;padding:0 8px 0 '+(opts.indent||34)+'px;font-size:11.5px;cursor:pointer';
     if(opts.checkbox){
       const chk=document.createElement('input');
@@ -1631,12 +1741,21 @@ function boot(){
   function syncHierarchySelectionHighlight(){
     const tree=$('hierarchyTree');
     if(!tree)return;
-    const selected=new Set((selectionAtoms||[]).map(a=>a&&a.serial!=null?String(a.serial):'').filter(Boolean));
-    tree.querySelectorAll('[data-hierarchy-serials]').forEach(row=>{
+    const chainKeys=new Set(),groupKeys=new Set(),entryKeys=new Set();
+    (selectionAtoms||[]).forEach(a=>{
+      if(!a)return;
+      entryKeys.add(a._entryName||'');
+      chainKeys.add(chainVisibilityKey(a._entryName,a.chain));
+      groupKeys.add(groupVisibilityKeyFromAtom(a));
+    });
+    const rows=hierarchyRows.length?hierarchyRows:Array.from(tree.querySelectorAll('[data-row]'));
+    rows.forEach(row=>{
+      const m=row.__hierarchyMatch;
       let on=false;
-      if(selected.size){
-        const serials=(row.dataset.hierarchySerials||'').split(',');
-        for(let i=0;i<serials.length;i++){ if(selected.has(serials[i])){ on=true; break; } }
+      if(m){
+        if(m.type==='chain')on=chainKeys.has(m.key);
+        else if(m.type==='group')on=groupKeys.has(m.key);
+        else if(m.type==='entry')on=entryKeys.has(m.key);
       }
       row.classList.toggle('is-selected',on);
     });
@@ -1687,7 +1806,7 @@ function boot(){
     return row;
   }
   function buildHierarchy(){
-    const tree=$('hierarchyTree'); tree.innerHTML='';
+    const tree=$('hierarchyTree'); tree.innerHTML=''; hierarchyRows=[];
     updateSelectionStatus();
     const shown=includedEntries();
     shown.forEach(entry=>{
@@ -1701,8 +1820,8 @@ function boot(){
       if(counts.ligands){
         tree.appendChild(catRow('Ligands',counts.ligands,22));
         groupedResidues(entryAtoms.filter(isLigand)).forEach(g=>{
-          const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
@@ -1715,14 +1834,14 @@ function boot(){
           byChain.get(key).atoms.push(a);
         });
         Array.from(byChain.values()).sort(compareHierarchyGroups).forEach(g=>{
-          const sel=serialSelectorForAtoms(g.atoms);
+          const sel={_entryName:g.entry,chain:g.chain};
           tree.appendChild(hierarchyChildRow({
             label:'Chain '+g.chain,
             title:hierarchyPrefix(g,shown.length>1)+'Chain '+g.chain,
             count:g.atoms.length,
             color:chainColor(g.chain),
             indent:34,
-            atoms:g.atoms,
+            match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
             checkbox:true,
             checked:chainVisibilityValue(g.entry,g.chain),
             oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
@@ -1734,16 +1853,16 @@ function boot(){
       if(counts.solvents){
         tree.appendChild(catRow('Solvents',counts.solvents,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
-          const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
 
       if(counts.other){
         tree.appendChild(catRow('Other',counts.other,22));
         groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
-          const sel=serialSelectorForAtoms(g.atoms);
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
       }
       if(!entryAtoms.length){
@@ -2044,13 +2163,25 @@ function boot(){
     atomByEntryIndex=new Map();
     atomByEntrySourceSerial=new Map();
     atomBySerial=new Map();
-    atoms.forEach(a=>{
+    atomsByEntry=new Map();
+    atomsByChain=new Map();
+    atomsByEntryChain=new Map();
+    atomsByEntryChainResidue=new Map();
+    atomsByEntryChainResidueName=new Map();
+    atoms.forEach((a,i)=>{
+      a._atomOrdinal=i;
+      atomElem(a);
       if(a.index!=null){
         if(!atomByIndex.has(a.index))atomByIndex.set(a.index,a);
         atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
       }
       if(atomSourceSerial(a)!=null)atomByEntrySourceSerial.set(atomEntryIndexKey(a._entryName,atomSourceSerial(a)),a);
       if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
+      pushAtomIndex(atomsByEntry,selectorTextKey(a._entryName),a);
+      pushAtomIndex(atomsByChain,selectorTextKey(a.chain),a);
+      pushAtomIndex(atomsByEntryChain,selectorEntryChainKey(a._entryName,a.chain),a);
+      pushAtomIndex(atomsByEntryChainResidue,selectorEntryChainResidueKey(a._entryName,a.chain,a.resi),a);
+      pushAtomIndex(atomsByEntryChainResidueName,selectorEntryChainResidueNameKey(a._entryName,a.chain,a.resi,a.resn),a);
     });
     resetAtomLevelCache();
   }
@@ -2173,7 +2304,11 @@ function boot(){
     schedulePanelRefresh(40);
     if(visible.length){
       setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
-      redrawInteractions(true);
+      if(readyInteractionSlots(visible).length)redrawInteractions(true);
+      else{
+        updateInteractionAggregate(visible);
+        updateInteractionSummary(0);
+      }
       scheduleInteractionIndexBuild(120);
     }else{
       updateInteractionAggregate(visible);
