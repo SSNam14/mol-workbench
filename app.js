@@ -7,6 +7,9 @@ function boot(){
   const statusEl = $('status');
 
   let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  const entryModelCache = new Map();
+  let nextAtomSerial = 1;
+  let styleGeneration = 1;
   const entries = [];
   const entryChecked = Object.create(null);
   let displayedCount = 0;
@@ -37,6 +40,7 @@ function boot(){
   };
   const VIEWER_SESSION_API = 'api/session';
   const VIEWER_SESSION_META_API = 'api/session-meta';
+  const VIEWER_SESSION_STATE_API = 'api/session-state';
   const LAST_STRUCTURE_API = 'api/last-structure';
   const PREFERENCES_API = 'api/preferences';
 
@@ -74,6 +78,8 @@ function boot(){
   let interactionIndex = {status:'empty',jobId:0,interactions:null,counts:{}};
   let resetMouseDrag = function(){};
   let preferencesSaveTimer = null;
+  let panelRefreshTimer = null;
+  let interactionStartTimer = null;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
   function nextId(p){ return p + '-' + (idSeq++); }
@@ -237,6 +243,21 @@ function boot(){
     suppressSessionPollUntil=Date.now()+1500;
     if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
     return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+  }
+  function viewerSessionStatePayload(){
+    const names=new Set(entries.map(e=>e.name));
+    const included=entries.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
+    let active=names.has(currentName)?currentName:(included[0]||(entries[0]&&entries[0].name)||'');
+    return {includedEntries:included,activeEntry:active};
+  }
+  function saveViewerSessionState(){
+    if(!entries.length)return saveViewerSession();
+    const payload=viewerSessionStatePayload();
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetch(VIEWER_SESSION_STATE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>{
+      if(!res.ok)return saveViewerSession();
+      return res.json();
+    }).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>saveViewerSession());
   }
   function loadViewerSession(){
     return fetch(VIEWER_SESSION_API,{cache:'no-store'}).then(res=>{
@@ -422,8 +443,7 @@ function boot(){
     for(const a of atoms){ if(!matchesResolvedSelector(a,resolved))continue; if(sc&&(!isProtein(a)||backboneAtoms.has(a.atom)))continue; if(a.serial!=null)out.push(a.serial); }
     return out;
   }
-  function isComplexSelector(s){ return !!(s&&typeof s==='object'&&(s.not||s.or||s.and)); }
-  function styleSelection(sel,opts){ const r=resolveSelector(sel); if((opts&&opts.sidechainOnly)||isComplexSelector(r))return {serial:serialsForSelector(sel,opts)}; return r; }
+  function styleSelection(sel,opts){ return {serial:serialsForSelector(sel,opts)}; }
   function uniqueSerials(list){
     const seen=new Set(),out=[];
     (list||[]).forEach(s=>{ if(s==null||seen.has(s))return; seen.add(s); out.push(s); });
@@ -652,7 +672,7 @@ function boot(){
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
     const cs=_catSer||categorySerials();
-    if(state.proteinAtoms==='line')addWideStyleAtoms(lines,points,{hetflag:false},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
+    if(state.proteinAtoms==='line'&&cs.protein.length)addWideStyleAtoms(lines,points,{serial:cs.protein},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
     if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
     if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
     if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
@@ -712,12 +732,15 @@ function boot(){
   function applyStylesFull(render,opts){
     if(!viewer||!model)return;
     opts=opts||{};
+    styleGeneration++;
     resetAtomLevelCache();
     selectionStyleActive=false;
     _catSer=categorySerials();
     viewer.setStyle({},{});
-    viewer.setStyle({hetflag:false}, proteinBackboneStyleSpec());
-    if(state.proteinAtoms!=='off')viewer.addStyle({hetflag:false}, proteinAtomStyleSpec());
+    if(_catSer.protein.length){
+      viewer.setStyle({serial:_catSer.protein}, proteinBackboneStyleSpec());
+      if(state.proteinAtoms!=='off')viewer.addStyle({serial:_catSer.protein}, proteinAtomStyleSpec());
+    }
     if(_catSer.ligands.length)viewer.setStyle({serial:_catSer.ligands}, ligandStyleSpec());
     if(_catSer.solvents.length)viewer.setStyle({serial:_catSer.solvents}, solventStyleSpec());
     if(_catSer.other.length)viewer.setStyle({serial:_catSer.other}, otherStyleSpec());
@@ -731,13 +754,22 @@ function boot(){
       applySelectionHighlight(selectionAtoms);
     }
     if(!opts.skipStatus)updateStatusBar();
+    models.forEach(item=>{
+      const record=entryModelCache.get(item.entry&&item.entry.name);
+      if(record)record.styleGeneration=styleGeneration;
+    });
     if(render!==false)viewer.render();
   }
 
+  function installAtomEventsForModel(m){
+    if(!m||m._molAgentEventsInstalled)return;
+    m.setClickable({},true,function(a,v,e){ handleAtomClick(a,e); });
+    m.setHoverable({},true,function(a){ if(hoverClearTimer){clearTimeout(hoverClearTimer);hoverClearTimer=null;} showHover(a); }, function(){ if(hoverClearTimer)clearTimeout(hoverClearTimer); hoverClearTimer=setTimeout(function(){ showHover(null); hoverClearTimer=null; },60); });
+    m._molAgentEventsInstalled=true;
+  }
   function setupAtomEvents(){
     if(!viewer)return;
-    viewer.setClickable({},true,function(a,v,e){ handleAtomClick(a,e); });
-    viewer.setHoverable({},true,function(a){ if(hoverClearTimer){clearTimeout(hoverClearTimer);hoverClearTimer=null;} showHover(a); }, function(){ if(hoverClearTimer)clearTimeout(hoverClearTimer); hoverClearTimer=setTimeout(function(){ showHover(null); hoverClearTimer=null; },60); });
+    models.forEach(item=>installAtomEventsForModel(item.model));
   }
   function showHover(a){
     const bar=$('hoverBar'); if(!bar)return;
@@ -827,8 +859,9 @@ function boot(){
     try{ viewerEl.focus({preventScroll:true}); }
     catch(e){ try{ viewerEl.focus(); }catch(_){} }
   }
-  function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo({},450); state.focusTarget={mode:'overview'}; return true; }
-  function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s={}; viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
+  function visibleAtomSelector(){ const serials=serialsForAtoms(atoms); return serials.length?{serial:serials}:{}; }
+  function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo(visibleAtomSelector(),450); state.focusTarget={mode:'overview'}; return true; }
+  function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector(); viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
   function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
 
@@ -851,7 +884,7 @@ function boot(){
   let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
   function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; }
   function categorySerials(){
-    const out={ligands:[],solvents:[],other:[]};
+    const out={protein:[],ligands:[],solvents:[],other:[]};
     for(const a of atoms){
       const c=atomCategory(a);
       if(out[c]&&a.serial!=null)out[c].push(a.serial);
@@ -928,7 +961,14 @@ function boot(){
       return {serial:a.serial,index:a.index,entry:a._entryName||'',chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
     });
   }
+  function cancelScheduledInteractionIndexBuild(){
+    if(interactionStartTimer!=null){
+      clearTimeout(interactionStartTimer);
+      interactionStartTimer=null;
+    }
+  }
   function resetInteractionIndex(status){
+    cancelScheduledInteractionIndexBuild();
     interactionBuildSeq++;
     if(interactionWorker){ try{ interactionWorker.terminate(); }catch(e){} interactionWorker=null; }
     interactionIndex={status:status||'empty',jobId:interactionBuildSeq,interactions:null,counts:{}};
@@ -1018,6 +1058,13 @@ function boot(){
     }).catch(()=>{
       if(jobId===interactionBuildSeq)startInteractionWorker(jobId,key);
     });
+  }
+  function scheduleInteractionIndexBuild(delay){
+    cancelScheduledInteractionIndexBuild();
+    interactionStartTimer=setTimeout(function(){
+      interactionStartTimer=null;
+      startInteractionIndexBuild();
+    }, delay==null?120:Math.max(0,Number(delay)||0));
   }
   function categoryIsProtein(c){ return c==='protein'; }
   function categoryIsLigand(c){ return c==='ligands'||c==='ligand'; }
@@ -1565,6 +1612,28 @@ function boot(){
     dirty.forEach(k=>{ const on=next.has(k); if(activeSeqKeys.has(k)!==on)paintSeqKey(k,on); });
     activeSeqKeys=new Set(next);
   }
+  function schedulePanelRefresh(delay){
+    if(panelRefreshTimer!=null)clearTimeout(panelRefreshTimer);
+    panelRefreshTimer=setTimeout(function(){
+      panelRefreshTimer=null;
+      buildHierarchy();
+      buildSequence();
+      updateStatusBar();
+      syncSeqHighlight();
+      showHover(null);
+    }, delay==null?40:Math.max(0,Number(delay)||0));
+  }
+  function flushPanelRefresh(){
+    if(panelRefreshTimer!=null){
+      clearTimeout(panelRefreshTimer);
+      panelRefreshTimer=null;
+    }
+    buildHierarchy();
+    buildSequence();
+    updateStatusBar();
+    syncSeqHighlight();
+    showHover(null);
+  }
 
   // ---------- Find ----------
   function runFind(){
@@ -1648,6 +1717,35 @@ function boot(){
     });
     return serialStart;
   }
+  function hideCachedEntry(record){
+    if(!viewer||!record||!record.atoms)return;
+    const serials=serialsForAtoms(record.atoms);
+    if(serials.length)viewer.setStyle({serial:serials},{});
+  }
+  function ensureEntryModel(entry){
+    const cacheKey=structureCacheKey(entry);
+    const cached=entryModelCache.get(entry.name);
+    if(cached&&cached.cacheKey===cacheKey)return cached;
+    if(cached)hideCachedEntry(cached);
+    const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
+    const list=m.selectedAtoms({});
+    nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
+    const record={entry,model:m,atoms:list,cacheKey};
+    entryModelCache.set(entry.name,record);
+    return record;
+  }
+  function showEntryRecord(record){
+    if(record&&record.model&&record.model.show)record.model.show();
+  }
+  function hideEntryRecord(record){
+    if(record&&record.model&&record.model.hide)record.model.hide();
+  }
+  function restyleEntryRecord(record){
+    if(!record||!record.atoms||!record.atoms.length)return;
+    setStyleForSerials(record.atoms,{},false);
+    applyBaseStylesForAtoms(record.atoms);
+    record.styleGeneration=styleGeneration;
+  }
   function refreshAtomMaps(){
     atomByIndex=new Map();
     atomByEntryIndex=new Map();
@@ -1666,7 +1764,7 @@ function boot(){
     setupAtomEvents();
     applyStylesFull(false);
     if(opts.preserveView&&opts.view&&viewer&&viewer.setView){ try{ viewer.setView(opts.view); }catch(e){} }
-    else if(opts.zoom!==false) viewer.zoomTo();
+    else if(opts.zoom!==false) viewer.zoomTo(visibleAtomSelector());
     viewer.render();
     buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
     showHover(null);
@@ -1690,18 +1788,18 @@ function boot(){
     }else if(!currentName&&visible.length){
       currentName=visible[0].name;
     }
-    viewer.clear();
+    const visibleNames=new Set(visible.map(e=>e.name));
+    entryModelCache.forEach((record,name)=>{ if(!visibleNames.has(name))hideEntryRecord(record); });
     if(wideLineLayer)wideLineLayer.clear();
     interactionShapes=[]; interactionWideLines=[];
     resetInteractionIndex('empty');
+    viewer.setStyle({},{});
     models=[]; model=null; atoms=[];
-    let nextSerial=1;
     visible.forEach(e=>{
-      const m=viewer.addModel(e.data,e.fmt||'pdb',{keepH:true});
-      const list=m.selectedAtoms({});
-      nextSerial=prepareDisplayedAtoms(e,list,nextSerial);
-      models.push({entry:e,model:m});
-      atoms=atoms.concat(list);
+      const record=ensureEntryModel(e);
+      showEntryRecord(record);
+      models.push({entry:e,model:record.model});
+      atoms=atoms.concat(record.atoms);
     });
     model=models.length?models[0].model:null;
     refreshAtomMaps();
@@ -1709,6 +1807,8 @@ function boot(){
       currentStructureKey='';
       resetAtomLevelCache();
       resetInteractionIndex('empty');
+      clearInteractionShapes();
+      clearSelectionHighlight();
       buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
       showHover(null);
       viewer.render();
@@ -1719,11 +1819,78 @@ function boot(){
     finishStructureRefresh(visible,Object.assign({},opts,{view}));
     return visible;
   }
+  function refreshDisplayedEntriesFast(opts){
+    opts=opts||{};
+    if(!viewer)initViewer();
+    const view=opts.preserveView&&viewer&&viewer.getView?viewer.getView():null;
+    const visible=includedEntries();
+    if(currentName&&entryChecked[currentName]===false){
+      currentName=visible.length?visible[0].name:'';
+    }else if(!currentName&&visible.length){
+      currentName=visible[0].name;
+    }
+    const visibleNames=new Set(visible.map(e=>e.name));
+    entryModelCache.forEach((record,name)=>{ if(!visibleNames.has(name))hideEntryRecord(record); });
+    if(wideLineLayer)wideLineLayer.clearCollection('selection');
+    clearSelectionHighlight();
+    models=[]; model=null; atoms=[];
+    const needsStyle=[];
+    visible.forEach(e=>{
+      const record=ensureEntryModel(e);
+      showEntryRecord(record);
+      models.push({entry:e,model:record.model});
+      atoms=atoms.concat(record.atoms);
+      if(record.styleGeneration!==styleGeneration)needsStyle.push(record);
+    });
+    model=models.length?models[0].model:null;
+    refreshAtomMaps();
+    if(!model){
+      currentStructureKey='';
+      resetAtomLevelCache();
+      resetInteractionIndex('empty');
+      clearInteractionShapes();
+      if(wideLineLayer)wideLineLayer.clear();
+      buildEntriesList();
+      flushPanelRefresh();
+      viewer.render();
+      setStatus('No entries displayed');
+      return null;
+    }
+    currentStructureKey=displayedStructureKey(visible);
+    setupAtomEvents();
+    resetAtomLevelCache();
+    _catSer=categorySerials();
+    if(needsStyle.length){
+      needsStyle.forEach(restyleEntryRecord);
+      applyRuleOverlays();
+      applyVisibility();
+    }else{
+      displayedCount=atoms.filter(isAtomVisibleNow).length;
+    }
+    redrawWideLineStyles();
+    clearInteractionShapes();
+    if(opts.preserveView&&view&&viewer&&viewer.setView){ try{ viewer.setView(view); }catch(e){} }
+    else if(opts.zoom!==false) viewer.zoomTo(visibleAtomSelector());
+    viewer.render();
+    buildEntriesList();
+    showHover(null);
+    schedulePanelRefresh(40);
+    if(visible.length===1){
+      setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
+      resetInteractionIndex('pending');
+      scheduleInteractionIndexBuild(120);
+    }else{
+      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      updateInteractionSummary(0);
+      setStatus(visible.length?visible.length+' entries displayed \u00b7 interactions disabled for multi-entry view':'No entries displayed');
+    }
+    return visible;
+  }
   function setEntryIncluded(entry,on){
     entryChecked[entry.name]=!!on;
     resetSelectionState();
-    rebuildDisplayedEntries({preserveView:true,zoom:false});
-    saveViewerSession();
+    refreshDisplayedEntriesFast({preserveView:true,zoom:false});
+    saveViewerSessionState();
   }
   function deleteEntry(entry){
     const idx=entries.findIndex(e=>e.name===entry.name);
@@ -1756,8 +1923,8 @@ function boot(){
     const wasIncluded=entryChecked[entry.name]!==false;
     currentName=entry.name;
     if(!wasIncluded)entryChecked[entry.name]=true;
-    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); saveViewerSession(); }
-    else{ resetSelectionState(); rebuildDisplayedEntries({preserveView:true,zoom:false}); saveViewerSession(); }
+    if(wasIncluded){ buildEntriesList(); buildHierarchy(); setStatus('Active entry: '+entry.title); saveViewerSessionState(); }
+    else{ resetSelectionState(); refreshDisplayedEntriesFast({preserveView:true,zoom:false}); saveViewerSessionState(); }
   }
   function loadEntry(e,opts){
     opts=opts||{};
@@ -2373,7 +2540,7 @@ function installFrameSyncedMotion(targetViewer){
   $('interBtn').onclick=toggleInterPanel;
   $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
-  $('btnFit').onclick=function(){ if(viewer){ viewer.zoomTo(); viewer.render(); } };
+  $('btnFit').onclick=function(){ if(viewer&&model){ viewer.zoomTo(visibleAtomSelector()); viewer.render(); } };
   $('btnFocus').onclick=function(){ focus(state.selectionSel); };
   $('btnClear').onclick=clearSelection;
   document.querySelectorAll('[data-selection-action]').forEach(btn=>{
