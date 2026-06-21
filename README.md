@@ -8,7 +8,7 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
-- `wide-lines.js`: 3Dmol scene-mesh renderer for screen-space-width line representations
+- `wide-lines.js`: 3Dmol scene-mesh renderer for app-managed line representations with world-space width, screen-pixel clamps, and depth testing
 - `server.py`: static file server plus persisted viewer-session, preferences, and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
@@ -352,12 +352,13 @@ Common style options:
 - `radius`: stick radius
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
-- `linewidth`: line width in screen pixels for app-managed `line` render paths
+- `linewidth`: app-managed `line` width scalar. It is converted to a world-space mesh width, then constrained by screen-pixel min/max clamps so line thickness changes with zoom/depth without vanishing or becoming excessively thick.
 - For `cpk`, `radius` controls stick radius and `scale` controls the VDW sphere multiplier. Atom sizes remain element-dependent through the configured VDW radii.
 
 Line rendering note:
 
 - App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to camera-facing mesh quads in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
+- Line thickness is world-space by default, so closer lines render thicker and farther lines render thinner under perspective projection. `wide-lines.js` also applies screen-pixel min/max clamps to prevent invisible far lines and over-thick close-up lines.
 - Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
 - Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 
@@ -511,6 +512,8 @@ When exactly one entry is displayed, the viewer starts background interaction in
 
 The viewer stores the loaded entry list, included-entry state, and active entry on the server through `/api/session`. A browser refresh restores that full session first; the bundled sample structure is only used when no saved session exists.
 
+Entries checkbox toggles update only `includedEntries` and `activeEntry` through lightweight `/api/session-state`. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
+
 Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
 
 `/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
@@ -652,6 +655,6 @@ PY
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, lightweight `/api/session-state`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.
