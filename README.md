@@ -95,7 +95,7 @@ Common selectors:
 {serial: [1, 2, 3]}
 {hetflag: true}
 {hetflag: false}
-{_entryName: "proteinprep_10AY"}
+{_entryName: "sample_structure"}
 {}
 ```
 
@@ -637,11 +637,11 @@ from pathlib import Path
 
 base_url = os.environ["VIEWER_URL"].rstrip("/")
 entry = {
-    "name": "proteinprep_10AY",
-    "title": "proteinprep_10AY-out",
-    "pdbId": "10AY",
+    "name": "sample_structure",
+    "title": "Sample structure",
+    "pdbId": "",
     "fmt": "pdb",
-    "data": Path("data/proteinprep_10AY-out.pdb").read_text(),
+    "data": Path("data/sample_structure.pdb").read_text(),
 }
 body = json.dumps(entry).encode()
 req = urllib.request.Request(
@@ -661,7 +661,7 @@ python3 - <<'PY'
 import os, urllib.parse, urllib.request
 
 base_url = os.environ["VIEWER_URL"].rstrip("/")
-name = urllib.parse.quote("proteinprep_10AY", safe="")
+name = urllib.parse.quote("sample_structure", safe="")
 req = urllib.request.Request(
     f"{base_url}/api/session-entry/{name}",
     method="DELETE",

@@ -55,7 +55,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - CIF files that omit `_atom_site.group_PDB` must still classify standard amino-acid residues with N/CA/C backbone atoms as protein. This fallback is required for Schrodinger-style CIF exports where 3Dmol marks every atom as hetero by default.
 - If a protein CIF lacks HELIX/SHEET or mmCIF secondary-structure annotations, assign a conservative phi/psi-based `ss` fallback after parsing so cartoon display is not all-loop. Do not override structures that already provide helix/sheet annotation.
-- Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
+- Do not expose hardcoded sample/predicted-structure shortcut buttons in the normal UI. The bundled sample structure is only the empty-session fallback.
 - Default mouse preset is `select-left`:
   - left click selects
   - left drag performs screen-space range selection
@@ -143,7 +143,7 @@ Common selector examples:
 ```js
 {chain: 'H'}
 {chain: 'H', resi: '30-35'}
-{_entryName: 'proteinprep_10AY', chain: 'H'}
+{_entryName: 'sample_structure', chain: 'H'}
 {serial: [1, 2, 3]}
 {not: {chain: 'A'}}
 {or: [{chain: 'H', resi: '30-35'}, {chain: 'L', resi: '90-95'}]}

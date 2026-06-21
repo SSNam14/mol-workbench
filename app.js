@@ -2734,7 +2734,7 @@ function boot(){
     if(saved){
       try{ restoreViewerSession(saved); return; }catch(err){}
     }
-    return loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY');
+    return loadUrl('data/sample_structure.pdb','pdb','sample_structure','Sample structure','');
   }
 
   const CLIP_MIN=-200, CLIP_MAX=200, CLIP_GAP=2;
@@ -3360,8 +3360,6 @@ function installFrameSyncedMotion(targetViewer){
   $('findClear').onclick=function(){ $('findInput').value=''; findMatches=[]; findIndex=-1; $('findCount').textContent='0 matches'; $('findSel').textContent=''; clearSelection(); };
   $('findPrev').onclick=function(){ stepFind(-1); };
   $('findNext').onclick=function(){ stepFind(1); };
-  $('addRef').onclick=function(){ withBusy('Loading 10AY...',()=>loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY')).catch(err=>setStatus('Load failed: '+err.message)); };
-  $('add6bgt').onclick=function(){ withBusy('Loading prediction...',()=>loadUrl('data/steap1_complex_seed2.pdb','pdb','steap1_complex_seed2','Prediction','')).catch(err=>setStatus('Load failed: '+err.message)); };
   $('fileInput').onchange=async function(e){
     const f=e.target.files&&e.target.files[0];
     if(!f)return;
