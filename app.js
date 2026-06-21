@@ -1813,8 +1813,6 @@ function boot(){
     $('stSel').textContent=info.atomCount.toLocaleString()+' atoms, '+info.residueCount.toLocaleString()+' residues';
     const label=$('curSelLabel');
     if(label)label.textContent=hasSelection?(info.atomCount.toLocaleString()+' atoms selected'):'Current Selection';
-    const chk=$('curSelChk');
-    if(chk)chk.checked=hasSelection;
   }
 
   // ---------- Hierarchy & Entries ----------
@@ -3439,7 +3437,6 @@ function installFrameSyncedMotion(targetViewer){
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
-  $('curSelChk').onchange=function(){ if(!$('curSelChk').checked)clearSelection(); };
   $('findGo').onclick=runFind;
   $('findInput').addEventListener('keydown',function(e){ if(e.key==='Enter'){ runFind(); e.preventDefault(); } });
   $('findClear').onclick=function(){ $('findInput').value=''; findMatches=[]; findIndex=-1; $('findCount').textContent='0 matches'; $('findSel').textContent=''; clearSelection(); };
