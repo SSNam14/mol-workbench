@@ -40,6 +40,7 @@ function boot(){
     contact:{maxDistance:4.8,minDistance:2.0,goodCutoffRatio:1.3,badCutoffRatio:0.89,uglyCutoffRatio:0.75,maxInteractions:12000}
   };
   const VIEWER_SESSION_API = 'api/session';
+  const VIEWER_SESSION_ENTRY_API = 'api/session-entry';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const VIEWER_SESSION_STATE_API = 'api/session-state';
   const LAST_STRUCTURE_API = 'api/last-structure';
@@ -53,6 +54,7 @@ function boot(){
   const LARGE_SELECTION_STYLE_ATOM_LIMIT = 1500;
   const LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT = 1500;
   const LARGE_SELECTION_REPRESENTATIVE_ATOM_LIMIT = 600;
+  const HUGE_FIT_ATOM_LIMIT = 100000;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
   const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
@@ -253,6 +255,20 @@ function boot(){
     suppressSessionPollUntil=Date.now()+1500;
     if(!payload)return fetch(VIEWER_SESSION_API,{method:'DELETE'}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
     return fetch(VIEWER_SESSION_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+  }
+  function saveViewerSessionEntry(entry){
+    const clean=normalizeStructureEntry(entry);
+    if(!clean)return Promise.resolve(false);
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetch(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(res=>res.ok?res.json():null).then(data=>{ rememberSessionResponse(data); return !!data; }).catch(()=>false);
+  }
+  function saveViewerSessionEntryDeferred(entry){
+    const size=String(entry&&entry.data||'').length;
+    if(size>=5*1024*1024){
+      setTimeout(function(){ saveViewerSessionEntry(entry); },0);
+      return Promise.resolve(true);
+    }
+    return saveViewerSessionEntry(entry);
   }
   function viewerSessionStatePayload(){
     const names=new Set(entries.map(e=>e.name));
@@ -834,9 +850,18 @@ function boot(){
     const selected=filterAtoms(sel).filter(isAtomVisibleNow);
     if(selected.length)appendWideAtomLines(lines,points,selected,o||{},defaultColorFn,widthDefault,dashed);
   }
+  function hasWideStyleLayer(){
+    if(state.proteinAtoms==='line'||state.ligand==='line'||state.solvent==='line'||state.other==='line')return true;
+    return state.styleRules.some(r=>{
+      if(r.disabled)return false;
+      const rep=normText(r.representation).toLowerCase();
+      return rep==='line'||rep==='tube';
+    });
+  }
   function redrawWideLineStyles(){
     if(!wideLineLayer)return;
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
+    if(!hasWideStyleLayer()){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
     const cs=_catSer||categorySerials();
     if(state.proteinAtoms==='line'&&cs.protein.length)addWideStyleAtoms(lines,points,{serial:cs.protein},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
@@ -923,20 +948,33 @@ function boot(){
     if(!opts.skipStatus)updateStatusBar();
     models.forEach(item=>{
       const record=entryModelCache.get(item.entry&&item.entry.name);
-      if(record)record.styleGeneration=styleGeneration;
+      if(record){
+        record.styleGeneration=styleGeneration;
+        record.sceneBuilt=false;
+      }
     });
-    if(render!==false)viewer.render();
+    if(render!==false)presentViewer(visibleEntryRecords(),true);
   }
 
-  function installAtomEventsForModel(m){
+  function installAtomEventsForRecord(record){
+    const m=record&&record.model;
     if(!m||m._molAgentEventsInstalled)return;
+    if(record.atoms&&record.atoms.length>=HUGE_FIT_ATOM_LIMIT&&isCustomMousePreset()){
+      m._molAgentEventsSkipped=true;
+      return;
+    }
     m.setClickable({},true,function(a,v,e){ handleAtomClick(a,e); });
     m.setHoverable({},true,function(a){ if(hoverClearTimer){clearTimeout(hoverClearTimer);hoverClearTimer=null;} showHover(a); }, function(){ if(hoverClearTimer)clearTimeout(hoverClearTimer); hoverClearTimer=setTimeout(function(){ showHover(null); hoverClearTimer=null; },60); });
     m._molAgentEventsInstalled=true;
+    m._molAgentEventsSkipped=false;
+    record.sceneBuilt=false;
   }
   function setupAtomEvents(){
     if(!viewer)return;
-    models.forEach(item=>installAtomEventsForModel(item.model));
+    models.forEach(item=>{
+      const record=entryModelCache.get(item.entry&&item.entry.name);
+      installAtomEventsForRecord(record||{model:item.model,atoms:[]});
+    });
   }
   function showHover(a){
     const bar=$('hoverBar'); if(!bar)return;
@@ -1027,8 +1065,140 @@ function boot(){
     catch(e){ try{ viewerEl.focus(); }catch(_){} }
   }
   function visibleAtomSelector(){ const serials=serialsForAtoms(atoms); return serials.length?{serial:serials}:{}; }
-  function focusOverview(){ if(!viewer||!model)return false; viewer.zoomTo(visibleAtomSelector(),450); state.focusTarget={mode:'overview'}; return true; }
-  function focus(sel){ if(!viewer||!model)return false; const t=sel||state.selectionSel; if(!t){ focusOverview(); return false; } let s=styleSelection(t,{}); if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector(); viewer.zoomTo(s,450); state.focusTarget={mode:'selection'}; return true; }
+  function hiddenCachedAtomCount(){
+    let n=0;
+    entryModelCache.forEach((record,name)=>{ if(entryChecked[name]===false&&record&&record.atoms)n+=record.atoms.length; });
+    return n;
+  }
+  function shouldUseFastFit(targetAtoms){
+    const n=(targetAtoms&&targetAtoms.length)||0;
+    return atoms.length>=HUGE_FIT_ATOM_LIMIT||n>=HUGE_FIT_ATOM_LIMIT||hiddenCachedAtomCount()>=HUGE_FIT_ATOM_LIMIT;
+  }
+  function atomExtent(list){
+    let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity,count=0;
+    (list||[]).forEach(a=>{
+      const x=Number(a&&a.x),y=Number(a&&a.y),z=Number(a&&a.z);
+      if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z))return;
+      if(x<minX)minX=x; if(y<minY)minY=y; if(z<minZ)minZ=z;
+      if(x>maxX)maxX=x; if(y>maxY)maxY=y; if(z>maxZ)maxZ=z;
+      count++;
+    });
+    if(!count)return null;
+    const center={x:(minX+maxX)/2,y:(minY+maxY)/2,z:(minZ+maxZ)/2};
+    let maxDsq=25;
+    (list||[]).forEach(a=>{
+      const dx=Number(a&&a.x)-center.x,dy=Number(a&&a.y)-center.y,dz=Number(a&&a.z)-center.z,d=dx*dx+dy*dy+dz*dz;
+      if(Number.isFinite(d)&&d>maxDsq)maxDsq=d;
+    });
+    return {minX,minY,minZ,maxX,maxY,maxZ,center,diag:Math.hypot(maxX-minX,maxY-minY,maxZ-minZ),diameter:Math.sqrt(maxDsq)*2};
+  }
+  function mergeExtents(list){
+    const boxes=(list||[]).filter(Boolean);
+    if(!boxes.length)return null;
+    let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+    boxes.forEach(b=>{
+      if(b.minX<minX)minX=b.minX; if(b.minY<minY)minY=b.minY; if(b.minZ<minZ)minZ=b.minZ;
+      if(b.maxX>maxX)maxX=b.maxX; if(b.maxY>maxY)maxY=b.maxY; if(b.maxZ>maxZ)maxZ=b.maxZ;
+    });
+    const center={x:(minX+maxX)/2,y:(minY+maxY)/2,z:(minZ+maxZ)/2};
+    let maxDsq=25;
+    boxes.forEach(b=>{
+      [[b.minX,b.minY,b.minZ],[b.minX,b.minY,b.maxZ],[b.minX,b.maxY,b.minZ],[b.minX,b.maxY,b.maxZ],[b.maxX,b.minY,b.minZ],[b.maxX,b.minY,b.maxZ],[b.maxX,b.maxY,b.minZ],[b.maxX,b.maxY,b.maxZ]].forEach(p=>{
+        const dx=p[0]-center.x,dy=p[1]-center.y,dz=p[2]-center.z,d=dx*dx+dy*dy+dz*dz;
+        if(d>maxDsq)maxDsq=d;
+      });
+    });
+    return {minX,minY,minZ,maxX,maxY,maxZ,center,diag:Math.hypot(maxX-minX,maxY-minY,maxZ-minZ),diameter:Math.sqrt(maxDsq)*2};
+  }
+  function visibleEntryRecords(){ return models.map(item=>entryModelCache.get(item.entry&&item.entry.name)).filter(Boolean); }
+  function setViewNoRender(view){
+    if(!viewer||!viewer.modelGroup||!viewer.rotationGroup||!Array.isArray(view)||view.length<8)return false;
+    function num(v,fallback){ const n=Number(v); return Number.isFinite(n)?n:fallback; }
+    const p=viewer.modelGroup.position,rp=viewer.rotationGroup.position,q=viewer.rotationGroup.quaternion;
+    p.x=num(view[0],p.x); p.y=num(view[1],p.y); p.z=num(view[2],p.z);
+    rp.z=num(view[3],rp.z);
+    q.x=num(view[4],q.x); q.y=num(view[5],q.y); q.z=num(view[6],q.z); q.w=num(view[7],q.w);
+    if(view.length>9){ rp.x=num(view[8],rp.x); rp.y=num(view[9],rp.y); }
+    return true;
+  }
+  function restoreViewNoRender(view){
+    if(!view)return false;
+    if(setViewNoRender(view))return true;
+    if(viewer&&viewer.setView){ try{ viewer.setView(view); return true; }catch(e){} }
+    return false;
+  }
+  function markSceneBuilt(records){ (records||visibleEntryRecords()).forEach(record=>{ if(record)record.sceneBuilt=true; }); }
+  function recordsNeedSceneRender(records){ return (records||visibleEntryRecords()).some(record=>record&&!record.sceneBuilt); }
+  function presentViewer(records,fullRender){
+    if(!viewer)return;
+    if(fullRender||typeof viewer.show!=='function'){
+      viewer.render();
+      markSceneBuilt(records||visibleEntryRecords());
+    }else showViewer();
+  }
+  function visibleAtomExtent(){ return mergeExtents(visibleEntryRecords().map(record=>record.extent)); }
+  function extentForAtoms(list){
+    if(list===atoms)return visibleAtomExtent()||atomExtent(list);
+    const record=visibleEntryRecords().find(r=>r.atoms===list);
+    return record&&record.extent?record.extent:atomExtent(list);
+  }
+  function setViewerModelPosition(x,y,z){
+    const p=viewer&&viewer.modelGroup&&viewer.modelGroup.position;
+    if(!p)return;
+    if(typeof p.set==='function')p.set(x,y,z);
+    else{ p.x=x; p.y=y; p.z=z; }
+  }
+  function fastFitAtoms(targetAtoms,opts){
+    opts=opts||{};
+    if(!viewer||!targetAtoms||!targetAtoms.length)return false;
+    const targetBox=opts.targetBox||extentForAtoms(targetAtoms);
+    if(!targetBox)return false;
+    const allBox=opts.allBox||visibleAtomExtent()||targetBox;
+    const fov=Number(viewer.camera&&viewer.camera.fov)||20;
+    const cameraZ=Number(viewer.CAMERA_Z)||0;
+    const minZoom=Number(viewer.config&&viewer.config.minimumZoomToDistance)||5;
+    const maxD=Math.max(targetBox.diameter,minZoom);
+    let finalz=-(maxD*0.5/Math.tan(Math.PI/180*fov/2)-cameraZ);
+    if(typeof viewer.adjustZoomToLimits==='function')finalz=viewer.adjustZoomToLimits(finalz);
+    setViewerModelPosition(-targetBox.center.x,-targetBox.center.y,-targetBox.center.z);
+    if(viewer.rotationGroup&&viewer.rotationGroup.position)viewer.rotationGroup.position.z=finalz;
+    const allD=Math.max(allBox.diag,5);
+    if(opts.overview){
+      viewer.slabNear=Math.min(-allD*2,-50);
+      viewer.slabFar=Math.max(allD*2,50);
+    }else{
+      viewer.slabNear=-allD/1.9;
+      viewer.slabFar=allD/2;
+    }
+    if(opts.focusTarget)state.focusTarget=opts.focusTarget;
+    if(opts.render!==false)presentViewer(null,false);
+    return true;
+  }
+  function fitVisible(opts){
+    opts=opts||{};
+    if(!viewer||!model)return false;
+    if(shouldUseFastFit(atoms)){
+      const box=visibleAtomExtent();
+      return fastFitAtoms(atoms,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
+    }
+    viewer.zoomTo(visibleAtomSelector(),opts.duration==null?0:opts.duration);
+    if(opts.render!==false)presentViewer(null,true);
+    state.focusTarget={mode:'overview'};
+    return true;
+  }
+  function focusOverview(){ return fitVisible({duration:450,render:true}); }
+  function focus(sel){
+    if(!viewer||!model)return false;
+    const t=sel||state.selectionSel;
+    if(!t){ focusOverview(); return false; }
+    const target=filterAtoms(t).filter(isAtomVisibleNow);
+    if(shouldUseFastFit(target))return fastFitAtoms(target.length?target:atoms,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
+    let s=styleSelection(t,{});
+    if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector();
+    viewer.zoomTo(s,450);
+    state.focusTarget={mode:'selection'};
+    return true;
+  }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
   function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
 
@@ -1447,16 +1617,17 @@ function boot(){
   function drawDash(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interaction,true); }
   function drawDashAP(a,p,c){ addInteractionWideLine(point(a),p,c,lineWidths.interaction,true); }
   function drawDashPP(p,q,c){ addInteractionWideLine(p,q,c,lineWidths.interaction,true); }
+  function presentOverlayFrame(){ if(wideLineLayer)presentViewer(null,false); else presentViewer(null,true); }
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
     updateInteractionAggregate();
-    if(!interState.enabled){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
-    if(!model||!atoms.length){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
+    if(!interState.enabled){ updateInteractionSummary(0); if(render!==false)presentOverlayFrame(); return; }
+    if(!model||!atoms.length){ updateInteractionSummary(0); if(render!==false)presentOverlayFrame(); return; }
     const slots=readyInteractionSlots();
     if(!slots.length){
       updateInteractionSummary(0);
-      if(render!==false)viewer.render();
+      if(render!==false)presentOverlayFrame();
       return;
     }
     const T=interState.types,S=interState.scope;
@@ -1478,7 +1649,7 @@ function boot(){
     }catch(e){}
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
     updateInteractionSummary(interactionWideLines.length);
-    if(render!==false)viewer.render();
+    if(render!==false)presentOverlayFrame();
   }
   function interIcon(kind){ const s=document.createElement('span'); s.style.cssText='display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;flex:none;background:#159aad;color:#fff;font-size:13px;font-weight:700'; s.textContent=kind==='noncov'?'H':(kind==='pi'?'\u03c0':'\u2731'); return s; }
   function makeInterToggle(key){
@@ -1553,13 +1724,19 @@ function boot(){
 
   function chargeOf(resn){ const r=normUpper(resn); if(r==='ARG'||r==='LYS')return 1; if(r==='ASP'||r==='GLU')return -1; return 0; }
   function updateStatusBar(){
-    const residues=new Set(),chains=new Set(),ligs=new Set(); let charge=0; const seenRes=new Set();
-    atoms.forEach(a=>{ const rk=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+(a.resn||''); residues.add(rk); chains.add(a.chain||'?'); if(isLigand(a))ligs.add((a._entryName||'')+':'+(a.chain||'')+':'+(a.resn||'')+':'+a.resi); if(!seenRes.has(rk)){ seenRes.add(rk); charge+=chargeOf(a.resn); } });
-    const protChains=new Set(); atoms.forEach(a=>{ if(isProtein(a))protChains.add(a.chain||'?'); });
-    const mols = protChains.size + ligs.size;
+    const chains=new Set(),protChains=new Set(); let residues=0,ligands=0,charge=0;
+    visibleEntryRecords().forEach(record=>{
+      const stats=record.stats||entryStatsForAtoms(record.atoms);
+      residues+=stats.residues||0;
+      ligands+=stats.ligands||0;
+      charge+=stats.charge||0;
+      (stats.chains||[]).forEach(c=>chains.add(c));
+      (stats.proteinChains||[]).forEach(c=>protChains.add(c));
+    });
+    const mols = protChains.size + ligands;
     $('stAtoms').textContent=atoms.length.toLocaleString();
     $('stChains').textContent=chains.size;
-    $('stResidues').textContent=residues.size.toLocaleString();
+    $('stResidues').textContent=residues.toLocaleString();
     const includedCount=includedEntries().length;
     $('stEntries').textContent=includedCount===entries.length?entries.length:(includedCount+'/'+entries.length);
     $('stMols').textContent=mols;
@@ -1810,16 +1987,17 @@ function boot(){
     updateSelectionStatus();
     const shown=includedEntries();
     shown.forEach(entry=>{
-      const entryAtoms=atoms.filter(a=>(a._entryName||'')===entry.name);
+      const record=entryModelCache.get(entry.name);
+      const entryAtoms=record&&record.atoms?record.atoms:atomsForEntry(entry);
+      const hierarchy=record&&record.hierarchy?record.hierarchy:buildEntryHierarchyCache(entry,entryAtoms);
+      const counts=hierarchy.counts||{protein:0,ligands:0,solvents:0,other:0};
       const collapsed=state.hierarchyCollapsed[entry.name]===true;
       tree.appendChild(entryHeaderRow(entry,entryAtoms.length,collapsed));
       if(collapsed)return;
-      const counts={protein:0,ligands:0,solvents:0,other:0};
-      entryAtoms.forEach(a=>{ counts[atomCategory(a)]++; });
 
       if(counts.ligands){
         tree.appendChild(catRow('Ligands',counts.ligands,22));
-        groupedResidues(entryAtoms.filter(isLigand)).forEach(g=>{
+        hierarchy.ligands.forEach(g=>{
           const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
           tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
@@ -1827,13 +2005,7 @@ function boot(){
 
       if(counts.protein){
         tree.appendChild(catRow('Protein',counts.protein,22));
-        const byChain=new Map();
-        entryAtoms.filter(isProtein).forEach(a=>{
-          const key=(a._entryName||'')+'\u0001'+(a.chain||'?');
-          if(!byChain.has(key))byChain.set(key,{entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'?',atoms:[]});
-          byChain.get(key).atoms.push(a);
-        });
-        Array.from(byChain.values()).sort(compareHierarchyGroups).forEach(g=>{
+        hierarchy.proteinChains.forEach(g=>{
           const sel={_entryName:g.entry,chain:g.chain};
           tree.appendChild(hierarchyChildRow({
             label:'Chain '+g.chain,
@@ -1852,7 +2024,7 @@ function boot(){
 
       if(counts.solvents){
         tree.appendChild(catRow('Solvents',counts.solvents,22));
-        groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='solvents')).forEach(g=>{
+        hierarchy.solvents.forEach(g=>{
           const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
           tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
@@ -1860,7 +2032,7 @@ function boot(){
 
       if(counts.other){
         tree.appendChild(catRow('Other',counts.other,22));
-        groupedResidues(entryAtoms.filter(a=>atomCategory(a)==='other')).forEach(g=>{
+        hierarchy.other.forEach(g=>{
           const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
           tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
         });
@@ -1917,27 +2089,29 @@ function boot(){
     dirty.forEach(k=>{ const on=next.has(k); if(activeSeqKeys.has(k)!==on)paintSeqKey(k,on); });
     activeSeqKeys=new Set(next);
   }
-  function schedulePanelRefresh(delay){
-    if(panelRefreshTimer!=null)clearTimeout(panelRefreshTimer);
-    panelRefreshTimer=setTimeout(function(){
-      panelRefreshTimer=null;
-      buildHierarchy();
-      buildSequence();
-      updateStatusBar();
-      syncSeqHighlight();
-      showHover(null);
-    }, delay==null?40:Math.max(0,Number(delay)||0));
+  function hasHugeDisplayedAtoms(){ return atoms.length>=HUGE_FIT_ATOM_LIMIT; }
+  function cancelPanelRefresh(){
+    if(panelRefreshTimer==null)return;
+    if(panelRefreshTimer.kind==='idle'&&typeof cancelIdleCallback==='function')cancelIdleCallback(panelRefreshTimer.id);
+    else clearTimeout(panelRefreshTimer.id);
+    panelRefreshTimer=null;
   }
-  function flushPanelRefresh(){
-    if(panelRefreshTimer!=null){
-      clearTimeout(panelRefreshTimer);
-      panelRefreshTimer=null;
-    }
+  function runPanelRefresh(){
     buildHierarchy();
     buildSequence();
     updateStatusBar();
     syncSeqHighlight();
     showHover(null);
+  }
+  function schedulePanelRefresh(delay){
+    cancelPanelRefresh();
+    const run=function(){ panelRefreshTimer=null; runPanelRefresh(); };
+    if(hasHugeDisplayedAtoms()&&typeof requestIdleCallback==='function')panelRefreshTimer={kind:'idle',id:requestIdleCallback(run,{timeout:1500})};
+    else panelRefreshTimer={kind:'timeout',id:setTimeout(run,delay==null?40:Math.max(0,Number(delay)||0))};
+  }
+  function flushPanelRefresh(){
+    cancelPanelRefresh();
+    runPanelRefresh();
   }
 
   // ---------- Find ----------
@@ -2021,6 +2195,20 @@ function boot(){
     state.chainVisible={};
     state.groupVisible={};
     state.hierarchyCollapsed={};
+  }
+  function hasObjectKeys(o){ return !!(o&&Object.keys(o).length); }
+  function displayStateHasOverrides(){
+    return !!(
+      state.styleRules.length||
+      state.hiddenRules.length||
+      state.interactionRules.length||
+      hasObjectKeys(state.chainVisible)||
+      hasObjectKeys(state.groupVisible)||
+      state.visibility.protein!==true||
+      state.visibility.ligands!==true||
+      state.visibility.solvents!==true||
+      state.visibility.other!==true
+    );
   }
   function residueOrderValue(v){
     const n=Number(v);
@@ -2132,6 +2320,8 @@ function boot(){
     if(!viewer||!record||!record.atoms)return;
     const serials=serialsForAtoms(record.atoms);
     if(serials.length)viewer.setStyle({serial:serials},{});
+    record.sceneBuilt=false;
+    record._molAgentShown=false;
   }
   function ensureEntryModel(entry){
     const cacheKey=structureCacheKey(entry);
@@ -2142,47 +2332,175 @@ function boot(){
     const list=m.selectedAtoms({});
     nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
     normalizeParsedAtoms(list);
-    const record={entry,model:m,atoms:list,cacheKey};
+    const record={entry,model:m,atoms:list,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
     entryModelCache.set(entry.name,record);
     return record;
   }
   function showEntryRecord(record){
-    if(record&&record.model&&record.model.show)record.model.show();
+    if(!record||!record.model||!record.model.show)return;
+    if(record._molAgentShown===true)return;
+    record.model.show();
+    record._molAgentShown=true;
   }
   function hideEntryRecord(record){
-    if(record&&record.model&&record.model.hide)record.model.hide();
+    if(!record||!record.model||!record.model.hide)return;
+    if(record._molAgentShown===false)return;
+    record.model.hide();
+    record._molAgentShown=false;
+  }
+  function combineRecordAtoms(records){
+    if(!records||!records.length)return [];
+    if(records.length===1)return records[0].atoms||[];
+    const out=[];
+    records.forEach(record=>{
+      const list=record&&record.atoms||[];
+      for(let i=0;i<list.length;i++)out.push(list[i]);
+    });
+    return out;
+  }
+  function buildAtomMapBundle(list){
+    const bundle={
+      atomByIndex:new Map(),
+      atomByEntryIndex:new Map(),
+      atomByEntrySourceSerial:new Map(),
+      atomBySerial:new Map(),
+      atomsByEntry:new Map(),
+      atomsByChain:new Map(),
+      atomsByEntryChain:new Map(),
+      atomsByEntryChainResidue:new Map(),
+      atomsByEntryChainResidueName:new Map()
+    };
+    (list||[]).forEach((a,i)=>{
+      a._atomOrdinal=i;
+      atomElem(a);
+      if(a.index!=null){
+        if(!bundle.atomByIndex.has(a.index))bundle.atomByIndex.set(a.index,a);
+        bundle.atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
+      }
+      if(atomSourceSerial(a)!=null)bundle.atomByEntrySourceSerial.set(atomEntryIndexKey(a._entryName,atomSourceSerial(a)),a);
+      if(a.serial!=null)bundle.atomBySerial.set(Number(a.serial),a);
+      pushAtomIndex(bundle.atomsByEntry,selectorTextKey(a._entryName),a);
+      pushAtomIndex(bundle.atomsByChain,selectorTextKey(a.chain),a);
+      pushAtomIndex(bundle.atomsByEntryChain,selectorEntryChainKey(a._entryName,a.chain),a);
+      pushAtomIndex(bundle.atomsByEntryChainResidue,selectorEntryChainResidueKey(a._entryName,a.chain,a.resi),a);
+      pushAtomIndex(bundle.atomsByEntryChainResidueName,selectorEntryChainResidueNameKey(a._entryName,a.chain,a.resi,a.resn),a);
+    });
+    return bundle;
+  }
+  function installAtomMapBundle(bundle){
+    atomByIndex=bundle.atomByIndex;
+    atomByEntryIndex=bundle.atomByEntryIndex;
+    atomByEntrySourceSerial=bundle.atomByEntrySourceSerial;
+    atomBySerial=bundle.atomBySerial;
+    atomsByEntry=bundle.atomsByEntry;
+    atomsByChain=bundle.atomsByChain;
+    atomsByEntryChain=bundle.atomsByEntryChain;
+    atomsByEntryChainResidue=bundle.atomsByEntryChainResidue;
+    atomsByEntryChainResidueName=bundle.atomsByEntryChainResidueName;
+  }
+  function mergeMapKeepFirst(target,source){ source.forEach((v,k)=>{ if(!target.has(k))target.set(k,v); }); }
+  function mergeArrayMap(target,source){
+    source.forEach((list,k)=>{
+      const prev=target.get(k);
+      target.set(k,prev?prev.concat(list):list);
+    });
+  }
+  function mergeAtomMapBundles(records){
+    const valid=(records||[]).filter(r=>r&&r.atomMaps);
+    if(!valid.length)return null;
+    if(valid.length===1)return valid[0].atomMaps;
+    const out={
+      atomByIndex:new Map(),
+      atomByEntryIndex:new Map(),
+      atomByEntrySourceSerial:new Map(),
+      atomBySerial:new Map(),
+      atomsByEntry:new Map(),
+      atomsByChain:new Map(),
+      atomsByEntryChain:new Map(),
+      atomsByEntryChainResidue:new Map(),
+      atomsByEntryChainResidueName:new Map()
+    };
+    valid.forEach(record=>{
+      const maps=record.atomMaps;
+      mergeMapKeepFirst(out.atomByIndex,maps.atomByIndex);
+      maps.atomByEntryIndex.forEach((v,k)=>out.atomByEntryIndex.set(k,v));
+      maps.atomByEntrySourceSerial.forEach((v,k)=>out.atomByEntrySourceSerial.set(k,v));
+      maps.atomBySerial.forEach((v,k)=>out.atomBySerial.set(k,v));
+      mergeArrayMap(out.atomsByEntry,maps.atomsByEntry);
+      mergeArrayMap(out.atomsByChain,maps.atomsByChain);
+      mergeArrayMap(out.atomsByEntryChain,maps.atomsByEntryChain);
+      mergeArrayMap(out.atomsByEntryChainResidue,maps.atomsByEntryChainResidue);
+      mergeArrayMap(out.atomsByEntryChainResidueName,maps.atomsByEntryChainResidueName);
+    });
+    return out;
+  }
+  function atomsForEntry(entry){
+    const record=entryModelCache.get(entry&&entry.name);
+    if(record&&record.atoms)return record.atoms;
+    return atomsByEntry.get(selectorTextKey(entry&&entry.name))||[];
+  }
+  function entryStatsForAtoms(list){
+    const residues=new Set(),chains=new Set(),ligands=new Set(),proteinChains=new Set(),seenRes=new Set();
+    let charge=0;
+    (list||[]).forEach(a=>{
+      const rk=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+(a.resn||'');
+      residues.add(rk);
+      chains.add(a.chain||'?');
+      if(isLigand(a))ligands.add(rk);
+      if(isProtein(a))proteinChains.add(a.chain||'?');
+      if(!seenRes.has(rk)){
+        seenRes.add(rk);
+        charge+=chargeOf(a.resn);
+      }
+    });
+    return {atoms:(list||[]).length,residues:residues.size,chains:Array.from(chains),ligands:ligands.size,proteinChains:Array.from(proteinChains),charge};
+  }
+  function residueGroupFromAtom(map,a){
+    const key=residueGroupKey(a);
+    let g=map.get(key);
+    if(!g){
+      g={entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'',resn:a.resn||'',resi:a.resi,atoms:[]};
+      map.set(key,g);
+    }
+    g.atoms.push(a);
+  }
+  function buildEntryHierarchyCache(entry,list){
+    const counts={protein:0,ligands:0,solvents:0,other:0};
+    const ligandGroups=new Map(),solventGroups=new Map(),otherGroups=new Map(),proteinChains=new Map();
+    (list||[]).forEach(a=>{
+      const c=atomCategory(a);
+      counts[c]++;
+      if(c==='protein'){
+        const key=(a._entryName||'')+'\u0001'+(a.chain||'?');
+        let g=proteinChains.get(key);
+        if(!g){
+          g={entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'?',atoms:[]};
+          proteinChains.set(key,g);
+        }
+        g.atoms.push(a);
+      }else if(c==='ligands')residueGroupFromAtom(ligandGroups,a);
+      else if(c==='solvents')residueGroupFromAtom(solventGroups,a);
+      else if(c==='other')residueGroupFromAtom(otherGroups,a);
+    });
+    return {
+      entryName:entry&&entry.name||'',
+      counts,
+      ligands:Array.from(ligandGroups.values()).sort(compareHierarchyGroups),
+      solvents:Array.from(solventGroups.values()).sort(compareHierarchyGroups),
+      other:Array.from(otherGroups.values()).sort(compareHierarchyGroups),
+      proteinChains:Array.from(proteinChains.values()).sort(compareHierarchyGroups)
+    };
   }
   function restyleEntryRecord(record){
     if(!record||!record.atoms||!record.atoms.length)return;
     setStyleForSerials(record.atoms,{},false);
     applyBaseStylesForAtoms(record.atoms);
     record.styleGeneration=styleGeneration;
+    record.sceneBuilt=false;
   }
-  function refreshAtomMaps(){
-    atomByIndex=new Map();
-    atomByEntryIndex=new Map();
-    atomByEntrySourceSerial=new Map();
-    atomBySerial=new Map();
-    atomsByEntry=new Map();
-    atomsByChain=new Map();
-    atomsByEntryChain=new Map();
-    atomsByEntryChainResidue=new Map();
-    atomsByEntryChainResidueName=new Map();
-    atoms.forEach((a,i)=>{
-      a._atomOrdinal=i;
-      atomElem(a);
-      if(a.index!=null){
-        if(!atomByIndex.has(a.index))atomByIndex.set(a.index,a);
-        atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
-      }
-      if(atomSourceSerial(a)!=null)atomByEntrySourceSerial.set(atomEntryIndexKey(a._entryName,atomSourceSerial(a)),a);
-      if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
-      pushAtomIndex(atomsByEntry,selectorTextKey(a._entryName),a);
-      pushAtomIndex(atomsByChain,selectorTextKey(a.chain),a);
-      pushAtomIndex(atomsByEntryChain,selectorEntryChainKey(a._entryName,a.chain),a);
-      pushAtomIndex(atomsByEntryChainResidue,selectorEntryChainResidueKey(a._entryName,a.chain,a.resi),a);
-      pushAtomIndex(atomsByEntryChainResidueName,selectorEntryChainResidueNameKey(a._entryName,a.chain,a.resi,a.resn),a);
-    });
+  function refreshAtomMaps(records){
+    const bundle=mergeAtomMapBundles(records);
+    installAtomMapBundle(bundle||buildAtomMapBundle(atoms));
     resetAtomLevelCache();
   }
   function finishStructureRefresh(visible,opts){
@@ -2190,9 +2508,9 @@ function boot(){
     currentStructureKey=displayedStructureKey(visible);
     setupAtomEvents();
     applyStylesFull(false);
-    if(opts.preserveView&&opts.view&&viewer&&viewer.setView){ try{ viewer.setView(opts.view); }catch(e){} }
-    else if(opts.zoom!==false) viewer.zoomTo(visibleAtomSelector());
-    viewer.render();
+    if(opts.preserveView&&opts.view)restoreViewNoRender(opts.view);
+    else if(opts.zoom!==false) fitVisible({render:false});
+    presentViewer(visibleEntryRecords(),true);
     buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
     showHover(null);
     if(visible.length){
@@ -2221,14 +2539,16 @@ function boot(){
     interactionShapes=[]; interactionWideLines=[];
     viewer.setStyle({},{});
     models=[]; model=null; atoms=[];
+    const visibleRecords=[];
     visible.forEach(e=>{
       const record=ensureEntryModel(e);
       showEntryRecord(record);
       models.push({entry:e,model:record.model});
-      atoms=atoms.concat(record.atoms);
+      visibleRecords.push(record);
     });
+    atoms=combineRecordAtoms(visibleRecords);
     model=models.length?models[0].model:null;
-    refreshAtomMaps();
+    refreshAtomMaps(visibleRecords);
     if(!model){
       currentStructureKey='';
       resetAtomLevelCache();
@@ -2237,7 +2557,7 @@ function boot(){
       clearSelectionHighlight();
       buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
       showHover(null);
-      viewer.render();
+      presentViewer(null,false);
       updateInteractionSummary(0);
       setStatus('No entries displayed');
       return null;
@@ -2260,16 +2580,18 @@ function boot(){
     if(wideLineLayer)wideLineLayer.clearCollection('selection');
     clearSelectionHighlight();
     models=[]; model=null; atoms=[];
+    const visibleRecords=[];
     const needsStyle=[];
     visible.forEach(e=>{
       const record=ensureEntryModel(e);
       showEntryRecord(record);
       models.push({entry:e,model:record.model});
-      atoms=atoms.concat(record.atoms);
+      visibleRecords.push(record);
       if(record.styleGeneration!==styleGeneration)needsStyle.push(record);
     });
+    atoms=combineRecordAtoms(visibleRecords);
     model=models.length?models[0].model:null;
-    refreshAtomMaps();
+    refreshAtomMaps(visibleRecords);
     if(!model){
       currentStructureKey='';
       resetAtomLevelCache();
@@ -2279,15 +2601,16 @@ function boot(){
       if(wideLineLayer)wideLineLayer.clear();
       buildEntriesList();
       flushPanelRefresh();
-      viewer.render();
+      presentViewer(null,false);
       setStatus('No entries displayed');
       return null;
     }
     currentStructureKey=displayedStructureKey(visible);
     setupAtomEvents();
     resetAtomLevelCache();
-    _catSer=categorySerials();
+    _catSer=null;
     if(needsStyle.length){
+      _catSer=categorySerials();
       needsStyle.forEach(restyleEntryRecord);
       applyRuleOverlays();
       applyVisibility();
@@ -2296,9 +2619,10 @@ function boot(){
     }
     redrawWideLineStyles();
     clearInteractionShapes();
-    if(opts.preserveView&&view&&viewer&&viewer.setView){ try{ viewer.setView(view); }catch(e){} }
-    else if(opts.zoom!==false) viewer.zoomTo(visibleAtomSelector());
-    viewer.render();
+    const needsFullRender=recordsNeedSceneRender(visibleRecords);
+    if(opts.preserveView&&view)restoreViewNoRender(view);
+    else if(opts.zoom!==false) fitVisible({render:false});
+    presentViewer(visibleRecords,needsFullRender);
     buildEntriesList();
     showHover(null);
     schedulePanelRefresh(40);
@@ -2362,13 +2686,15 @@ function boot(){
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
     if(!viewer)initViewer();
+    const hadOverrides=displayStateHasOverrides();
     const existingEntry=entries.findIndex(x=>x.name===e.name);
     if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
     currentName=e.name;
     entryChecked[e.name]=true;
     resetDisplayRulesForStructure();
-    rebuildDisplayedEntries({zoom:true});
-    if(opts.persist!==false)saveViewerSession();
+    if(existingEntry>=0||hadOverrides)rebuildDisplayedEntries({zoom:true});
+    else refreshDisplayedEntriesFast({zoom:true});
+    if(opts.persist!==false)saveViewerSessionEntryDeferred(e);
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
@@ -2874,6 +3200,8 @@ function installFrameSyncedMotion(targetViewer){
     updateMousePresetButtons();
     if(opts.persist!==false)savePreferencesNow();
     if(opts.status!==false)setStatus('Mouse preset: '+next);
+    setupAtomEvents();
+    if(viewer&&model&&recordsNeedSceneRender(visibleEntryRecords()))presentViewer(visibleEntryRecords(),true);
     return next;
   }
   function setMouseActions(actions,opts){
@@ -2907,6 +3235,8 @@ function installFrameSyncedMotion(targetViewer){
     updateMousePresetButtons();
     if(opts.persist!==false)savePreferencesNow();
     if(opts.status!==false)setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
+    setupAtomEvents();
+    if(viewer&&model&&recordsNeedSceneRender(visibleEntryRecords()))presentViewer(visibleEntryRecords(),true);
     return cloneMouseSettings();
   }
   function clearStyles(){ state.styleRules=[]; state.hiddenRules=[]; applyStylesFull(true); }
@@ -2971,7 +3301,7 @@ function installFrameSyncedMotion(targetViewer){
   $('interBtn').onclick=toggleInterPanel;
   $('interToggle').onclick=function(){ interState.enabled=!interState.enabled; updateInterToggle(); redrawInteractions(true); };
   $('interClose').onclick=closeInterPanel;
-  $('btnFit').onclick=function(){ if(viewer&&model){ viewer.zoomTo(visibleAtomSelector()); viewer.render(); } };
+  $('btnFit').onclick=function(){ fitVisible({render:true}); };
   $('btnFocus').onclick=function(){ focus(state.selectionSel); };
   $('btnClear').onclick=clearSelection;
   document.querySelectorAll('[data-selection-action]').forEach(btn=>{

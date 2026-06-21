@@ -84,6 +84,8 @@ class MolWideLineLayer{
     this.material=null;
     this.plan=[];
     this.coords=[];
+    this.itemsCache=[];
+    this.itemsDirty=true;
     this.meshDirty=true;
     this.lastViewKey='';
     this.nextPrimitiveId=1;
@@ -97,7 +99,8 @@ class MolWideLineLayer{
     if(!viewer||viewer._wideLineLayerBound)return;
     viewer._wideLineLayerBound=true;
     const layer=this;
-    ['render','show'].forEach(function(name){
+    const hookNames=(typeof viewer.show==='function')?['show']:['render'];
+    hookNames.forEach(function(name){
       if(typeof viewer[name]!=='function')return;
       const native=viewer[name].bind(viewer);
       viewer[name]=function(){
@@ -198,8 +201,7 @@ class MolWideLineLayer{
 
   setCollection(id,lines,points,options){
     this.collections.set(String(id),this.normalizeCollection(lines,points,options));
-    this.meshDirty=true;
-    this.lastViewKey='';
+    this.markDirty();
   }
 
   appendLineToCollection(id,line){
@@ -216,27 +218,24 @@ class MolWideLineLayer{
       maxPixelWidth:line.maxPixelWidth
     });
     this.collections.set(key,group);
-    this.meshDirty=true;
-    this.lastViewKey='';
+    this.markDirty();
   }
 
   clearCollection(id){
     this.collections.delete(String(id));
-    this.meshDirty=true;
-    this.lastViewKey='';
+    this.markDirty();
   }
 
   clearCollections(prefix){
     const p=String(prefix);
     Array.from(this.collections.keys()).forEach(id=>{ if(id.indexOf(p)===0)this.collections.delete(id); });
-    this.meshDirty=true;
-    this.lastViewKey='';
+    this.markDirty();
   }
 
   clear(){
     this.collections.clear();
-    this.meshDirty=true;
-    this.lastViewKey='';
+    this.itemsCache=[];
+    this.markDirty();
     if(this.mesh)this.mesh.visible=false;
   }
 
@@ -276,6 +275,20 @@ class MolWideLineLayer{
     this.Mesh=sample.constructor;
     this.Material=sample.material.constructor;
     return true;
+  }
+
+  markDirty(){
+    this.itemsDirty=true;
+    this.meshDirty=true;
+    this.lastViewKey='';
+  }
+
+  flattenedItems(){
+    if(this.itemsDirty){
+      this.itemsCache=this.allItems();
+      this.itemsDirty=false;
+    }
+    return this.itemsCache;
   }
 
   allItems(){
@@ -465,7 +478,7 @@ class MolWideLineLayer{
   syncToScene(){
     const viewer=this.getViewer&&this.getViewer();
     if(!viewer||!viewer.modelGroup)return;
-    const items=this.allItems();
+    const items=this.flattenedItems();
     if(!items.length){
       if(this.mesh)this.mesh.visible=false;
       return;
