@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
   const entryModelCache = new Map();
   let nextAtomSerial = 1;
   let styleGeneration = 1;
@@ -73,7 +73,10 @@ function boot(){
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
-  let interactionWorker = null;
+  const interactionIndexByKey = new Map();
+  const interactionWorkers = new Map();
+  const interactionBuildQueue = [];
+  const MAX_INTERACTION_WORKERS = 1;
   let interactionBuildSeq = 0;
   let interactionIndex = {status:'empty',jobId:0,interactions:null,counts:{}};
   let resetMouseDrag = function(){};
@@ -470,6 +473,7 @@ function boot(){
   }
   function residueUiKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi; }
   function atomEntryIndexKey(entry,index){ return (entry||'')+'\u0001'+index; }
+  function atomSourceSerial(a){ return a&&a._sourceSerial!=null?a._sourceSerial:(a&&a.index!=null?a.index:(a&&a.serial)); }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
@@ -955,10 +959,10 @@ function boot(){
     updateInterToggle();
     buildInterPanel();
   }
-  function atomPayloadForInteractionIndex(){
-    return atoms.map(a=>{
-      const bonds=(a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean).map(b=>b.serial).filter(s=>s!=null);
-      return {serial:a.serial,index:a.index,entry:a._entryName||'',chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
+  function atomPayloadForInteractionIndex(sourceAtoms){
+    return (sourceAtoms||atoms).map(a=>{
+      const bonds=(a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean).map(atomSourceSerial).filter(s=>s!=null);
+      return {serial:atomSourceSerial(a),index:a.index,entry:a._entryName||'',chain:a.chain||'',resi:a.resi,resn:a.resn||'',atom:a.atom||'',elem:atomElem(a),x:a.x,y:a.y,z:a.z,hetflag:!!a.hetflag,bonds};
     });
   }
   function cancelScheduledInteractionIndexBuild(){
@@ -966,13 +970,6 @@ function boot(){
       clearTimeout(interactionStartTimer);
       interactionStartTimer=null;
     }
-  }
-  function resetInteractionIndex(status){
-    cancelScheduledInteractionIndexBuild();
-    interactionBuildSeq++;
-    if(interactionWorker){ try{ interactionWorker.terminate(); }catch(e){} interactionWorker=null; }
-    interactionIndex={status:status||'empty',jobId:interactionBuildSeq,interactions:null,counts:{}};
-    updateInteractionSummary(0);
   }
   function countInteractionIndex(interactions){
     interactions=interactions||{};
@@ -988,76 +985,174 @@ function boot(){
     };
   }
   function interactionIndexCacheUrl(key){ return INTERACTION_INDEX_API+encodeURIComponent(key); }
-  function validCachedInteractionIndex(payload,key){
-    return payload&&payload.schema===INTERACTION_INDEX_SCHEMA&&payload.structureKey===key&&Number(payload.atoms)===atoms.length&&payload.interactions&&typeof payload.interactions==='object';
+  function entryAtomsForInteractionIndex(entry){
+    const record=entry&&entryModelCache.get(entry.name);
+    return record&&record.atoms?record.atoms:atoms.filter(a=>(a._entryName||'')===(entry&&entry.name||''));
   }
-  function useInteractionIndexPayload(payload,jobId,source){
+  function interactionSourceSignature(sourceAtoms){
+    return fnv1aHex((sourceAtoms||[]).map(a=>[
+      atomSourceSerial(a)==null?'':atomSourceSerial(a),
+      a.index==null?'':a.index,
+      a.chain||'',
+      a.resi==null?'':a.resi,
+      a.resn||'',
+      a.atom||'',
+      atomElem(a)
+    ].join('\u0002')).join('\u0001'));
+  }
+  function validCachedInteractionIndex(payload,key,sourceAtoms,signature){
+    return payload&&payload.schema===INTERACTION_INDEX_SCHEMA&&payload.structureKey===key&&payload.serialMode==='sourceSerial'&&payload.sourceSerialSignature===(signature||interactionSourceSignature(sourceAtoms))&&Number(payload.atoms)===(sourceAtoms||[]).length&&payload.interactions&&typeof payload.interactions==='object';
+  }
+  function visibleInteractionSlots(visible){
+    return (visible||includedEntries()).map(entry=>{
+      const key=entryStructureKey(entry);
+      return {entry,key,record:interactionIndexByKey.get(key)||null};
+    });
+  }
+  function readyInteractionSlots(visible){
+    return visibleInteractionSlots(visible).filter(slot=>slot.record&&slot.record.status==='ready'&&slot.record.interactions);
+  }
+  function aggregateInteractionCounts(slots){
+    const out={hbond:0,halogen:0,salt:0,pipi:0,pication:0,contactGood:0,contactBad:0,contactUgly:0};
+    (slots||[]).forEach(slot=>{
+      const c=slot.record&&slot.record.counts||{};
+      Object.keys(out).forEach(k=>{ out[k]+=Number(c[k]||0); });
+    });
+    return out;
+  }
+  function updateInteractionAggregate(visible){
+    const slots=visibleInteractionSlots(visible);
+    const ready=slots.filter(slot=>slot.record&&slot.record.status==='ready'&&slot.record.interactions);
+    const loading=slots.some(slot=>slot.record&&/^(loading-cache|building)$/.test(slot.record.status));
+    const errorCount=slots.filter(slot=>slot.record&&slot.record.status==='error').length;
+    const missing=slots.filter(slot=>!slot.record).length;
+    interactionIndex={
+      status:ready.length?'ready':(loading?'loading':(missing?'pending':(errorCount?'error':'empty'))),
+      jobId:interactionBuildSeq,
+      source:'entry-indexes',
+      structureKey:currentStructureKey,
+      counts:aggregateInteractionCounts(ready),
+      readyEntries:ready.length,
+      totalEntries:slots.length,
+      error:errorCount?errorCount+' interaction index job(s) failed':''
+    };
+  }
+  function setInteractionRecord(key,record){
+    if(!key)return;
+    interactionIndexByKey.set(key,record);
+    updateInteractionAggregate();
+    updateInteractionSummary(interactionWideLines.length);
+  }
+  function useInteractionIndexPayload(payload,jobId,source,entry,sourceAtoms,signature){
+    const key=payload.structureKey||(entry&&entryStructureKey(entry));
     const counts=countInteractionIndex(payload.interactions);
-    interactionIndex={status:'ready',jobId,structureKey:payload.structureKey,source:source||payload.source||'worker',interactions:payload.interactions||{},counts,elapsedMs:payload.elapsedMs,atoms:payload.atoms,rings:payload.rings,cachedAt:payload.cachedAt};
-    setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms \u00b7 interactions indexed'+(source==='server'?' (server cache)':''));
+    const sourceEntry=entry||entryForStructureKey(key);
+    setInteractionRecord(key,{status:'ready',jobId,structureKey:key,source:source||payload.source||'worker',entryName:sourceEntry&&sourceEntry.name||payload.entryName||'',entryTitle:sourceEntry&&sourceEntry.title||payload.entryTitle||'',serialMode:'sourceSerial',sourceSerialSignature:signature||payload.sourceSerialSignature||interactionSourceSignature(sourceAtoms),interactions:payload.interactions||{},counts,elapsedMs:payload.elapsedMs,atoms:payload.atoms,rings:payload.rings,cachedAt:payload.cachedAt});
+    setStatus((sourceEntry&&sourceEntry.title||currentName)+' \u00b7 '+Number(payload.atoms||0).toLocaleString()+' atoms \u00b7 interactions indexed'+(source==='server'?' (server cache)':''));
     redrawInteractions(true);
   }
   function saveInteractionIndexPayload(payload,key){
     if(!payload||!key)return Promise.resolve(false);
     return fetch(interactionIndexCacheUrl(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(res=>res.ok).catch(()=>false);
   }
-  function startInteractionWorker(jobId,key){
+  function removeQueuedInteractionBuild(key){
+    for(let i=interactionBuildQueue.length-1;i>=0;i--){
+      if(interactionBuildQueue[i].key===key)interactionBuildQueue.splice(i,1);
+    }
+  }
+  function queueInteractionWorker(jobId,key,entry,sourceAtoms,signature){
+    removeQueuedInteractionBuild(key);
+    interactionBuildQueue.push({jobId,key,entry,sourceAtoms,signature});
+    pumpInteractionWorkerQueue();
+  }
+  function pumpInteractionWorkerQueue(){
+    while(interactionWorkers.size<MAX_INTERACTION_WORKERS&&interactionBuildQueue.length){
+      const job=interactionBuildQueue.shift();
+      const current=interactionIndexByKey.get(job.key);
+      if(!current||current.jobId!==job.jobId||current.status!=='building')continue;
+      startInteractionWorkerNow(job.jobId,job.key,job.entry,job.sourceAtoms,job.signature);
+    }
+  }
+  function startInteractionWorkerNow(jobId,key,entry,sourceAtoms,signature){
     if(!window.Worker){
-      interactionIndex.status='unavailable';
+      setInteractionRecord(key,{status:'unavailable',jobId,structureKey:key,entryName:entry&&entry.name||'',entryTitle:entry&&entry.title||'',counts:{},sourceSerialSignature:signature});
       updateInteractionSummary(0);
       return;
     }
-    setStatus('Building interaction index...');
+    setStatus('Building interaction index: '+(entry&&entry.title||entry&&entry.name||'entry'));
     const worker=new Worker('interaction-worker.js');
-    interactionWorker=worker;
+    interactionWorkers.set(key,worker);
     worker.onmessage=function(e){
       const msg=e.data||{};
-      if(jobId!==interactionBuildSeq)return;
+      const current=interactionIndexByKey.get(key);
+      if(!current||current.jobId!==jobId)return;
+      interactionWorkers.delete(key);
+      pumpInteractionWorkerQueue();
       if(msg.error){
-        interactionIndex={status:'error',jobId,interactions:null,counts:{},error:msg.error};
+        setInteractionRecord(key,{status:'error',jobId,structureKey:key,entryName:entry&&entry.name||'',entryTitle:entry&&entry.title||'',interactions:null,counts:{},error:msg.error,sourceSerialSignature:signature});
         updateInteractionSummary(0);
         setStatus('Interaction index failed: '+msg.error);
         return;
       }
-      interactionWorker=null;
-      const payload={schema:INTERACTION_INDEX_SCHEMA,structureKey:key,source:'worker',createdAt:new Date().toISOString(),criteria:msg.criteria||INTERACTION_CRITERIA,interactions:msg.interactions||{},elapsedMs:msg.elapsedMs,atoms:msg.atoms,rings:msg.rings};
-      useInteractionIndexPayload(payload,jobId,'worker');
+      const payload={schema:INTERACTION_INDEX_SCHEMA,structureKey:key,source:'worker',entryName:entry&&entry.name||'',entryTitle:entry&&entry.title||'',serialMode:'sourceSerial',sourceSerialSignature:signature,createdAt:new Date().toISOString(),criteria:msg.criteria||INTERACTION_CRITERIA,interactions:msg.interactions||{},elapsedMs:msg.elapsedMs,atoms:msg.atoms,rings:msg.rings};
+      useInteractionIndexPayload(payload,jobId,'worker',entry,sourceAtoms,signature);
       saveInteractionIndexPayload(payload,key);
     };
     worker.onerror=function(e){
-      if(jobId!==interactionBuildSeq)return;
-      interactionIndex={status:'error',jobId,interactions:null,counts:{},error:e.message||'worker error'};
-      interactionWorker=null;
+      const current=interactionIndexByKey.get(key);
+      if(!current||current.jobId!==jobId)return;
+      interactionWorkers.delete(key);
+      pumpInteractionWorkerQueue();
+      const error=e.message||'worker error';
+      setInteractionRecord(key,{status:'error',jobId,structureKey:key,entryName:entry&&entry.name||'',entryTitle:entry&&entry.title||'',interactions:null,counts:{},error,sourceSerialSignature:signature});
       updateInteractionSummary(0);
-      setStatus('Interaction index failed: '+interactionIndex.error);
+      setStatus('Interaction index failed: '+error);
     };
-    worker.postMessage({jobId,atoms:atomPayloadForInteractionIndex(),criteria:INTERACTION_CRITERIA});
+    worker.postMessage({jobId,atoms:atomPayloadForInteractionIndex(sourceAtoms),criteria:INTERACTION_CRITERIA});
   }
-  function startInteractionIndexBuild(){
-    const visible=includedEntries();
-    if(visible.length!==1){
-      resetInteractionIndex(visible.length?'multi-entry':'empty');
-      clearInteractionShapes();
-      return;
-    }
-    resetInteractionIndex('loading-cache');
-    const key=currentStructureKey;
-    if(!key){ startInteractionWorker(interactionBuildSeq,key); return; }
-    const jobId=interactionBuildSeq;
-    setStatus('Loading interaction index...');
+  function ensureInteractionIndexForEntry(entry){
+    if(!entry)return;
+    const key=entryStructureKey(entry);
+    if(!key)return;
+    const sourceAtoms=entryAtomsForInteractionIndex(entry);
+    const signature=interactionSourceSignature(sourceAtoms);
+    const current=interactionIndexByKey.get(key);
+    if(current&&current.sourceSerialSignature===signature&&/^(ready|loading-cache|building)$/.test(current.status))return;
+    const oldWorker=interactionWorkers.get(key);
+    if(oldWorker){ try{ oldWorker.terminate(); }catch(e){} interactionWorkers.delete(key); }
+    removeQueuedInteractionBuild(key);
+    const jobId=++interactionBuildSeq;
+    setInteractionRecord(key,{status:'loading-cache',jobId,structureKey:key,entryName:entry.name,entryTitle:entry.title,counts:{},sourceSerialSignature:signature});
     fetch(interactionIndexCacheUrl(key),{cache:'no-store'}).then(res=>{
       if(!res.ok)return null;
       return res.json();
     }).then(payload=>{
-      if(jobId!==interactionBuildSeq)return;
-      if(validCachedInteractionIndex(payload,key)){
-        useInteractionIndexPayload(payload,jobId,'server');
+      const active=interactionIndexByKey.get(key);
+      if(!active||active.jobId!==jobId)return;
+      if(validCachedInteractionIndex(payload,key,sourceAtoms,signature)){
+        useInteractionIndexPayload(payload,jobId,'server',entry,sourceAtoms,signature);
       }else{
-        startInteractionWorker(jobId,key);
+        setInteractionRecord(key,{status:'building',jobId,structureKey:key,entryName:entry.name,entryTitle:entry.title,counts:{},sourceSerialSignature:signature});
+        queueInteractionWorker(jobId,key,entry,sourceAtoms,signature);
       }
     }).catch(()=>{
-      if(jobId===interactionBuildSeq)startInteractionWorker(jobId,key);
+      const active=interactionIndexByKey.get(key);
+      if(!active||active.jobId!==jobId)return;
+      setInteractionRecord(key,{status:'building',jobId,structureKey:key,entryName:entry.name,entryTitle:entry.title,counts:{},sourceSerialSignature:signature});
+      queueInteractionWorker(jobId,key,entry,sourceAtoms,signature);
     });
+  }
+  function startInteractionIndexBuild(){
+    const visible=includedEntries();
+    if(!visible.length){
+      updateInteractionAggregate(visible);
+      clearInteractionShapes();
+      updateInteractionSummary(0);
+      return;
+    }
+    visible.forEach(ensureInteractionIndexForEntry);
+    updateInteractionAggregate(visible);
+    redrawInteractions(true);
   }
   function scheduleInteractionIndexBuild(delay){
     cancelScheduledInteractionIndexBuild();
@@ -1074,28 +1169,39 @@ function boot(){
     if(scope==='pp')return categoryIsProtein(item.ca)&&categoryIsProtein(item.cb);
     return true;
   }
-  function atomForInteractionSerial(serial){ return atomBySerial.get(Number(serial))||atomBySerial.get(serial)||null; }
-  function drawIndexedPair(item,color){
-    const a=atomForInteractionSerial(item.a),b=atomForInteractionSerial(item.b);
+  function atomForInteractionSerial(serial,record){
+    if(record&&record.entryName){
+      const direct=atomByEntrySourceSerial.get(atomEntryIndexKey(record.entryName,serial));
+      if(direct)return direct;
+      const n=Number(serial);
+      if(!Number.isNaN(n)){
+        const numeric=atomByEntrySourceSerial.get(atomEntryIndexKey(record.entryName,n));
+        if(numeric)return numeric;
+      }
+    }
+    return atomBySerial.get(Number(serial))||atomBySerial.get(serial)||null;
+  }
+  function drawIndexedPair(item,color,record){
+    const a=atomForInteractionSerial(item.a,record),b=atomForInteractionSerial(item.b,record);
     if(!isInteractionAtomShown(a)||!isInteractionAtomShown(b))return;
     drawDash(a,b,color);
   }
-  function drawIndexedHbond(item,color){
-    const h=atomForInteractionSerial(item.h),a=atomForInteractionSerial(item.b);
+  function drawIndexedHbond(item,color,record){
+    const h=atomForInteractionSerial(item.h,record),a=atomForInteractionSerial(item.b,record);
     if(!isInteractionAtomShown(h)||!isInteractionAtomShown(a))return;
     drawDash(h,a,color);
   }
-  function drawIndexedPiCation(item,color){
-    const ring=atomForInteractionSerial(item.ringAtom),cat=atomForInteractionSerial(item.cat);
+  function drawIndexedPiCation(item,color,record){
+    const ring=atomForInteractionSerial(item.ringAtom,record),cat=atomForInteractionSerial(item.cat,record);
     if(!isInteractionAtomShown(ring)||!isInteractionAtomShown(cat))return;
     drawDashAP(cat,item.center,color);
   }
-  function drawIndexedPiPi(item,color){
-    const a=atomForInteractionSerial(item.ringAtomA),b=atomForInteractionSerial(item.ringAtomB);
+  function drawIndexedPiPi(item,color,record){
+    const a=atomForInteractionSerial(item.ringAtomA,record),b=atomForInteractionSerial(item.ringAtomB,record);
     if(!item.centerA||!item.centerB||!isInteractionAtomShown(a)||!isInteractionAtomShown(b))return;
     drawDashPP(item.centerA,item.centerB,color);
   }
-  function indexedInteractionsReady(){ return interactionIndex&&interactionIndex.status==='ready'&&interactionIndex.interactions; }
+  function indexedInteractionsReady(){ return readyInteractionSlots().length>0; }
   // Scope: 'all' = any pair of visualized atoms; 'pl' = protein<->ligand only; 'pp' = protein<->protein only.
   function pairsSym(scope,C,mn,mx,lim){
     if(scope==='pl')return nearbyPairs(C.filter(isLigand),C.filter(isProtein),mn,mx,lim,null);
@@ -1107,11 +1213,12 @@ function boot(){
     if(scope==='pp')return nearbyPairs(D.filter(isProtein),A.filter(isProtein),mn,mx,lim,diffRes);
     return nearbyPairs(D,A,mn,mx,lim,diffRes);
   }
-  function detectHBonds(scope){ const C=atomLevelAtoms().filter(a=>isPolar(a)&&!isWaterAtom(a)); return pairsSym(scope,C,2.4,state.hbondCutoff,1500); }
-  function detectHalogen(scope){ const hal=a=>['CL','BR','I'].includes(atomElem(a)),acc=a=>['O','N','S'].includes(atomElem(a))&&!isWaterAtom(a); return pairsAsym(scope,atomLevelAtoms().filter(hal),atomLevelAtoms().filter(acc),2.6,3.9,400); }
-  function detectSalt(scope){ return pairsAsym(scope,atomLevelAtoms().filter(isPositive),atomLevelAtoms().filter(isNegative),1.6,state.saltCutoff,800); }
-  function aromaticRings(){ const by=new Map(); for(const a of atoms){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
-  function ringsLvl(){ return aromaticRings().filter(r=>isAtomLevelShown(r.atom)); }
+  function atomLevelAtomsForSource(sourceAtoms){ return sourceAtoms?sourceAtoms.filter(isAtomLevelShown):atomLevelAtoms(); }
+  function detectHBonds(scope,sourceAtoms){ const C=atomLevelAtomsForSource(sourceAtoms).filter(a=>isPolar(a)&&!isWaterAtom(a)); return pairsSym(scope,C,2.4,state.hbondCutoff,1500); }
+  function detectHalogen(scope,sourceAtoms){ const level=atomLevelAtomsForSource(sourceAtoms),hal=a=>['CL','BR','I'].includes(atomElem(a)),acc=a=>['O','N','S'].includes(atomElem(a))&&!isWaterAtom(a); return pairsAsym(scope,level.filter(hal),level.filter(acc),2.6,3.9,400); }
+  function detectSalt(scope,sourceAtoms){ const level=atomLevelAtomsForSource(sourceAtoms); return pairsAsym(scope,level.filter(isPositive),level.filter(isNegative),1.6,state.saltCutoff,800); }
+  function aromaticRings(sourceAtoms){ const by=new Map(); for(const a of (sourceAtoms||atoms)){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
+  function ringsLvl(sourceAtoms){ return aromaticRings(sourceAtoms).filter(r=>isAtomLevelShown(r.atom)); }
   function ringPairs(scope,rings){
     const out=[];
     if(scope==='pl'){ const L=rings.filter(r=>isLigand(r.atom)),P=rings.filter(r=>isProtein(r.atom)); for(const a of L)for(const b of P)out.push([a,b]); return out; }
@@ -1119,29 +1226,29 @@ function boot(){
     for(let i=0;i<set.length;i++)for(let j=i+1;j<set.length;j++){ if(diffRes(set[i].atom,set[j].atom))out.push([set[i],set[j]]); }
     return out;
   }
-  function detectPiPi(scope){
+  function detectPiPi(scope,sourceAtoms){
     const out=[],seen=new Set();
-    for(const pr of ringPairs(scope,ringsLvl())){ const a=pr[0],b=pr[1],k=[a.atom.serial,b.atom.serial].sort((x,y)=>x-y).join(':'); if(seen.has(k))continue; const d=distance(a.center,b.center); if(d>=3.4&&d<=6.0){ seen.add(k); out.push([a,b,d]); } }
+    for(const pr of ringPairs(scope,ringsLvl(sourceAtoms))){ const a=pr[0],b=pr[1],k=[a.atom.serial,b.atom.serial].sort((x,y)=>x-y).join(':'); if(seen.has(k))continue; const d=distance(a.center,b.center); if(d>=3.4&&d<=6.0){ seen.add(k); out.push([a,b,d]); } }
     return out;
   }
-  function detectPiCation(scope){
-    const rings=ringsLvl(),cats=atomLevelAtoms().filter(isPositive),out=[];
+  function detectPiCation(scope,sourceAtoms){
+    const rings=ringsLvl(sourceAtoms),cats=atomLevelAtomsForSource(sourceAtoms).filter(isPositive),out=[];
     function add(rs,cs,chk){ for(const r of rs)for(const c of cs){ if(chk&&residueKey(r.atom)===residueKey(c))continue; const d=distance(r.center,point(c)); if(d>=2.8&&d<=6.5)out.push({center:r.center,cat:c,d:d}); } }
     if(scope==='pl'){ add(rings.filter(r=>isProtein(r.atom)),cats.filter(isLigand),false); add(rings.filter(r=>isLigand(r.atom)),cats.filter(isProtein),false); }
     else if(scope==='pp')add(rings.filter(r=>isProtein(r.atom)),cats.filter(isProtein),true);
     else add(rings,cats,true);
     return out;
   }
-  function detectAromHB(scope){
-    const rings=ringsLvl(),don=atomLevelAtoms().filter(a=>['N','O'].includes(atomElem(a))&&!isWaterAtom(a)),out=[];
+  function detectAromHB(scope,sourceAtoms){
+    const rings=ringsLvl(sourceAtoms),don=atomLevelAtomsForSource(sourceAtoms).filter(a=>['N','O'].includes(atomElem(a))&&!isWaterAtom(a)),out=[];
     function add(rs,ds,chk){ for(const r of rs)for(const d of ds){ if(chk&&residueKey(r.atom)===residueKey(d))continue; const dist=distance(r.center,point(d)); if(dist>=2.8&&dist<=4.3)out.push({center:r.center,don:d,d:dist}); } }
     if(scope==='pl'){ add(rings.filter(r=>isProtein(r.atom)),don.filter(isLigand),false); add(rings.filter(r=>isLigand(r.atom)),don.filter(isProtein),false); }
     else if(scope==='pp')add(rings.filter(r=>isProtein(r.atom)),don.filter(isProtein),true);
     else add(rings,don,true);
     return out;
   }
-  function detectContacts(scope){
-    const heavy=atomLevelAtoms().filter(a=>atomElem(a)!=='H'&&!isWaterAtom(a));
+  function detectContacts(scope,sourceAtoms){
+    const heavy=atomLevelAtomsForSource(sourceAtoms).filter(a=>atomElem(a)!=='H'&&!isWaterAtom(a));
     const pairs=pairsSym(scope,heavy,2.0,4.8,6000),out={good:[],bad:[],ugly:[]};
     for(const pr of pairs){ const ratio=pr[2]/(vdwOf(pr[0])+vdwOf(pr[1])); if(ratio<0.75)out.ugly.push(pr); else if(ratio<0.89)out.bad.push(pr); else if(ratio<=1.30)out.good.push(pr); }
     return out;
@@ -1167,27 +1274,31 @@ function boot(){
   function redrawInteractions(render){
     if(!viewer)return;
     clearInteractionShapes();
+    updateInteractionAggregate();
     if(!interState.enabled){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
     if(!model||!atoms.length){ updateInteractionSummary(0); if(render!==false)viewer.render(); return; }
-    if(!indexedInteractionsReady()){
+    const slots=readyInteractionSlots();
+    if(!slots.length){
       updateInteractionSummary(0);
       if(render!==false)viewer.render();
       return;
     }
-    const data=interactionIndex.interactions;
     const T=interState.types,S=interState.scope;
     try{
-      if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedHbond(item,T.hbond.color); });
-      if(T.halogen.on)(data.halogen||[]).forEach(item=>{ if(interactionInScope(item,S.noncov))drawIndexedPair(item,T.halogen.color); });
-      if(T.salt.on)(data.salt||[]).forEach(item=>{ if(item.distance<=state.saltCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.salt.color); });
-      if(T.aromhb.on)detectAromHB(S.noncov).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
-      if(T.pipi.on)(data.pipi||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiPi(item,T.pipi.color); });
-      if(T.pication.on)(data.pication||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiCation(item,T.pication.color); });
-      if(T.good.on||T.bad.on||T.ugly.on){ const c=data.contacts||{};
-        if(T.good.on)(c.good||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.good.color); });
-        if(T.bad.on)(c.bad||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.bad.color); });
-        if(T.ugly.on)(c.ugly||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.ugly.color); });
-      }
+      slots.forEach(slot=>{
+        const record=slot.record,data=record.interactions||{},sourceAtoms=entryAtomsForInteractionIndex(slot.entry);
+        if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedHbond(item,T.hbond.color,record); });
+        if(T.halogen.on)(data.halogen||[]).forEach(item=>{ if(interactionInScope(item,S.noncov))drawIndexedPair(item,T.halogen.color,record); });
+        if(T.salt.on)(data.salt||[]).forEach(item=>{ if(item.distance<=state.saltCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.salt.color,record); });
+        if(T.aromhb.on)detectAromHB(S.noncov,sourceAtoms).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
+        if(T.pipi.on)(data.pipi||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiPi(item,T.pipi.color,record); });
+        if(T.pication.on)(data.pication||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiCation(item,T.pication.color,record); });
+        if(T.good.on||T.bad.on||T.ugly.on){ const c=data.contacts||{};
+          if(T.good.on)(c.good||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.good.color,record); });
+          if(T.bad.on)(c.bad||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.bad.color,record); });
+          if(T.ugly.on)(c.ugly||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.ugly.color,record); });
+        }
+      });
     }catch(e){}
     if(wideLineLayer)wideLineLayer.setCollection('interactions',interactionWideLines,[],{linewidth:lineWidths.interaction,opacity:1});
     updateInteractionSummary(interactionWideLines.length);
@@ -1233,17 +1344,21 @@ function boot(){
   function closeInterPanel(){ $('interPanel').hidden=true; setBtnActive($('interBtn'),false); }
   function toggleInterPanel(){ if($('interPanel').hidden)openInterPanel(); else closeInterPanel(); }
   function indexedInteractionTotal(){
-    const c=interactionIndex&&interactionIndex.counts||{};
+    const c=aggregateInteractionCounts(readyInteractionSlots());
     return ['hbond','halogen','salt','pipi','pication','contactGood','contactBad','contactUgly'].reduce((sum,k)=>sum+Number(c[k]||0),0);
   }
   function updateInteractionSummary(visibleCount){
     const btn=$('interBtn'); if(!btn)return;
+    updateInteractionAggregate();
     const visible=Number(visibleCount||0),indexed=indexedInteractionTotal();
     btn.textContent=indexedInteractionsReady()?'Interactions '+visible:'Interactions';
-    if(interactionIndex&&interactionIndex.status==='multi-entry'){
-      btn.title='Interactions disabled for multi-entry display';
+    const ready=interactionIndex&&interactionIndex.readyEntries||0,total=interactionIndex&&interactionIndex.totalEntries||0;
+    if(!total){
+      btn.title='No entries displayed';
     }else if(indexedInteractionsReady()){
-      btn.title='Indexed '+indexed+' interactions; '+visible+' currently visible with atom-level display';
+      btn.title='Indexed '+indexed+' interactions for '+ready+'/'+total+' displayed entr'+(total===1?'y':'ies')+'; '+visible+' currently visible with atom-level display';
+    }else if(interactionIndex&&/^(loading|pending)$/.test(interactionIndex.status)){
+      btn.title='Interaction indexes are loading for displayed entries';
     }else{
       btn.title='Interactions not indexed yet';
     }
@@ -1687,9 +1802,18 @@ function boot(){
     return loadEntry(e,{persist:true});
   }
   function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
+  function entryStructureKey(e){
+    const record=e&&entryModelCache.get(e.name);
+    return record&&record.cacheKey?record.cacheKey:structureCacheKey(e);
+  }
+  function entryForStructureKey(key,list){
+    if(!key)return null;
+    const source=list||entries;
+    return (source||[]).find(e=>entryStructureKey(e)===key)||null;
+  }
   function displayedStructureKey(list){
-    if(list.length===1)return structureCacheKey(list[0]);
-    return list.length?'multi-'+list.length+'-'+fnv1aHex(list.map(structureCacheKey).join('|')):'';
+    if(list.length===1)return entryStructureKey(list[0]);
+    return list.length?'multi-'+list.length+'-'+fnv1aHex(list.map(entryStructureKey).join('|')):'';
   }
   function resetSelectionState(){
     state.selectionSel=null;
@@ -1712,7 +1836,7 @@ function boot(){
     list.forEach(a=>{
       a._entryName=entry.name;
       a._entryTitle=entry.title;
-      a._sourceSerial=a.serial;
+      a._sourceSerial=a.serial==null?a.index:a.serial;
       a.serial=serialStart++;
     });
     return serialStart;
@@ -1749,12 +1873,14 @@ function boot(){
   function refreshAtomMaps(){
     atomByIndex=new Map();
     atomByEntryIndex=new Map();
+    atomByEntrySourceSerial=new Map();
     atomBySerial=new Map();
     atoms.forEach(a=>{
       if(a.index!=null){
         if(!atomByIndex.has(a.index))atomByIndex.set(a.index,a);
         atomByEntryIndex.set(atomEntryIndexKey(a._entryName,a.index),a);
       }
+      if(atomSourceSerial(a)!=null)atomByEntrySourceSerial.set(atomEntryIndexKey(a._entryName,atomSourceSerial(a)),a);
       if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
     });
   }
@@ -1768,14 +1894,14 @@ function boot(){
     viewer.render();
     buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
     showHover(null);
-    if(visible.length===1){
-      setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
+    if(visible.length){
+      setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
       startInteractionIndexBuild();
     }else{
-      resetInteractionIndex(visible.length?'multi-entry':'empty');
       clearInteractionShapes();
+      updateInteractionAggregate(visible);
       updateInteractionSummary(0);
-      setStatus(visible.length?visible.length+' entries displayed \u00b7 interactions disabled for multi-entry view':'No entries displayed');
+      setStatus('No entries displayed');
     }
   }
   function rebuildDisplayedEntries(opts){
@@ -1792,7 +1918,6 @@ function boot(){
     entryModelCache.forEach((record,name)=>{ if(!visibleNames.has(name))hideEntryRecord(record); });
     if(wideLineLayer)wideLineLayer.clear();
     interactionShapes=[]; interactionWideLines=[];
-    resetInteractionIndex('empty');
     viewer.setStyle({},{});
     models=[]; model=null; atoms=[];
     visible.forEach(e=>{
@@ -1806,8 +1931,8 @@ function boot(){
     if(!model){
       currentStructureKey='';
       resetAtomLevelCache();
-      resetInteractionIndex('empty');
       clearInteractionShapes();
+      updateInteractionAggregate([]);
       clearSelectionHighlight();
       buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
       showHover(null);
@@ -1847,8 +1972,9 @@ function boot(){
     if(!model){
       currentStructureKey='';
       resetAtomLevelCache();
-      resetInteractionIndex('empty');
       clearInteractionShapes();
+      updateInteractionAggregate([]);
+      updateInteractionSummary(0);
       if(wideLineLayer)wideLineLayer.clear();
       buildEntriesList();
       flushPanelRefresh();
@@ -1875,14 +2001,14 @@ function boot(){
     buildEntriesList();
     showHover(null);
     schedulePanelRefresh(40);
-    if(visible.length===1){
-      setStatus(currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms');
-      resetInteractionIndex('pending');
+    if(visible.length){
+      setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
+      redrawInteractions(true);
       scheduleInteractionIndexBuild(120);
     }else{
-      resetInteractionIndex(visible.length?'multi-entry':'empty');
+      updateInteractionAggregate(visible);
       updateInteractionSummary(0);
-      setStatus(visible.length?visible.length+' entries displayed \u00b7 interactions disabled for multi-entry view':'No entries displayed');
+      setStatus('No entries displayed');
     }
     return visible;
   }
@@ -2524,7 +2650,7 @@ function installFrameSyncedMotion(targetViewer){
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
     getState:function(){ return {file:currentName,entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false,active:e.name===currentName})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
-    getInteractionIndex:function(){ return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,elapsedMs:interactionIndex.elapsedMs,atoms:interactionIndex.atoms,rings:interactionIndex.rings,error:interactionIndex.error}); },
+    getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
