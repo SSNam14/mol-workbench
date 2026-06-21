@@ -92,8 +92,33 @@ function boot(){
   let preferencesSaveTimer = null;
   let panelRefreshTimer = null;
   let interactionStartTimer = null;
+  let busyToken = 0;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
+  function showBusy(label){
+    const overlay=$('busyOverlay'), text=$('busyLabel');
+    if(text)text.textContent=label||'Working...';
+    if(overlay)overlay.hidden=false;
+    setStatus(label||'Working...');
+  }
+  function hideBusy(token){
+    if(token&&token!==busyToken)return;
+    const overlay=$('busyOverlay');
+    if(overlay)overlay.hidden=true;
+  }
+  function afterNextPaint(){
+    return new Promise(resolve=>{
+      if(typeof requestAnimationFrame!=='function'){ setTimeout(resolve,0); return; }
+      requestAnimationFrame(()=>setTimeout(resolve,0));
+    });
+  }
+  async function withBusy(label,work){
+    const token=++busyToken;
+    showBusy(label);
+    await afterNextPaint();
+    try{ return await work(); }
+    finally{ setTimeout(()=>hideBusy(token),80); }
+  }
   function nextId(p){ return p + '-' + (idSeq++); }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
@@ -1770,7 +1795,7 @@ function boot(){
       function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:3px;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
       paintChk();
       chk.onclick=function(ev){ ev.stopPropagation(); };
-      chk.onchange=function(){ setEntryIncluded(e,chk.checked); };
+      chk.onchange=function(){ setEntryIncludedWithBusy(e,chk.checked); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
       const del=document.createElement('button');
       del.type='button';
@@ -2647,6 +2672,15 @@ function boot(){
     refreshDisplayedEntriesFast({preserveView:true,zoom:false});
     saveViewerSessionState();
   }
+  function entryNeedsBusy(entry){
+    const record=entryModelCache.get(entry&&entry.name);
+    return !!((record&&record.atoms&&record.atoms.length>=HUGE_FIT_ATOM_LIMIT)||String(entry&&entry.data||'').length>=5*1024*1024);
+  }
+  function setEntryIncludedWithBusy(entry,on){
+    const label=(on?'Showing ':'Hiding ')+(entry&&entry.title||entry&&entry.name||'entry')+'...';
+    if(entryNeedsBusy(entry))return withBusy(label,()=>setEntryIncluded(entry,on)).catch(err=>setStatus('Entry update failed: '+(err&&err.message||err)));
+    return setEntryIncluded(entry,on);
+  }
   function deleteEntry(entry){
     const idx=entries.findIndex(e=>e.name===entry.name);
     if(idx<0)return null;
@@ -3264,6 +3298,16 @@ function installFrameSyncedMotion(targetViewer){
   function setLigandStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.ligand=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repLigand'))$('repLigand').value=state.ligand; applyStylesFull(true); return state.ligand; }
   function setSolventStyle(representation){ let rep=normText(representation||'off').toLowerCase(); if(rep==='hide')rep='off'; state.solvent=(rep==='off'||ATOM_REPS.has(rep))?rep:'off'; if($('repSolvent'))$('repSolvent').value=state.solvent; applyStylesFull(true); return state.solvent; }
   function setOtherStyle(representation){ let rep=normText(representation||'stick').toLowerCase(); if(rep==='hide')rep='off'; state.other=(rep==='off'||ATOM_REPS.has(rep))?rep:'stick'; if($('repOther'))$('repOther').value=state.other; applyStylesFull(true); return state.other; }
+  function shouldBusyForStyleChange(rep){
+    const r=normText(rep).toLowerCase();
+    return atoms.length>=HUGE_FIT_ATOM_LIMIT||(r==='line'&&atoms.length>=20000);
+  }
+  function runStyleChange(label,rep,work,after){
+    const doneLabel=label.replace(/^Applying /,'Applied ').replace(/\.\.\.$/,'');
+    const run=function(){ const out=work(); if(after)after(); setStatus(doneLabel); return out; };
+    if(shouldBusyForStyleChange(rep))return withBusy(label,run).catch(err=>setStatus('Style failed: '+(err&&err.message||err)));
+    try{ return run(); }catch(err){ setStatus('Style failed: '+(err&&err.message||err)); }
+  }
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
     const type=normText(command.type||command.action).toLowerCase();
@@ -3307,11 +3351,11 @@ function installFrameSyncedMotion(targetViewer){
   document.querySelectorAll('[data-selection-action]').forEach(btn=>{
     btn.onclick=function(){ runSelectionToolbarAction(btn.getAttribute('data-selection-action')); };
   });
-  $('repBackbone').onchange=function(){ setProteinBackboneStyle($('repBackbone').value); };
-  $('repProtein').onchange=function(){ setProteinAtomStyle($('repProtein').value); };
-  $('repLigand').onchange=function(){ setLigandStyle($('repLigand').value); };
-  $('repSolvent').onchange=function(){ setSolventStyle($('repSolvent').value); buildHierarchy(); };
-  $('repOther').onchange=function(){ setOtherStyle($('repOther').value); buildHierarchy(); };
+  $('repBackbone').onchange=function(){ const rep=$('repBackbone').value; runStyleChange('Applying backbone '+rep+'...',rep,function(){ return setProteinBackboneStyle(rep); }); };
+  $('repProtein').onchange=function(){ const rep=$('repProtein').value; runStyleChange('Applying protein atoms '+rep+'...',rep,function(){ return setProteinAtomStyle(rep); }); };
+  $('repLigand').onchange=function(){ const rep=$('repLigand').value; runStyleChange('Applying ligand '+rep+'...',rep,function(){ return setLigandStyle(rep); }); };
+  $('repSolvent').onchange=function(){ const rep=$('repSolvent').value; runStyleChange('Applying solvent '+rep+'...',rep,function(){ return setSolventStyle(rep); },buildHierarchy); };
+  $('repOther').onchange=function(){ const rep=$('repOther').value; runStyleChange('Applying other '+rep+'...',rep,function(){ return setOtherStyle(rep); },buildHierarchy); };
   bindClipControl();
   $('clipReset').onclick=function(){ clip.near=-100; clip.far=100; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
@@ -3332,9 +3376,20 @@ function installFrameSyncedMotion(targetViewer){
   $('findClear').onclick=function(){ $('findInput').value=''; findMatches=[]; findIndex=-1; $('findCount').textContent='0 matches'; $('findSel').textContent=''; clearSelection(); };
   $('findPrev').onclick=function(){ stepFind(-1); };
   $('findNext').onclick=function(){ stepFind(1); };
-  $('addRef').onclick=function(){ loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY').catch(err=>setStatus('Load failed: '+err.message)); };
-  $('add6bgt').onclick=function(){ loadUrl('data/steap1_complex_seed2.pdb','pdb','steap1_complex_seed2','Prediction','').catch(err=>setStatus('Load failed: '+err.message)); };
-  $('fileInput').onchange=async function(e){ const f=e.target.files&&e.target.files[0]; if(!f)return; const data=await f.text(); const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)}; persistAndLoadEntry(e2).catch(err=>setStatus('Load failed: '+err.message)); e.target.value=''; };
+  $('addRef').onclick=function(){ withBusy('Loading 10AY...',()=>loadUrl('data/proteinprep_10AY-out.pdb','pdb','proteinprep_10AY','proteinprep_10AY-out','10AY')).catch(err=>setStatus('Load failed: '+err.message)); };
+  $('add6bgt').onclick=function(){ withBusy('Loading prediction...',()=>loadUrl('data/steap1_complex_seed2.pdb','pdb','steap1_complex_seed2','Prediction','')).catch(err=>setStatus('Load failed: '+err.message)); };
+  $('fileInput').onchange=async function(e){
+    const f=e.target.files&&e.target.files[0];
+    if(!f)return;
+    try{
+      await withBusy('Loading '+f.name+'...',async function(){
+        const data=await f.text();
+        const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)};
+        return persistAndLoadEntry(e2);
+      });
+    }catch(err){ setStatus('Load failed: '+err.message); }
+    e.target.value='';
+  };
 
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
