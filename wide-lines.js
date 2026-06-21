@@ -143,12 +143,6 @@ class MolWideLineLayer{
     this.host=host;
     this.getViewer=getViewer;
     this.collections=new Map();
-    this.mesh=null;
-    this.geometry=null;
-    this.material=null;
-    this.itemsCache=[];
-    this.itemsDirty=true;
-    this.meshDirty=true;
     this.nextPrimitiveId=1;
     this.Geometry=null;
     this.Mesh=null;
@@ -251,7 +245,13 @@ class MolWideLineLayer{
         minPixelRadius:point.minPixelRadius||options&&options.minPixelRadius,
         maxPixelRadius:point.maxPixelRadius||options&&options.maxPixelRadius
       })),
-      options:Object.assign({color:'#fdd835',linewidth:DEFAULT_LINE_WIDTH,opacity:1,pointRadius:DEFAULT_LINE_WIDTH},options||{})
+      options:Object.assign({color:'#fdd835',linewidth:DEFAULT_LINE_WIDTH,opacity:1,pointRadius:DEFAULT_LINE_WIDTH},options||{}),
+      itemsCache:[],
+      itemsDirty:true,
+      meshDirty:true,
+      mesh:null,
+      geometry:null,
+      material:null
     };
   }
 
@@ -260,8 +260,15 @@ class MolWideLineLayer{
   }
 
   setCollection(id,lines,points,options){
-    this.collections.set(String(id),this.normalizeCollection(lines,points,options));
-    this.markDirty();
+    const key=String(id);
+    const prev=this.collections.get(key);
+    const group=this.normalizeCollection(lines,points,options);
+    if(prev){
+      group.mesh=prev.mesh;
+      group.geometry=prev.geometry;
+      group.material=prev.material;
+    }
+    this.collections.set(key,group);
   }
 
   appendLineToCollection(id,line){
@@ -277,39 +284,41 @@ class MolWideLineLayer{
       minPixelWidth:line.minPixelWidth,
       maxPixelWidth:line.maxPixelWidth
     });
+    group.itemsDirty=true;
+    group.meshDirty=true;
     this.collections.set(key,group);
-    this.markDirty();
   }
 
   clearCollection(id){
-    this.collections.delete(String(id));
-    this.markDirty();
+    const key=String(id), group=this.collections.get(key);
+    if(group)this.disposeGroupMesh(group,this.getViewer&&this.getViewer());
+    this.collections.delete(key);
   }
 
   clearCollections(prefix){
     const p=String(prefix);
-    Array.from(this.collections.keys()).forEach(id=>{ if(id.indexOf(p)===0)this.collections.delete(id); });
-    this.markDirty();
+    Array.from(this.collections.keys()).forEach(id=>{ if(id.indexOf(p)===0)this.clearCollection(id); });
   }
 
   clear(){
+    const viewer=this.getViewer&&this.getViewer();
+    this.collections.forEach(group=>this.disposeGroupMesh(group,viewer));
     this.collections.clear();
-    this.itemsCache=[];
-    this.markDirty();
-    if(this.mesh)this.mesh.visible=false;
   }
 
-  disposeMesh(viewer){
-    if(this.mesh&&this.mesh.parent){
-      try{ this.mesh.parent.remove(this.mesh); }catch(e){
-        if(viewer&&viewer.modelGroup)try{ viewer.modelGroup.remove(this.mesh); }catch(_){}
+  disposeGroupMesh(group,viewer){
+    if(!group)return;
+    if(group.mesh&&group.mesh.parent){
+      try{ group.mesh.parent.remove(group.mesh); }catch(e){
+        if(viewer&&viewer.modelGroup)try{ viewer.modelGroup.remove(group.mesh); }catch(_){}
       }
     }
-    if(this.geometry&&typeof this.geometry.dispose==='function')try{ this.geometry.dispose(); }catch(e){}
-    if(this.material&&typeof this.material.dispose==='function')try{ this.material.dispose(); }catch(e){}
-    this.mesh=null;
-    this.geometry=null;
-    this.material=null;
+    if(group.geometry&&typeof group.geometry.dispose==='function')try{ group.geometry.dispose(); }catch(e){}
+    if(group.material&&typeof group.material.dispose==='function')try{ group.material.dispose(); }catch(e){}
+    group.mesh=null;
+    group.geometry=null;
+    group.material=null;
+    group.meshDirty=true;
   }
 
   addPrimitiveLine(spec){
@@ -336,27 +345,27 @@ class MolWideLineLayer{
   }
 
   markDirty(){
-    this.itemsDirty=true;
-    this.meshDirty=true;
-  }
-
-  flattenedItems(){
-    if(this.itemsDirty){
-      this.itemsCache=this.allItems();
-      this.itemsDirty=false;
-    }
-    return this.itemsCache;
-  }
-
-  allItems(){
-    const out=[];
     this.collections.forEach(group=>{
-      group.lines.forEach(line=>{
-        if(line.dashed)this.expandDashedLine(line,group.options).forEach(segment=>out.push({type:'line',data:segment,options:group.options}));
-        else out.push({type:'line',data:line,options:group.options});
-      });
-      group.points.forEach(point=>out.push({type:'point',data:point,options:group.options}));
+      group.itemsDirty=true;
+      group.meshDirty=true;
     });
+  }
+
+  flattenedItems(group){
+    if(group.itemsDirty){
+      group.itemsCache=this.allItems(group);
+      group.itemsDirty=false;
+    }
+    return group.itemsCache;
+  }
+
+  allItems(group){
+    const out=[];
+    group.lines.forEach(line=>{
+      if(line.dashed)this.expandDashedLine(line,group.options).forEach(segment=>out.push({type:'line',data:segment,options:group.options}));
+      else out.push({type:'line',data:line,options:group.options});
+    });
+    group.points.forEach(point=>out.push({type:'point',data:point,options:group.options}));
     return out;
   }
 
@@ -381,38 +390,38 @@ class MolWideLineLayer{
     return segments;
   }
 
-  ensureMesh(viewer,items){
+  ensureMesh(viewer,group,id,items){
     if(!items.length){
-      if(this.mesh)this.mesh.visible=false;
+      if(group.mesh)group.mesh.visible=false;
       return false;
     }
     if(!this.resolveRuntime(viewer))return false;
-    this.disposeMesh(viewer);
-    this.geometry=new this.Geometry(true,true);
-    this.material=this.createWideLineMaterial();
-    this.material.depthTest=true;
-    this.material.depthWrite=true;
-    this.material.transparent=false;
-    this.material.needsUpdate=true;
-    this.mesh=new this.Mesh(this.geometry,this.material);
-    this.mesh.name='MolWideLineMesh';
-    this.mesh.__molWideLineMesh=true;
-    this.mesh.visible=true;
+    this.disposeGroupMesh(group,viewer);
+    group.geometry=new this.Geometry(true,true);
+    group.material=this.createWideLineMaterial();
+    group.material.depthTest=true;
+    group.material.depthWrite=true;
+    group.material.transparent=false;
+    group.material.needsUpdate=true;
+    group.mesh=new this.Mesh(group.geometry,group.material);
+    group.mesh.name='MolWideLineMesh:'+id;
+    group.mesh.__molWideLineMesh=true;
+    group.mesh.visible=true;
     items.forEach(item=>{
-      const group=this.geometry.updateGeoGroup(4);
-      const base=group.vertices;
+      const geoGroup=group.geometry.updateGeoGroup(4);
+      const base=geoGroup.vertices;
       const color=colorValue(item.data.color||item.options.color);
-      if(item.type==='line')this.fillLineQuad(group,base,item,color);
-      else this.fillPointQuad(group,base,item,color);
-      group.vertices+=4;
-      group.faceidx+=6;
+      if(item.type==='line')this.fillLineQuad(geoGroup,base,item,color);
+      else this.fillPointQuad(geoGroup,base,item,color);
+      geoGroup.vertices+=4;
+      geoGroup.faceidx+=6;
     });
-    this.geometry.initTypedArrays();
-    this.geometry.verticesNeedUpdate=true;
-    this.geometry.elementsNeedUpdate=true;
-    this.geometry.normalsNeedUpdate=true;
-    this.geometry.colorsNeedUpdate=true;
-    viewer.modelGroup.add(this.mesh);
+    group.geometry.initTypedArrays();
+    group.geometry.verticesNeedUpdate=true;
+    group.geometry.elementsNeedUpdate=true;
+    group.geometry.normalsNeedUpdate=true;
+    group.geometry.colorsNeedUpdate=true;
+    viewer.modelGroup.add(group.mesh);
     return true;
   }
 
@@ -530,17 +539,18 @@ class MolWideLineLayer{
   syncToScene(){
     const viewer=this.getViewer&&this.getViewer();
     if(!viewer||!viewer.modelGroup)return;
-    const items=this.flattenedItems();
-    if(!items.length){
-      if(this.mesh)this.mesh.visible=false;
-      return;
-    }
-    if(this.meshDirty||!this.mesh){
-      if(!this.ensureMesh(viewer,items))return;
-      this.meshDirty=false;
-    }
-    if(!this.mesh)return;
-    this.mesh.visible=true;
+    this.collections.forEach((group,id)=>{
+      const items=this.flattenedItems(group);
+      if(!items.length){
+        if(group.mesh)group.mesh.visible=false;
+        return;
+      }
+      if(group.meshDirty||!group.mesh){
+        if(!this.ensureMesh(viewer,group,id,items))return;
+        group.meshDirty=false;
+      }
+      if(group.mesh)group.mesh.visible=true;
+    });
   }
 }
 
