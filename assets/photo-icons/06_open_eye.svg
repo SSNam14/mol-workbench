@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Open blue eye icon">
+<!-- Pure vector SVG generated from the uploaded high-resolution reference. Transparent background, 128x128 viewBox. -->
+  <defs>
+    <linearGradient id="eyeBlue" x1="16" y1="28" x2="112" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9cc5dc"/>
+      <stop offset="0.52" stop-color="#7facC6"/>
+      <stop offset="1" stop-color="#6595b1"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)">
+    <g fill="none" stroke="url(#eyeBlue)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 61 C27 40 44 30 64 30 C84 30 101 40 115 61 C101 82 84 92 64 92 C44 92 27 82 13 61 Z"/>
+    </g>
+    <circle cx="64" cy="61" r="20" fill="#87ceeb"/>
+  </g>
+</svg>

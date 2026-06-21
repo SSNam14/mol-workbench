@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maestro Molecular Viewer</title>
+<link rel="stylesheet" href="styles.css">
+<script src="assets/3Dmol-min.js"></script>
+<script src="wide-lines.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="u-001">
+
+  <div class="u-002">
+    <label data-menu class="u-003">Open file<input id="fileInput" type="file" accept=".pdb,.ent,.sdf,.mol,.mol2,.xyz,.cif" class="u-004"></label>
+    <button id="settingsBtn" data-menu class="u-005">Preference</button>
+  </div>
+
+  <div class="u-006">
+    <div class="u-007">
+      <span class="u-008">selection</span>
+      <select id="selLevel" class="u-009">
+        <option value="residue">Residues</option>
+        <option value="atom">Atoms</option>
+        <option value="chain">Chains</option>
+        <option value="model">Molecules</option>
+      </select>
+      <span class="u-008">Quick:</span>
+      <div class="u-010">
+        <button id="qsP" data-btn title="Protein" class="u-011">P</button>
+        <button id="qsL" data-btn title="Ligand" class="u-011">L</button>
+        <button id="qsS" data-btn title="Solvent" class="u-011">S</button>
+        <button id="qsAll" data-btn title="All" class="u-012">All</button>
+      </div>
+    </div>
+    <div class="u-013 rep-group">
+      <div class="rep-ctl" title="Backbone">
+        <span class="rep-label">chain</span>
+        <select id="repBackbone" class="rep-sel"><option value="cartoon">cartoon</option><option value="tube">tube</option><option value="off">off</option></select>
+      </div>
+      <div class="rep-ctl" title="Protein atoms">
+        <span class="rep-label">protein</span>
+        <select id="repProtein" class="rep-sel"><option value="off">off</option><option value="line">line</option><option value="stick">stick</option><option value="cpk">cpk</option><option value="sphere">sphere</option></select>
+      </div>
+      <div class="rep-ctl" title="Ligand">
+        <span class="rep-label">ligands</span>
+        <select id="repLigand" class="rep-sel"><option value="off">off</option><option value="line">line</option><option value="stick">stick</option><option value="cpk">cpk</option><option value="sphere">sphere</option></select>
+      </div>
+      <div class="rep-ctl" title="Solvent">
+        <span class="rep-label">solvents</span>
+        <select id="repSolvent" class="rep-sel"><option value="off">off</option><option value="line">line</option><option value="stick">stick</option><option value="cpk">cpk</option><option value="sphere">sphere</option></select>
+      </div>
+      <div class="rep-ctl" title="Other (ions / hetero)">
+        <span class="rep-label">others</span>
+        <select id="repOther" class="rep-sel"><option value="off">off</option><option value="line">line</option><option value="stick">stick</option><option value="cpk">cpk</option><option value="sphere">sphere</option></select>
+      </div>
+    </div>
+    <div class="svg-icon-strip" aria-label="Selected atom actions">
+      <button type="button" class="svg-icon-chip" data-selection-action="hide" title="Hide selected atoms"><img src="assets/photo-icons/01_eye.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="show" title="Show selected atoms"><img src="assets/photo-icons/06_open_eye.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="heavy" title="Show selected heavy atoms and polar H"><img src="assets/photo-icons/07_open_eye_h.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="line" title="Set selected atoms to line"><img src="assets/photo-icons/02_benzene_ring.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="stick" title="Set selected atoms to stick"><img src="assets/photo-icons/03_soft_medium_hexagon.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="cpk" title="Set selected atoms to CPK"><img src="assets/photo-icons/04_cpk_ball_stick_6.svg" alt=""></button>
+      <button type="button" class="svg-icon-chip" data-selection-action="sphere" title="Set selected atoms to sphere"><img src="assets/photo-icons/05_space_filling_6_spheres.svg" alt=""></button>
+    </div>
+    <div class="u-018"></div>
+  </div>
+
+  <div class="u-019">
+    <span class="u-020">Find</span>
+    <select id="findType" class="u-021">
+      <option value="resi">Residue Number</option>
+      <option value="resn">Residue Name</option>
+      <option value="atom">Atom Name</option>
+      <option value="chain">Chain</option>
+      <option value="elem">Element</option>
+    </select>
+    <div class="u-022">
+      <input id="findInput" type="text" placeholder="289 or 300-310" class="u-023">
+      <button id="findClear" data-btn class="u-024">&#10005;</button>
+      <button id="findGo" data-btn class="u-025" title="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"></circle><line x1="15.3" y1="15.3" x2="21" y2="21"></line></svg></button>
+    </div>
+    <button id="findPrev" data-btn class="u-026" title="Previous match"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5.5l-7 6.5 7 6.5z"></path></svg></button>
+    <button id="findNext" data-btn class="u-026" title="Next match"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 5.5l7 6.5-7 6.5z"></path></svg></button>
+    <span id="findCount" class="u-020">0 matches</span>
+    <span id="findSel" class="u-027"></span>
+    <div class="find-view-controls">
+      <button id="saveView" data-btn class="u-017">Save view</button>
+      <button id="restoreView" data-btn class="u-017">Restore</button>
+      <button id="lockView" data-btn class="u-017">Lock</button>
+    </div>
+    <div id="clipControl" class="clip-control">
+      <span class="clip-cap">Clip</span>
+      <div id="clipBar" class="clip-bar" title="Drag handles: near / far">
+        <div id="clipRange" class="clip-range"></div>
+        <div id="clipNearH" class="clip-handle" data-clip="near" title="near"></div>
+        <div id="clipFarH" class="clip-handle" data-clip="far" title="far"></div>
+      </div>
+      <span id="clipVal" class="clip-val">-100 / 100</span>
+      <button id="clipReset" data-btn class="clip-reset" title="Reset clip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 5 2 11 8 11"></polyline><path d="M4.1 15.5A8.5 8.5 0 1 0 6 6.3L2 11"></path></svg>
+      </button>
+    </div>
+    <div class="u-018"></div>
+  </div>
+
+  <div class="u-028">
+    <div class="u-029">
+
+      <div class="u-030">
+        <div class="u-031">
+          <span class="u-032">Entries</span>
+        </div>
+        <div class="u-035">
+          <span>Row</span><span style="text-align:center">In</span><span>Title</span><span></span>
+        </div>
+        <div id="entriesList" class="u-036"></div>
+      </div>
+
+      <div class="u-037">
+        <div class="u-038">
+          <span class="u-032">Hierarchy</span>
+        </div>
+        <div id="hierarchyTree" class="u-041"></div>
+      </div>
+    </div>
+
+    <div id="viewer" class="u-042">
+      <div id="fpsOverlay" class="u-043">FPS --</div>
+      <div id="dragSelectBox" class="u-044"></div>
+      <div id="status" class="u-045">Initializing</div>
+      <div id="busyOverlay" class="busy-overlay" hidden>
+        <div class="busy-panel">
+          <div class="busy-spinner"></div>
+          <div id="busyLabel" class="busy-label">Working...</div>
+        </div>
+      </div>
+      <div id="interPanel" hidden class="u-046">
+        <div class="u-047">
+          <span class="u-048">INTERACTIONS</span>
+          <button id="interClose" data-btn class="u-049">&#10005;</button>
+        </div>
+        <div id="interPanelBody" class="u-050"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="hoverBar" class="u-065"></div>
+
+  <div class="u-066">
+    <div class="status-metrics">
+      <div class="u-067"><span class="u-068">Selected</span><span id="stSel" class="u-069">0 atoms, 0 residues</span></div>
+      <div class="u-067"><span class="u-068">Displayed</span><span id="stDisplayed" class="u-069">0 of 0</span></div>
+      <div class="u-067"><span class="u-068">Atoms</span><span id="stAtoms" class="u-069">0</span></div>
+      <div class="u-067"><span class="u-068">Chains</span><span id="stChains" class="u-069">0</span></div>
+      <div class="u-067"><span class="u-068">Entries</span><span id="stEntries" class="u-069">0</span></div>
+      <div class="u-067"><span class="u-068">Residues</span><span id="stResidues" class="u-069">0</span></div>
+      <div class="u-067"><span class="u-068">Mols</span><span id="stMols" class="u-069">0</span></div>
+      <div class="u-070"><span class="u-068">Charge</span><span id="stCharge" class="u-069">0</span></div>
+    </div>
+    <div class="interaction-status-actions">
+      <button id="interBtn" data-btn class="u-071">Interactions</button>
+      <button id="interToggle" data-btn class="u-100" title="Toggle interactions on/off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+    </div>
+  </div>
+
+  <div id="settingsOverlay" class="u-073">
+    <div class="u-074">
+      <div class="u-075">
+        <span class="u-076">Preferences</span>
+        <button id="settingsClose" data-btn class="u-077">&#10005;</button>
+      </div>
+      <div class="u-078">
+
+        <section class="u-079">
+          <h3 class="u-080">Mouse actions</h3>
+          <div id="mouseMatrix"></div>
+        </section>
+
+        <div class="u-057"></div>
+        <section class="u-079">
+          <h3 class="u-080">Background</h3>
+          <div id="bgSwatches" class="u-081">
+            <button data-bg="#000000" title="Black" class="u-082"></button>
+            <button data-bg="#0d1117" title="Slate" class="u-083"></button>
+            <button data-bg="#21303f" title="Steel" class="u-084"></button>
+            <button data-bg="#e8eaed" title="Light" class="u-085"></button>
+            <span class="u-086">custom</span>
+            <input id="bgCustom" type="color" value="#000000" class="u-087">
+          </div>
+        </section>
+
+        <div class="u-057"></div>
+        <section class="u-079">
+          <div class="u-088">
+            <h3 class="u-080">Color schemes</h3>
+            <button id="resetColorSchemes" data-btn class="u-089">Reset</button>
+          </div>
+          <div class="color-scheme-block">
+            <div class="color-scheme-head">Chain</div>
+            <div id="chainColorList" class="u-090 color-scheme-grid chain-color-grid"></div>
+          </div>
+          <div class="color-scheme-block">
+            <div class="color-scheme-head">Atom</div>
+            <div id="atomColorList" class="color-scheme-grid atom-color-grid"></div>
+          </div>
+          <label class="u-091"><input id="setCarbonByChain" type="checkbox" checked class="u-092">Color protein carbons by chain</label>
+        </section>
+
+        <div class="u-097">
+          <button id="settingsReset" data-btn class="u-098">Reset all</button>
+          <button id="settingsDone" data-btn class="u-099">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
