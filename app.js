@@ -2475,12 +2475,19 @@ function boot(){
     const cacheKey=structureCacheKey(entry);
     const cached=entryModelCache.get(entry.name);
     if(cached&&cached.cacheKey===cacheKey)return cached;
-    if(cached)disposeEntryRecord(cached);
+    validateStructureCoordinates(entry);
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
     const list=m.selectedAtoms({});
+    if(!list||!list.length){
+      if(viewer&&typeof viewer.removeModel==='function'){
+        try{ viewer.removeModel(m); }catch(e){}
+      }
+      throw new Error('No atoms parsed from '+entry.name+'.');
+    }
     nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
     normalizeParsedAtoms(list);
     const record={entry,model:m,atoms:list,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
+    if(cached)disposeEntryRecord(cached);
     entryModelCache.set(entry.name,record);
     return record;
   }
@@ -2847,6 +2854,7 @@ function boot(){
     e=normalizeStructureEntry(e);
     if(!e)throw new Error('Invalid structure data');
     if(!viewer)initViewer();
+    ensureEntryModel(e);
     const hadOverrides=displayStateHasOverrides();
     const existingEntry=entries.findIndex(x=>x.name===e.name);
     if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
@@ -2859,6 +2867,47 @@ function boot(){
     return e;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
+  function hasLineMatch(text,pattern){ return pattern.test(String(text||'')); }
+  function validateStructureCoordinates(entry){
+    const fmt=normText(entry&&entry.fmt||'').toLowerCase();
+    const data=String(entry&&entry.data||'');
+    if(fmt==='cif'||fmt==='mmcif'){
+      if(!hasLineMatch(data,/^_atom_site\./m)){
+        if(hasLineMatch(data,/^_(refln|reflns|diffrn|diffrn_reflns)\./m)){
+          throw new Error(entry.name+' appears to be a structure-factor/reflection CIF, not a coordinate mmCIF.');
+        }
+        throw new Error(entry.name+' has no _atom_site coordinate table.');
+      }
+      if(!hasLineMatch(data,/^_atom_site\.Cartn_x\b/m)||!hasLineMatch(data,/^_atom_site\.Cartn_y\b/m)||!hasLineMatch(data,/^_atom_site\.Cartn_z\b/m)){
+        throw new Error(entry.name+' has no Cartesian coordinate columns.');
+      }
+    }
+  }
+  async function loadLocalStructureFiles(files){
+    const list=Array.from(files||[]);
+    const loaded=[],failed=[];
+    suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+60000);
+    for(const f of list){
+      try{
+        const data=await f.text();
+        const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)};
+        await persistAndLoadEntry(e2);
+        loaded.push(f.name);
+      }catch(err){
+        failed.push({name:f.name,message:(err&&err.message)||String(err)});
+      }
+    }
+    const countText=loaded.length+'/'+list.length+' file'+(list.length===1?'':'s');
+    suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+5000);
+    if(failed.length){
+      const failedText=failed.map(item=>item.name+': '+item.message).join('; ');
+      if(!loaded.length)throw new Error(failedText);
+      setStatus('Loaded '+countText+'. Failed: '+failedText);
+      return {loaded,failed};
+    }
+    setStatus('Loaded '+countText+'.');
+    return {loaded,failed};
+  }
   async function loadInitialStructure(){
     const saved=(await loadViewerSession()) || (await loadLastStructure());
     if(saved){
@@ -3494,14 +3543,11 @@ function installFrameSyncedMotion(targetViewer){
   $('findPrev').onclick=function(){ stepFind(-1); };
   $('findNext').onclick=function(){ stepFind(1); };
   $('fileInput').onchange=async function(e){
-    const f=e.target.files&&e.target.files[0];
-    if(!f)return;
+    const files=Array.from(e.target.files||[]);
+    if(!files.length)return;
     try{
-      await withBusy('Loading '+f.name+'...',async function(){
-        const data=await f.text();
-        const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)};
-        return persistAndLoadEntry(e2);
-      });
+      const label=files.length===1?'Loading '+files[0].name+'...':'Loading '+files.length+' files...';
+      await withBusy(label,function(){ return loadLocalStructureFiles(files); });
     }catch(err){ setStatus('Load failed: '+err.message); }
     e.target.value='';
   };
