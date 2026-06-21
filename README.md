@@ -8,7 +8,7 @@ MolWorkbench is a static WebGL viewer with a small Python persistence server. It
 
 - Multi-entry molecular visualization with independent show/hide state per entry.
 - Protein backbone and atom-level representation controls.
-- Selection, range selection, Shift-additive selection, hierarchy selection, and selected-atom actions.
+- Selection, range selection, Shift-additive viewer selection, Ctrl/Shift hierarchy selection, and selected-atom actions.
 - Server-persisted viewer sessions, preferences, colors, and interaction indexes.
 - Background nonbonded interaction indexing with dashed guide-line rendering.
 - Shader-backed wide-line rendering for molecular and interaction lines.

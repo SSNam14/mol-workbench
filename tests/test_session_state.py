@@ -35,6 +35,13 @@ class SessionStateTests(unittest.TestCase):
         session = server.normalize_session(payload)
         self.assertEqual(session["includedEntries"], ["one", "two"])
 
+    def test_normalize_entry_preserves_deleted_source_serials(self):
+        normalized = server.normalize_entry({
+            **entry("one"),
+            "deletedSourceSerials": [3, "2", "3", "", None],
+        })
+        self.assertEqual(normalized["deletedSourceSerials"], ["2", "3"])
+
     def test_normalize_session_state_preserves_explicit_empty_included_entries(self):
         fallback = {"includedEntries": ["one", "two"]}
         state = server.normalize_session_state({"includedEntries": []}, self.entries, fallback)

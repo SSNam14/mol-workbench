@@ -56,6 +56,29 @@ ELEMENT_IDS = (
 )
 
 
+def normalize_deleted_source_serials(value):
+    if not isinstance(value, list):
+        return []
+    seen = set()
+    out = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+
+    def sort_key(text):
+        try:
+            return (0, float(text), text)
+        except ValueError:
+            return (1, text)
+
+    return sorted(out, key=sort_key)
+
+
 def normalize_entry(value):
     if not isinstance(value, dict):
         return None
@@ -66,7 +89,11 @@ def normalize_entry(value):
     title = str(value.get("title") or name).strip() or name
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
-    return {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    deleted = normalize_deleted_source_serials(value.get("deletedSourceSerials"))
+    if deleted:
+        entry["deletedSourceSerials"] = deleted
+    return entry
 
 
 def truthy(value):

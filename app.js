@@ -83,6 +83,8 @@ function boot(){
   let selectedLineBondKeys = new Set();
   let lineSelectionStyleMaskActive = false;
   let hierarchyRows = [];
+  let hierarchySelectionAnchorKey = '';
+  let hierarchyContextMenu = null;
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
@@ -126,6 +128,24 @@ function boot(){
   }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
+  function sourceSerialText(value){
+    const text=normText(value);
+    return text===''?'':text;
+  }
+  function compareSourceSerialText(a,b){
+    const an=Number(a),bn=Number(b);
+    if(Number.isFinite(an)&&Number.isFinite(bn)&&an!==bn)return an-bn;
+    return a<b?-1:(a>b?1:0);
+  }
+  function normalizeDeletedSourceSerials(value){
+    if(!Array.isArray(value))return [];
+    const seen=new Set();
+    value.forEach(item=>{
+      const text=sourceSerialText(item);
+      if(text)seen.add(text);
+    });
+    return Array.from(seen).sort(compareSourceSerialText);
+  }
   function fnv1aHex(text){
     let h=0x811c9dc5;
     for(let i=0;i<text.length;i++){
@@ -136,7 +156,8 @@ function boot(){
   }
   function structureCacheKey(e){
     const data=String(e&&e.data||''),fmt=normText(e&&e.fmt||'pdb').toLowerCase();
-    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data);
+    const deleted=normalizeDeletedSourceSerials(e&&e.deletedSourceSerials).join(',');
+    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data)+'-d'+deleted.length.toString(36)+'-'+fnv1aHex(deleted);
   }
   function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
   function mergePlain(base,extra){
@@ -311,7 +332,10 @@ function boot(){
   function normalizeStructureEntry(e){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
-    return {name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const deleted=normalizeDeletedSourceSerials(e.deletedSourceSerials);
+    if(deleted.length)out.deletedSourceSerials=deleted;
+    return out;
   }
   function uniqueEntryName(base){
     const root=normText(base||'structure')||'structure';
@@ -380,7 +404,9 @@ function boot(){
     const clean=normalizeStructureEntry(entry);
     if(!clean)return Promise.resolve(false);
     suppressSessionPollUntil=Date.now()+1500;
-    return fetchJsonResult(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry:clean})}).then(result=>{
+    const payload={entry:clean};
+    if(opts.replace)payload.replace=true;
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(result=>{
       if(!result.ok)return reportPersistenceFailure('Viewer session entry',result,opts);
       rememberSessionResponse(result.data);
       return true;
@@ -784,6 +810,19 @@ function boot(){
     return ak<bk?ak+'|'+bk:bk+'|'+ak;
   }
   function atomSourceSerial(a){ return a&&a._sourceSerial!=null?a._sourceSerial:(a&&a.index!=null?a.index:(a&&a.serial)); }
+  function entryDeletedSourceSerialSet(entry){
+    return new Set(normalizeDeletedSourceSerials(entry&&entry.deletedSourceSerials));
+  }
+  function splitEntryDeletedAtoms(entry,list){
+    const deleted=entryDeletedSourceSerialSet(entry), visible=[], hiddenSerials=[];
+    if(!deleted.size)return {visible:list||[],hiddenSerials};
+    (list||[]).forEach(a=>{
+      if(deleted.has(sourceSerialText(atomSourceSerial(a)))){
+        if(a&&a.serial!=null)hiddenSerials.push(a.serial);
+      }else visible.push(a);
+    });
+    return {visible,hiddenSerials};
+  }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
     const info={atomCount:0,residueCount:0,residueKeys:new Set()};
@@ -824,6 +863,7 @@ function boot(){
     }
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
+    clearDeletedAtomStyles();
   }
   function setLineSelectionStyleMask(keys){
     const next=keys&&keys.size?keys:new Set();
@@ -1137,6 +1177,7 @@ function boot(){
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){ console.warn('Hide rule failed',r,e); } }
     applyVisibility();
+    clearDeletedAtomStyles();
     redrawWideLineStyles();
     if(!opts.skipInteractions)redrawInteractions(false);
     if(!opts.skipSelection){
@@ -1240,6 +1281,7 @@ function boot(){
   }
   function clearSelection(){
     state.selectionSel=null; selectionAtoms=[]; state.focusTarget=null;
+    hierarchySelectionAnchorKey='';
     renderSelectionHighlight(true,selectionAtoms);
     updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
     syncHierarchySelectionHighlight();
@@ -1364,6 +1406,7 @@ function boot(){
   function fitVisible(opts){
     opts=opts||{};
     if(!viewer||!model)return false;
+    if(!atoms.length)return false;
     if(shouldUseFastFit(atoms)){
       const box=visibleAtomExtent();
       return fastFitAtoms(atoms,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
@@ -1943,14 +1986,6 @@ function boot(){
       el.appendChild(row);
     });
   }
-  function catRow(label,count,indent){
-    const row=document.createElement('div');
-    row.style.cssText='display:flex;align-items:center;gap:7px;height:21px;padding:0 8px 0 '+(indent||22)+'px;font-size:11.5px';
-    const lab=document.createElement('span'); lab.textContent=label; lab.style.cssText='color:#d4d4d4;font-weight:600';
-    const cnt=document.createElement('span'); cnt.textContent=count?'('+count+')':''; cnt.style.cssText='color:#777;font-size:10px';
-    row.appendChild(lab); row.appendChild(cnt);
-    return row;
-  }
   function chainVisibilityKey(entry,chain){ return (entry||'')+'\u0001'+(chain||'?'); }
   function chainVisibilityValue(entry,chain){
     const key=chainVisibilityKey(entry,chain);
@@ -2001,6 +2036,16 @@ function boot(){
     const serials=serialsForAtoms(list);
     if(serials.length)model.setStyle({serial:serials},spec,!!add);
   }
+  function clearDeletedAtomStyles(records){
+    if(!viewer)return;
+    (records||visibleEntryRecords()).forEach(record=>{
+      const serials=record&&record.deletedSerials;
+      if(!serials||!serials.length)return;
+      const modelRef=record.model&&typeof record.model.setStyle==='function'?record.model:null;
+      if(modelRef)modelRef.setStyle({serial:serials},{});
+      else viewer.setStyle({serial:serials},{});
+    });
+  }
   function applyBaseStylesForRecord(record){
     if(!record||!record.model||!record.atoms)return;
     const model=record.model, by={ligands:[],solvents:[],other:[]};
@@ -2018,6 +2063,7 @@ function boot(){
     if(by.ligands.length)setModelStyleForAtoms(model,by.ligands,ligandStyleSpec(),false);
     if(by.solvents.length&&state.solvent!=='off')setModelStyleForAtoms(model,by.solvents,solventStyleSpec(),false);
     if(by.other.length&&state.other!=='off')setModelStyleForAtoms(model,by.other,otherStyleSpec(),false);
+    clearDeletedAtomStyles([record]);
   }
   function applyRuleOverlays(){
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){ console.warn('Style rule failed',r,e); } }
@@ -2061,9 +2107,149 @@ function boot(){
     }
     scheduleVisibilityLayerRefresh();
   }
-  function hierarchySelect(sel,e){
-    const additive=!!(e&&e.shiftKey);
-    setSelection(sel,{additive});
+  function hierarchyRowKey(row){
+    const match=row&&row.__hierarchyMatch;
+    return match?(match.type||'')+'\u0001'+(match.key||''):'';
+  }
+  function visibleSelectableHierarchyRows(){
+    return hierarchyRows.filter(row=>{
+      const serials=row&&row.__hierarchyMatch&&row.__hierarchyMatch.serials;
+      return serials&&serials.length;
+    });
+  }
+  function hierarchyRowsInRange(row){
+    const rows=visibleSelectableHierarchyRows();
+    const end=rows.indexOf(row);
+    if(end<0)return row?[row]:[];
+    let start=rows.findIndex(item=>hierarchyRowKey(item)===hierarchySelectionAnchorKey);
+    if(start<0)start=end;
+    const lo=Math.min(start,end),hi=Math.max(start,end);
+    return rows.slice(lo,hi+1);
+  }
+  function uniqueHierarchySerials(rows){
+    const out=[],seen=new Set();
+    (rows||[]).forEach(row=>{
+      const serials=row&&row.__hierarchyMatch&&row.__hierarchyMatch.serials;
+      (serials||[]).forEach(serial=>{
+        if(serial==null||seen.has(serial))return;
+        seen.add(serial);
+        out.push(serial);
+      });
+    });
+    return out;
+  }
+  function setHierarchySerialSelection(serials){
+    if(!serials||!serials.length){ clearSelection(); return; }
+    setSelection({serial:serials},{});
+  }
+  function closeHierarchyContextMenu(){
+    if(hierarchyContextMenu)hierarchyContextMenu.hidden=true;
+  }
+  function selectedSourceSerialsByEntry(selected){
+    const out=new Map();
+    (selected||[]).forEach(a=>{
+      const entryName=normText(a&&a._entryName), serial=sourceSerialText(atomSourceSerial(a));
+      if(!entryName||!serial)return;
+      if(!out.has(entryName))out.set(entryName,new Set());
+      out.get(entryName).add(serial);
+    });
+    return out;
+  }
+  async function deleteHierarchySelection(){
+    const selected=currentSelectionToolbarAtoms();
+    if(!selected.length)return;
+    const byEntry=selectedSourceSerialsByEntry(selected), updated=[];
+    byEntry.forEach((serials,entryName)=>{
+      const entry=entries.find(e=>e.name===entryName);
+      if(!entry)return;
+      const merged=new Set(normalizeDeletedSourceSerials(entry.deletedSourceSerials));
+      serials.forEach(serial=>merged.add(serial));
+      entry.deletedSourceSerials=normalizeDeletedSourceSerials(Array.from(merged));
+      updated.push(entry);
+    });
+    if(!updated.length){ setStatus('No deletable selected atoms'); return; }
+    resetSelectionState();
+    updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    setStatus('Deleted from hierarchy: '+selected.length.toLocaleString()+' atoms');
+    let savedAll=true;
+    for(const entry of updated){
+      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+      if(!saved)savedAll=false;
+    }
+    if(!savedAll)setStatus('Deleted locally but not saved on server.');
+  }
+  function ensureHierarchyContextMenu(){
+    if(hierarchyContextMenu)return hierarchyContextMenu;
+    const menu=document.createElement('div');
+    menu.className='hierarchy-context-menu';
+    menu.hidden=true;
+    const del=document.createElement('button');
+    del.type='button';
+    del.textContent='Delete';
+    del.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      closeHierarchyContextMenu();
+      deleteHierarchySelection().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+    };
+    menu.appendChild(del);
+    menu.onclick=function(e){ e.stopPropagation(); };
+    document.body.appendChild(menu);
+    hierarchyContextMenu=menu;
+    return menu;
+  }
+  function showHierarchyContextMenu(x,y){
+    const menu=ensureHierarchyContextMenu();
+    menu.hidden=false;
+    menu.style.left='0px';
+    menu.style.top='0px';
+    const rect=menu.getBoundingClientRect();
+    const left=Math.min(Math.max(0,x),Math.max(0,window.innerWidth-rect.width-4));
+    const top=Math.min(Math.max(0,y),Math.max(0,window.innerHeight-rect.height-4));
+    menu.style.left=left+'px';
+    menu.style.top=top+'px';
+  }
+  function hierarchyContextRow(row,e){
+    const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
+    if(!serials||!serials.length)return;
+    e.preventDefault();
+    e.stopPropagation();
+    const selectedSerials=new Set(serialsForAtoms(selectionAtoms));
+    if(!hierarchyMatchSelected(match,selectedSerials)){
+      hierarchySelectionAnchorKey=hierarchyRowKey(row);
+      setHierarchySerialSelection(serials.slice());
+    }
+    showHierarchyContextMenu(e.clientX,e.clientY);
+  }
+  function hierarchySelectRow(row,e){
+    const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
+    if(!serials||!serials.length)return;
+    closeHierarchyContextMenu();
+    const key=hierarchyRowKey(row);
+    if(e&&e.shiftKey){
+      const rangeSerials=uniqueHierarchySerials(hierarchyRowsInRange(row));
+      if(e.ctrlKey||e.metaKey){
+        const selected=new Set(serialsForAtoms(selectionAtoms));
+        rangeSerials.forEach(serial=>selected.add(serial));
+        setHierarchySerialSelection(Array.from(selected));
+      }else{
+        setHierarchySerialSelection(rangeSerials);
+      }
+      if(!hierarchySelectionAnchorKey)hierarchySelectionAnchorKey=key;
+      return;
+    }
+    if(e&&(e.ctrlKey||e.metaKey)){
+      const selected=new Set(serialsForAtoms(selectionAtoms));
+      const allSelected=serials.every(serial=>selected.has(serial));
+      if(allSelected)serials.forEach(serial=>selected.delete(serial));
+      else serials.forEach(serial=>selected.add(serial));
+      if(!hierarchySelectionAnchorKey)hierarchySelectionAnchorKey=key;
+      setHierarchySerialSelection(Array.from(selected));
+      return;
+    }
+    hierarchySelectionAnchorKey=key;
+    setHierarchySerialSelection(serials.slice());
   }
   function hierarchySubhead(label,indent){
     const row=document.createElement('div');
@@ -2075,7 +2261,7 @@ function boot(){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
     if(opts.match){
-      row.__hierarchyMatch=opts.match;
+      row.__hierarchyMatch=hierarchyMatch(opts.match.type,opts.match.key,opts.atoms);
       hierarchyRows.push(row);
     }
     row.style.cssText='display:flex;align-items:center;gap:7px;min-height:20px;padding:0 8px 0 '+(opts.indent||34)+'px;font-size:11.5px;cursor:pointer';
@@ -2098,29 +2284,18 @@ function boot(){
     cnt.textContent=opts.count?'('+opts.count+')':'';
     cnt.style.cssText='color:#777;font-size:10px;flex:none';
     row.appendChild(dot); row.appendChild(lab); row.appendChild(cnt);
-    row.onclick=function(e){ if(opts.onselect)opts.onselect(e); };
+    row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
     return row;
   }
   function syncHierarchySelectionHighlight(){
     const tree=$('hierarchyTree');
     if(!tree)return;
-    const chainKeys=new Set(),groupKeys=new Set(),entryKeys=new Set();
-    (selectionAtoms||[]).forEach(a=>{
-      if(!a)return;
-      entryKeys.add(a._entryName||'');
-      chainKeys.add(chainVisibilityKey(a._entryName,a.chain));
-      groupKeys.add(groupVisibilityKeyFromAtom(a));
-    });
+    const selectedSerials=new Set(serialsForAtoms(selectionAtoms));
     const rows=hierarchyRows.length?hierarchyRows:Array.from(tree.querySelectorAll('[data-row]'));
     rows.forEach(row=>{
       const m=row.__hierarchyMatch;
-      let on=false;
-      if(m){
-        if(m.type==='chain')on=chainKeys.has(m.key);
-        else if(m.type==='group')on=groupKeys.has(m.key);
-        else if(m.type==='entry')on=entryKeys.has(m.key);
-      }
-      row.classList.toggle('is-selected',on);
+      row.classList.toggle('is-selected',hierarchyMatchSelected(m,selectedSerials));
     });
   }
   function residueSortValue(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
@@ -2143,20 +2318,84 @@ function boot(){
     return parts.join(' ');
   }
   function residueGroupKey(a){ return [a._entryName||'',a.chain||'',a.resn||'',a.resi==null?'':a.resi].join('\u0001'); }
+  function hierarchySectionKey(entryName,section){ return (entryName||'')+'\u0001section\u0001'+(section||''); }
+  function hierarchySerials(list){
+    const out=[],seen=new Set();
+    (list||[]).forEach(a=>{
+      if(!a||a.serial==null||seen.has(a.serial))return;
+      seen.add(a.serial);
+      out.push(a.serial);
+    });
+    return out;
+  }
+  function hierarchyMatch(type,key,list){ return {type,key,serials:hierarchySerials(list)}; }
+  function hierarchyMatchSelected(match,selectedSerials){
+    const serials=match&&match.serials;
+    if(!serials||!serials.length||!selectedSerials||!selectedSerials.size)return false;
+    if(serials.length>selectedSerials.size)return false;
+    return serials.every(s=>selectedSerials.has(s));
+  }
+  function hierarchyAtomsFromGroups(groups){
+    const out=[];
+    (groups||[]).forEach(g=>{ (g&&g.atoms||[]).forEach(a=>out.push(a)); });
+    return out;
+  }
+  function toggleHierarchyCollapse(key,collapsed){
+    if(collapsed)delete state.hierarchyCollapsed[key];
+    else state.hierarchyCollapsed[key]=true;
+    buildHierarchy();
+  }
+  function hierarchyCollapseArrow(collapsed,title){
+    const arrow=document.createElement('span');
+    arrow.className='tree-arrow';
+    arrow.textContent=collapsed?'\u25b8':'\u25be';
+    arrow.title=title;
+    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#8f8f8f;font-weight:400;line-height:1';
+    return arrow;
+  }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
-  function entryHeaderRow(entry,count,collapsed){
+  function entryHeaderRow(entry,count,collapsed,entryAtoms){
     const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.__hierarchyMatch=hierarchyMatch('entry',entry.name,entryAtoms);
+    hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:700;border-top:1px solid #242424;background:#2d2d2d;cursor:pointer';
-    row.title=collapsed?'Expand entry':'Collapse entry';
-    const arrow=document.createElement('span'); arrow.className='tree-arrow'; arrow.textContent=collapsed?'\u25b8':'\u25be';
-    const lab=document.createElement('span'); lab.textContent=entryTitleForHierarchy(entry); lab.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    row.title='Select entry';
+    const arrow=hierarchyCollapseArrow(collapsed,collapsed?'Expand entry':'Collapse entry');
+    const lab=document.createElement('span'); lab.textContent=entryTitleForHierarchy(entry); lab.title='Select entry: '+entryTitleForHierarchy(entry); lab.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const cnt=document.createElement('span'); cnt.textContent=count?'('+count+')':''; cnt.style.cssText='color:#777;font-size:10px;font-weight:400;flex:none';
     row.appendChild(arrow); row.appendChild(lab); row.appendChild(cnt);
-    row.onclick=function(){
-      if(collapsed)delete state.hierarchyCollapsed[entry.name];
-      else state.hierarchyCollapsed[entry.name]=true;
-      buildHierarchy();
+    arrow.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      toggleHierarchyCollapse(entry.name,collapsed);
     };
+    row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
+    return row;
+  }
+  function hierarchySectionHeaderRow(opts){
+    const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.__hierarchyMatch=hierarchyMatch('section',hierarchySectionKey(opts.entryName,opts.section),opts.atoms);
+    hierarchyRows.push(row);
+    row.style.cssText='display:flex;align-items:center;gap:6px;height:21px;padding:0 8px 0 '+(opts.indent||22)+'px;font-size:11.5px;cursor:pointer';
+    row.title='Select '+opts.label;
+    const arrow=hierarchyCollapseArrow(opts.collapsed,opts.collapsed?'Expand '+opts.label:'Collapse '+opts.label);
+    const lab=document.createElement('span');
+    lab.textContent=opts.label;
+    lab.style.cssText='color:#d4d4d4;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const cnt=document.createElement('span');
+    cnt.textContent=opts.count?'('+opts.count+')':'';
+    cnt.style.cssText='color:#777;font-size:10px;flex:none';
+    row.appendChild(arrow); row.appendChild(lab); row.appendChild(cnt);
+    arrow.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      toggleHierarchyCollapse(opts.collapseKey,opts.collapsed);
+    };
+    row.onclick=function(e){ hierarchySelectRow(row,e); };
+    row.oncontextmenu=function(e){ hierarchyContextRow(row,e); };
     return row;
   }
   function buildHierarchy(){
@@ -2169,50 +2408,58 @@ function boot(){
       const hierarchy=record&&record.hierarchy?record.hierarchy:buildEntryHierarchyCache(entry,entryAtoms);
       const counts=hierarchy.counts||{protein:0,ligands:0,solvents:0,other:0};
       const collapsed=state.hierarchyCollapsed[entry.name]===true;
-      tree.appendChild(entryHeaderRow(entry,entryAtoms.length,collapsed));
+      tree.appendChild(entryHeaderRow(entry,entryAtoms.length,collapsed,entryAtoms));
       if(collapsed)return;
 
       if(counts.ligands){
-        tree.appendChild(catRow('Ligands',counts.ligands,22));
-        hierarchy.ligands.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'ligands'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'ligands',label:'Ligands',count:counts.ligands,atoms:hierarchyAtomsFromGroups(hierarchy.ligands),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.ligands.forEach(g=>{
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); }}));
+          });
+        }
       }
 
       if(counts.protein){
-        tree.appendChild(catRow('Protein',counts.protein,22));
-        hierarchy.proteinChains.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain};
-          tree.appendChild(hierarchyChildRow({
-            label:'Chain '+g.chain,
-            title:hierarchyPrefix(g,shown.length>1)+'Chain '+g.chain,
-            count:g.atoms.length,
-            color:chainColor(g.chain),
-            indent:34,
-            match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
-            checkbox:true,
-            checked:chainVisibilityValue(g.entry,g.chain),
-            oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
-            onselect:function(e){ hierarchySelect(sel,e); }
-          }));
-        });
+        const key=hierarchySectionKey(entry.name,'protein'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'protein',label:'Protein',count:counts.protein,atoms:hierarchyAtomsFromGroups(hierarchy.proteinChains),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.proteinChains.forEach(g=>{
+            tree.appendChild(hierarchyChildRow({
+              label:'Chain '+g.chain,
+              title:hierarchyPrefix(g,shown.length>1)+'Chain '+g.chain,
+              count:g.atoms.length,
+              color:chainColor(g.chain),
+              indent:34,
+              match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
+              atoms:g.atoms,
+              checkbox:true,
+              checked:chainVisibilityValue(g.entry,g.chain),
+              oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); }
+            }));
+          });
+        }
       }
 
       if(counts.solvents){
-        tree.appendChild(catRow('Solvents',counts.solvents,22));
-        hierarchy.solvents.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'solvents'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'solvents',label:'Solvents',count:counts.solvents,atoms:hierarchyAtomsFromGroups(hierarchy.solvents),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.solvents.forEach(g=>{
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); }}));
+          });
+        }
       }
 
       if(counts.other){
-        tree.appendChild(catRow('Other',counts.other,22));
-        hierarchy.other.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'other'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'other',label:'Other',count:counts.other,atoms:hierarchyAtomsFromGroups(hierarchy.other),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.other.forEach(g=>{
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},atoms:g.atoms,checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); }}));
+          });
+        }
       }
       if(!entryAtoms.length){
         tree.appendChild(hierarchySubhead('No atoms displayed',22));
@@ -2376,6 +2623,7 @@ function boot(){
     selectionAtoms=[];
     state.focusTarget=null;
     state.selectionOptions=defaultSelectionOptions();
+    hierarchySelectionAnchorKey='';
   }
   function resetDisplayRulesForStructure(){
     state.styleRules=[];
@@ -2561,16 +2809,18 @@ function boot(){
     if(cached&&cached.cacheKey===cacheKey)return cached;
     validateStructureCoordinates(entry);
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
-    const list=m.selectedAtoms({});
-    if(!list||!list.length){
+    const parsed=m.selectedAtoms({});
+    if(!parsed||!parsed.length){
       if(viewer&&typeof viewer.removeModel==='function'){
         try{ viewer.removeModel(m); }catch(e){}
       }
       throw new Error('No atoms parsed from '+entry.name+'.');
     }
-    nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
+    nextAtomSerial=prepareDisplayedAtoms(entry,parsed,nextAtomSerial);
+    const split=splitEntryDeletedAtoms(entry,parsed);
+    const list=split.visible;
     normalizeParsedAtoms(list);
-    const record={entry,model:m,atoms:list,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
+    const record={entry,model:m,atoms:list,deletedSerials:split.hiddenSerials,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
     if(cached)disposeEntryRecord(cached);
     entryModelCache.set(entry.name,record);
     return record;
@@ -3661,8 +3911,12 @@ function installFrameSyncedMotion(targetViewer){
       return;
     }
     if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
-    if(e.key==='Escape'){ if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
+    if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
+  document.addEventListener('pointerdown',function(e){
+    if(hierarchyContextMenu&&!hierarchyContextMenu.hidden&&!hierarchyContextMenu.contains(e.target))closeHierarchyContextMenu();
+  },true);
+  document.addEventListener('scroll',closeHierarchyContextMenu,true);
 
   $('interPanel').hidden=true;
   buildInterPanel();
