@@ -77,6 +77,8 @@ function boot(){
   let selectionStyleActive = false;
   let selectionShapes = [];
   let selectionHighlightJob = 0;
+  let selectedLineBondKeys = new Set();
+  let lineSelectionStyleMaskActive = false;
   let hierarchyRows = [];
   let wideLineLayer = null;
   let interactionShapes = [];
@@ -696,6 +698,11 @@ function boot(){
   }
   function residueUiKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi; }
   function atomEntryIndexKey(entry,index){ return (entry||'')+'\u0001'+index; }
+  function atomLineKey(a){ return atomEntryIndexKey(a&&a._entryName,a&&a.index!=null?a.index:atomSourceSerial(a)); }
+  function bondLineKey(a,b){
+    const ak=atomLineKey(a),bk=atomLineKey(b);
+    return ak<bk?ak+'|'+bk:bk+'|'+ak;
+  }
   function atomSourceSerial(a){ return a&&a._sourceSerial!=null?a._sourceSerial:(a&&a.index!=null?a.index:(a&&a.serial)); }
   function selectedAtomsForSelector(sel){ return sel?filterAtoms(sel):[]; }
   function selectionInfo(sel,selected){
@@ -738,9 +745,18 @@ function boot(){
     if(off.length)viewer.setStyle({serial:off},{});
     displayedCount = atoms.length - off.length;
   }
-  function clearSelectionHighlight(){
+  function setLineSelectionStyleMask(keys){
+    const next=keys&&keys.size?keys:new Set();
+    const changed=lineSelectionStyleMaskActive||next.size>0;
+    selectedLineBondKeys=next;
+    lineSelectionStyleMaskActive=next.size>0;
+    if(changed)redrawWideLineStyles();
+  }
+  function clearSelectionHighlight(opts){
+    opts=opts||{};
     selectionHighlightJob++;
     if(wideLineLayer)wideLineLayer.clearCollection('selection');
+    if(lineSelectionStyleMaskActive&&!opts.deferLineMask)setLineSelectionStyleMask(null);
     if(selectionStyleActive){
       selectionStyleActive=false;
       if(viewer&&model)applyStylesFull(false,{skipSelection:true,skipStatus:true,skipInteractions:true});
@@ -815,7 +831,8 @@ function boot(){
     if(defaultColorFn)return defaultColorFn(a);
     return chainAwareAtomColor(a);
   }
-  function appendWideBond(lines,a,b,o,defaultColorFn,widthDefault,dashed){
+  function appendWideBond(lines,a,b,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
+    if(skipBondKeys&&skipBondKeys.has(bondLineKey(a,b)))return;
     const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     const ca=lineColorForAtom(a,o,defaultColorFn),cb=lineColorForAtom(b,o,defaultColorFn);
     if(ca===cb){
@@ -826,15 +843,44 @@ function boot(){
     lines.push({start:point(a),end:mid,color:ca,width,opacity,dashed:!!dashed});
     lines.push({start:mid,end:point(b),color:cb,width,opacity,dashed:!!dashed});
   }
-  function appendWideAtomLines(lines,points,selected,o,defaultColorFn,widthDefault,dashed){
+  function appendWideAtomLines(lines,points,selected,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
     const data=selectionBondData(selected);
-    data.bonds.forEach(p=>appendWideBond(lines,p[0],p[1],o,defaultColorFn,widthDefault,dashed));
+    data.bonds.forEach(p=>appendWideBond(lines,p[0],p[1],o,defaultColorFn,widthDefault,dashed,skipBondKeys));
     const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     data.looseAtoms.forEach(a=>{
       const p=point(a);
       p.color=lineColorForAtom(a,o,defaultColorFn);
       p.opacity=opacity;
       p.radius=Math.max(2,width*0.6);
+      points.push(p);
+    });
+  }
+  function appendSelectedLineOverlay(lines,points,selected,o,widthDefault,keysOut){
+    const lineKeys=new Set(),covered=new Set();
+    const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(widthDefault||o.linewidth||lineWidths.selection)),color=o.color||'#fdd835';
+    function addLine(a,b,key){
+      if(lineKeys.has(key))return;
+      lineKeys.add(key);
+      if(keysOut)keysOut.add(key);
+      lines.push({start:point(a),end:point(b),color,width,opacity,dashed:false});
+      if(a.serial!=null)covered.add(a.serial);
+      if(b&&b.serial!=null)covered.add(b.serial);
+    }
+    selected.forEach(a=>{
+      if(a.index==null)return;
+      (a.bonds||[]).forEach(idx=>{
+        const b=atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx);
+        if(!b||!isAtomVisibleNow(b))return;
+        if(atomDisplayRepresentation(b)!=='line')return;
+        addLine(a,b,bondLineKey(a,b));
+      });
+    });
+    selected.forEach(a=>{
+      if(a.serial!=null&&covered.has(a.serial))return;
+      const p=point(a);
+      p.color=color;
+      p.opacity=opacity;
+      p.radius=Math.max(2,width*0.65);
       points.push(p);
     });
   }
@@ -904,19 +950,20 @@ function boot(){
   }
   function drawAdaptiveLineSelection(selected,o,job){
     if(!wideLineLayer)return false;
-    const displayAtoms=representativeSelectionAtoms(selected);
-    const groups=partitionSelectionByDisplay(displayAtoms),lines=[],points=[],width=Math.max(1,Number(o.linewidth||lineWidths.selection));
+    const groups=partitionSelectionByDisplay(selected),lines=[],points=[],lineKeys=new Set(),width=Math.max(1,Number(o.linewidth||lineWidths.selection));
+    groups.none=representativeSelectionAtoms(groups.none);
     appendWideAtomLines(lines,points,groups.none,o,function(){ return o.color||'#fdd835'; },width,false);
-    appendWideAtomLines(lines,points,groups.line,o,function(){ return o.color||'#fdd835'; },width,false);
+    appendSelectedLineOverlay(lines,points,groups.line,o,Math.max(width+1,width*1.75),lineKeys);
     if(lines.length||points.length)wideLineLayer.setCollection('selection',lines,points,{color:o.color||'#fdd835',opacity:o.opacity==null?1:Number(o.opacity),linewidth:width,pointRadius:Math.max(2,width*0.6)});
+    setLineSelectionStyleMask(lineKeys);
     drawSelectionRepGroup(groups.stick,'stick',o,job);
     drawSelectionRepGroup(groups.sphere,'sphere',o,job);
     drawSelectionRepGroup(groups.cpk,'cpk',o,job);
     return !!(lines.length||points.length||groups.stick.length||groups.sphere.length||groups.cpk.length);
   }
-  function addWideStyleAtoms(lines,points,sel,o,defaultColorFn,widthDefault,dashed){
+  function addWideStyleAtoms(lines,points,sel,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
     const selected=filterAtoms(sel).filter(isAtomVisibleNow);
-    if(selected.length)appendWideAtomLines(lines,points,selected,o||{},defaultColorFn,widthDefault,dashed);
+    if(selected.length)appendWideAtomLines(lines,points,selected,o||{},defaultColorFn,widthDefault,dashed,skipBondKeys);
   }
   function hasWideStyleLayer(){
     if(state.proteinAtoms==='line'||state.ligand==='line'||state.solvent==='line'||state.other==='line')return true;
@@ -932,15 +979,16 @@ function boot(){
     if(!hasWideStyleLayer()){ wideLineLayer.clearCollection('styles'); return; }
     const lines=[],points=[];
     const cs=_catSer||categorySerials();
-    if(state.proteinAtoms==='line'&&cs.protein.length)addWideStyleAtoms(lines,points,{serial:cs.protein},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false);
-    if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
-    if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
-    if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false);
+    const skip=lineSelectionStyleMaskActive?selectedLineBondKeys:null;
+    if(state.proteinAtoms==='line'&&cs.protein.length)addWideStyleAtoms(lines,points,{serial:cs.protein},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false,skip);
+    if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
+    if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
+    if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
     for(const r of state.styleRules){
       if(r.disabled)continue;
       const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
-      if(rep==='line')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.protein,false);
-      else if(rep==='tube')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.tube,false);
+      if(rep==='line')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.protein,false,skip);
+      else if(rep==='tube')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.tube,false,skip);
     }
     wideLineLayer.setCollection('styles',lines,points,{linewidth:lineWidths.protein,opacity:1,pointRadius:lineWidths.fallback});
   }
@@ -967,12 +1015,14 @@ function boot(){
     }
   }
   function applySelectionHighlight(selectedAtomsOverride){
-    clearSelectionHighlight();
-    if(!viewer||!state.selectionSel||state.selectionRepresentation==='off')return;
-    const rep=normText(state.selectionRepresentation||'line').toLowerCase(),opts=state.selectionOptions||{},rawSelected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel),selected=rawSelected.filter(isAtomVisibleNow);
-    if(!selected.length)return;
+    const rep=normText(state.selectionRepresentation||'line').toLowerCase();
+    clearSelectionHighlight({deferLineMask:rep==='line'});
+    if(!viewer||!state.selectionSel||state.selectionRepresentation==='off'){ if(rep==='line')setLineSelectionStyleMask(null); return; }
+    const opts=state.selectionOptions||{},rawSelected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel),selected=rawSelected.filter(isAtomVisibleNow);
+    if(!selected.length){ if(rep==='line')setLineSelectionStyleMask(null); return; }
     const job=selectionHighlightJob;
     if(rep==='line'&&drawAdaptiveLineSelection(selected,opts,job))return;
+    if(rep==='line')setLineSelectionStyleMask(null);
     if(rep==='cpk'&&applySelectionStyleOverlay(selected,rep,opts))return;
     if(selected.length>LARGE_SELECTION_STYLE_ATOM_LIMIT&&applyLargeSelectionStyle(selected,rep,opts))return;
     const shape=viewer.addShape(selectionShapeStyle(opts));
@@ -2088,6 +2138,17 @@ function boot(){
   }
 
   // ---------- Find ----------
+  const findPlaceholders={
+    resi:'289 or 300-310',
+    resn:'ARG',
+    atom:'CA',
+    chain:'A',
+    elem:'C'
+  };
+  function updateFindPlaceholder(){
+    const type=$('findType').value;
+    $('findInput').placeholder=findPlaceholders[type]||'';
+  }
   function runFind(){
     const type=$('findType').value, q=normText($('findInput').value);
     findMatches=[]; findIndex=-1;
@@ -3356,6 +3417,7 @@ function installFrameSyncedMotion(targetViewer){
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
   $('findGo').onclick=runFind;
+  $('findType').onchange=updateFindPlaceholder;
   $('findInput').addEventListener('keydown',function(e){ if(e.key==='Enter'){ runFind(); e.preventDefault(); } });
   $('findClear').onclick=function(){ $('findInput').value=''; findMatches=[]; findIndex=-1; $('findCount').textContent='0 matches'; $('findSel').textContent=''; clearSelection(); };
   $('findPrev').onclick=function(){ stepFind(-1); };
@@ -3393,6 +3455,7 @@ function installFrameSyncedMotion(targetViewer){
   initViewer();
   startFpsOverlay();
   $('selLevel').value=state.selectionMode;
+  updateFindPlaceholder();
   loadVisualConfig().then(function(){
     return loadPreferences();
   }).then(function(){
