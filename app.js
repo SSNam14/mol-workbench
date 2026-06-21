@@ -6,7 +6,7 @@ function boot(){
   const dragSelectBoxEl = $('dragSelectBox');
   const statusEl = $('status');
 
-  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, idSeq = 1, hoverClearTimer = null;
+  let viewer = null, model = null, models = [], atoms = [], atomByIndex = new Map(), atomByEntryIndex = new Map(), atomByEntrySourceSerial = new Map(), atomBySerial = new Map(), currentName = '', currentStructureKey = '', savedView = null, hoverClearTimer = null;
   let atomsByEntry = new Map(), atomsByChain = new Map(), atomsByEntryChain = new Map(), atomsByEntryChainResidue = new Map(), atomsByEntryChainResidueName = new Map();
   const entryModelCache = new Map();
   let nextAtomSerial = 1;
@@ -46,8 +46,6 @@ function boot(){
   const LAST_STRUCTURE_API = 'api/last-structure';
   const PREFERENCES_API = 'api/preferences';
 
-  const tabs = ['Ligand Interaction','Protein Preparation','LigPrep','Receptor Grid Generation','Surface (Binding Site)','Minimize Selected','Quick Align','Measure','Molecular Dynamics','System Builder','Ligand Docking','MM-GBSA','Ligand Alignment','Minimization','Protein Structure Analysis'];
-
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
   const ATOM_REP_VALUES = ['line','stick','sphere','cpk'];
@@ -75,7 +73,6 @@ function boot(){
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
   let visualConfig = clonePlain(DEFAULT_VISUAL_CONFIG);
   let findMatches = [], findIndex = -1;
-  let seqResidues = [], seqResidueByKey = new Map(), activeSeqKeys = new Set();
   let selectionAtoms = [];
   let selectionStyleActive = false;
   let selectionShapes = [];
@@ -122,7 +119,6 @@ function boot(){
     try{ return await work(); }
     finally{ setTimeout(()=>hideBusy(token),80); }
   }
-  function nextId(p){ return p + '-' + (idSeq++); }
   function normText(v){ return String(v==null?'':v).trim(); }
   function normUpper(v){ return normText(v).toUpperCase(); }
   function fnv1aHex(text){
@@ -473,8 +469,6 @@ function boot(){
   function isHydrogenAtom(a){ return atomElem(a)==='H'; }
   function bondedAtoms(a){ return (a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean); }
   function isPolarHydrogen(a){ return isHydrogenAtom(a)&&bondedAtoms(a).some(isPolar); }
-  function isPositive(a){ return atomElem(a)==='N' && /^(NZ|NH1|NH2|NE|NE2|ND1)$/i.test(a.atom||''); }
-  function isNegative(a){ return atomElem(a)==='O' && /^(OD1|OD2|OE1|OE2|OXT|O1|O2|O3|O4)$/i.test(a.atom||''); }
   function point(a){ return {x:a.x,y:a.y,z:a.z}; }
   function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z; return dx*dx+dy*dy+dz*dz; }
   function distance(a,b){ return Math.sqrt(dist2(a,b)); }
@@ -707,7 +701,6 @@ function boot(){
     }catch(e){}
     return info;
   }
-  function countAtoms(sel){ return selectionInfo(sel).atomCount; }
   function residueCount(sel){ return selectionInfo(sel).residueCount; }
   function combineSelectors(a,b){ const seen=new Set(); [a,b].forEach(s=>addSelectorSerials(seen,s,{})); return {serial:Array.from(seen)}; }
   function normalizeSelectorInput(s){
@@ -1104,7 +1097,6 @@ function boot(){
     const info=selectionInfo(state.selectionSel,selectionAtoms);
     updateSelectionStatus(info);
     syncHierarchySelectionHighlight();
-    syncSeqHighlight(info.residueKeys);
     setStatus((add?'Added: ':'Selected: ')+info.atomCount.toLocaleString()+' atoms');
     return state.selectionSel;
   }
@@ -1118,7 +1110,6 @@ function boot(){
     renderSelectionHighlight(true,selectionAtoms);
     updateSelectionStatus({atomCount:0,residueCount:0,residueKeys:new Set()});
     syncHierarchySelectionHighlight();
-    syncSeqHighlight(new Set());
     setStatus('Selection cleared.');
   }
   function focusViewerKeyboardTarget(){
@@ -1265,21 +1256,8 @@ function boot(){
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
   function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
 
-  function gridKey(a,c){ return Math.floor(a.x/c)+','+Math.floor(a.y/c)+','+Math.floor(a.z/c); }
-  function nearbyPairs(la,lb,minD,maxD,limit,pred){
-    const cell=maxD,grid=new Map();
-    for(const b of lb){ const k=gridKey(b,cell); if(!grid.has(k))grid.set(k,[]); grid.get(k).push(b); }
-    const out=[],seen=new Set(),min2=minD*minD,max2=maxD*maxD;
-    for(const a of la){ const ix=Math.floor(a.x/cell),iy=Math.floor(a.y/cell),iz=Math.floor(a.z/cell);
-      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){ const bk=grid.get((ix+dx)+','+(iy+dy)+','+(iz+dz)); if(!bk)continue;
-        for(const b of bk){ if(a===b||a.serial===b.serial)continue; const s1=Number(a.serial)||0,s2=Number(b.serial)||0,pk=s1<s2?s1+':'+s2:s2+':'+s1; if(seen.has(pk))continue; if(pred&&!pred(a,b))continue; const d2=dist2(a,b); if(d2<min2||d2>max2)continue; seen.add(pk); out.push([a,b,Math.sqrt(d2)]); if(out.length>=limit)return out; } } }
-    return out;
-  }
-  const vdwR={H:1.20,C:1.70,N:1.55,O:1.52,S:1.80,P:1.80,F:1.47,CL:1.75,BR:1.85,I:1.98,ZN:1.39,FE:1.56,MG:1.73,CA:2.31,NA:2.27,K:2.75,MN:1.61,CU:1.40,CO:1.50,NI:1.49,SE:1.90};
-  function vdwOf(a){ return vdwR[atomElem(a)]||1.7; }
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
-  function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(ATOM_REP_VALUES);
   let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
   function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; proteinResidueLikeCache=null; }
@@ -1611,55 +1589,15 @@ function boot(){
     drawDashPP(item.centerA,item.centerB,color);
   }
   function indexedInteractionsReady(){ return readyInteractionSlots().length>0; }
-  // Scope: 'all' = any pair of visualized atoms; 'pl' = protein<->ligand only; 'pp' = protein<->protein only.
-  function pairsSym(scope,C,mn,mx,lim){
-    if(scope==='pl')return nearbyPairs(C.filter(isLigand),C.filter(isProtein),mn,mx,lim,null);
-    if(scope==='pp'){ const P=C.filter(isProtein); return nearbyPairs(P,P,mn,mx,lim,diffRes); }
-    return nearbyPairs(C,C,mn,mx,lim,diffRes);
-  }
-  function pairsAsym(scope,D,A,mn,mx,lim){
-    if(scope==='pl')return nearbyPairs(D.filter(isLigand),A.filter(isProtein),mn,mx,lim,null).concat(nearbyPairs(D.filter(isProtein),A.filter(isLigand),mn,mx,lim,null));
-    if(scope==='pp')return nearbyPairs(D.filter(isProtein),A.filter(isProtein),mn,mx,lim,diffRes);
-    return nearbyPairs(D,A,mn,mx,lim,diffRes);
-  }
   function atomLevelAtomsForSource(sourceAtoms){ return sourceAtoms?sourceAtoms.filter(isAtomLevelShown):atomLevelAtoms(); }
-  function detectHBonds(scope,sourceAtoms){ const C=atomLevelAtomsForSource(sourceAtoms).filter(a=>isPolar(a)&&!isWaterAtom(a)); return pairsSym(scope,C,2.4,state.hbondCutoff,1500); }
-  function detectHalogen(scope,sourceAtoms){ const level=atomLevelAtomsForSource(sourceAtoms),hal=a=>['CL','BR','I'].includes(atomElem(a)),acc=a=>['O','N','S'].includes(atomElem(a))&&!isWaterAtom(a); return pairsAsym(scope,level.filter(hal),level.filter(acc),2.6,3.9,400); }
-  function detectSalt(scope,sourceAtoms){ const level=atomLevelAtomsForSource(sourceAtoms); return pairsAsym(scope,level.filter(isPositive),level.filter(isNegative),1.6,state.saltCutoff,800); }
   function aromaticRings(sourceAtoms){ const by=new Map(); for(const a of (sourceAtoms||atoms)){ const r=normUpper(a.resn); if(!aromaticDefs[r])continue; const k=(a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+r; if(!by.has(k))by.set(k,[]); by.get(k).push(a); } const rings=[]; for(const list of by.values()){ const r=normUpper(list[0].resn),ra=list.filter(a=>aromaticDefs[r].includes(a.atom)); if(ra.length<5)continue; const c=ra.reduce((p,a)=>({x:p.x+a.x,y:p.y+a.y,z:p.z+a.z}),{x:0,y:0,z:0}); c.x/=ra.length;c.y/=ra.length;c.z/=ra.length; rings.push({atom:ra[0],center:c}); } return rings; }
   function ringsLvl(sourceAtoms){ return aromaticRings(sourceAtoms).filter(r=>isAtomLevelShown(r.atom)); }
-  function ringPairs(scope,rings){
-    const out=[];
-    if(scope==='pl'){ const L=rings.filter(r=>isLigand(r.atom)),P=rings.filter(r=>isProtein(r.atom)); for(const a of L)for(const b of P)out.push([a,b]); return out; }
-    const set=scope==='pp'?rings.filter(r=>isProtein(r.atom)):rings;
-    for(let i=0;i<set.length;i++)for(let j=i+1;j<set.length;j++){ if(diffRes(set[i].atom,set[j].atom))out.push([set[i],set[j]]); }
-    return out;
-  }
-  function detectPiPi(scope,sourceAtoms){
-    const out=[],seen=new Set();
-    for(const pr of ringPairs(scope,ringsLvl(sourceAtoms))){ const a=pr[0],b=pr[1],k=[a.atom.serial,b.atom.serial].sort((x,y)=>x-y).join(':'); if(seen.has(k))continue; const d=distance(a.center,b.center); if(d>=3.4&&d<=6.0){ seen.add(k); out.push([a,b,d]); } }
-    return out;
-  }
-  function detectPiCation(scope,sourceAtoms){
-    const rings=ringsLvl(sourceAtoms),cats=atomLevelAtomsForSource(sourceAtoms).filter(isPositive),out=[];
-    function add(rs,cs,chk){ for(const r of rs)for(const c of cs){ if(chk&&residueKey(r.atom)===residueKey(c))continue; const d=distance(r.center,point(c)); if(d>=2.8&&d<=6.5)out.push({center:r.center,cat:c,d:d}); } }
-    if(scope==='pl'){ add(rings.filter(r=>isProtein(r.atom)),cats.filter(isLigand),false); add(rings.filter(r=>isLigand(r.atom)),cats.filter(isProtein),false); }
-    else if(scope==='pp')add(rings.filter(r=>isProtein(r.atom)),cats.filter(isProtein),true);
-    else add(rings,cats,true);
-    return out;
-  }
   function detectAromHB(scope,sourceAtoms){
     const rings=ringsLvl(sourceAtoms),don=atomLevelAtomsForSource(sourceAtoms).filter(a=>['N','O'].includes(atomElem(a))&&!isWaterAtom(a)),out=[];
     function add(rs,ds,chk){ for(const r of rs)for(const d of ds){ if(chk&&residueKey(r.atom)===residueKey(d))continue; const dist=distance(r.center,point(d)); if(dist>=2.8&&dist<=4.3)out.push({center:r.center,don:d,d:dist}); } }
     if(scope==='pl'){ add(rings.filter(r=>isProtein(r.atom)),don.filter(isLigand),false); add(rings.filter(r=>isLigand(r.atom)),don.filter(isProtein),false); }
     else if(scope==='pp')add(rings.filter(r=>isProtein(r.atom)),don.filter(isProtein),true);
     else add(rings,don,true);
-    return out;
-  }
-  function detectContacts(scope,sourceAtoms){
-    const heavy=atomLevelAtomsForSource(sourceAtoms).filter(a=>atomElem(a)!=='H'&&!isWaterAtom(a));
-    const pairs=pairsSym(scope,heavy,2.0,4.8,6000),out={good:[],bad:[],ugly:[]};
-    for(const pr of pairs){ const ratio=pr[2]/(vdwOf(pr[0])+vdwOf(pr[1])); if(ratio<0.75)out.ugly.push(pr); else if(ratio<0.89)out.bad.push(pr); else if(ratio<=1.30)out.good.push(pr); }
     return out;
   }
   function clearInteractionShapes(){
@@ -1676,7 +1614,6 @@ function boot(){
     const shape=dashed&&viewer.addLine?viewer.addLine({start,end,color,dashed:true,linewidth:width||lineWidths.interaction}):viewer.addCylinder({start,end,radius:0.05,color,fromCap:1,toCap:1});
     if(shape)interactionShapes.push(shape);
   }
-  function drawLine(a,b,color,radius,dashed){ addInteractionWideLine(point(a),point(b),color,dashed?lineWidths.interaction:Math.max(lineWidths.interaction,Number(radius||0.05)*120),dashed); }
   function drawDash(a,b,c){ addInteractionWideLine(point(a),point(b),c,lineWidths.interaction,true); }
   function drawDashAP(a,p,c){ addInteractionWideLine(point(a),p,c,lineWidths.interaction,true); }
   function drawDashPP(p,q,c){ addInteractionWideLine(p,q,c,lineWidths.interaction,true); }
@@ -2043,15 +1980,6 @@ function boot(){
     return parts.join(' ');
   }
   function residueGroupKey(a){ return [a._entryName||'',a.chain||'',a.resn||'',a.resi==null?'':a.resi].join('\u0001'); }
-  function groupedResidues(list){
-    const by=new Map();
-    list.forEach(a=>{
-      const key=residueGroupKey(a);
-      if(!by.has(key))by.set(key,{entry:a._entryName||'',entryTitle:a._entryTitle||a._entryName||'',chain:a.chain||'',resn:a.resn||'',resi:a.resi,atoms:[]});
-      by.get(key).atoms.push(a);
-    });
-    return Array.from(by.values()).sort(compareHierarchyGroups);
-  }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
   function entryHeaderRow(entry,count,collapsed){
     const row=document.createElement('div');
@@ -2133,48 +2061,6 @@ function boot(){
     syncHierarchySelectionHighlight();
   }
 
-  // ---------- Sequence viewer ----------
-  function buildSequence(){
-    const body=$('seqBody'); if(!body){ seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set(); return; } body.innerHTML=''; seqResidues=[]; seqResidueByKey=new Map(); activeSeqKeys=new Set();
-    const byChain=new Map();
-    atoms.forEach(a=>{ if(!isProtein(a))return; const entry=a._entryName||'',c=a.chain||'?',ck=entry+'\u0001'+c; if(!byChain.has(ck))byChain.set(ck,{entry,chain:c,residues:new Map()}); const m=byChain.get(ck).residues; if(!m.has(a.resi))m.set(a.resi,{resi:a.resi,resn:a.resn,chain:c,entry}); });
-    const chains=Array.from(byChain.keys()).sort();
-    chains.forEach(ck=>{
-      const group=byChain.get(ck),c=group.chain,entry=group.entry;
-      const residues=Array.from(group.residues.values()).sort((x,y)=>Number(x.resi)-Number(y.resi));
-      const rowWrap=document.createElement('div'); rowWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:2px;white-space:nowrap';
-      const tag=document.createElement('span'); tag.textContent=entries.length>1?(entry+':'+c):c; tag.style.cssText='position:sticky;left:0;flex:none;width:'+(entries.length>1?'74px':'16px')+';text-align:center;font-size:11px;font-weight:700;color:'+chainColor(c)+';background:#121212;z-index:1';
-      rowWrap.appendChild(tag);
-      const strip=document.createElement('span'); strip.style.cssText='font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;letter-spacing:1px';
-      residues.forEach(r=>{
-        const code=aa3to1[normUpper(r.resn)]||'X';
-        const sp=document.createElement('span'); sp.setAttribute('data-seq',''); sp.textContent=code;
-        sp.dataset.chain=c; sp.dataset.resi=r.resi;
-        sp.style.cssText='display:inline-block;width:9px;text-align:center;color:#c8c8c8;cursor:pointer;border-radius:2px';
-        sp.onclick=function(e){ const n=Number(r.resi),sel={_entryName:entry,chain:c,resi:Number.isFinite(n)?n:r.resi,resn:r.resn}; setSelection(sel,{additive:e.shiftKey}); focus(sel); };
-        sp.title=(entries.length>1?entry+' ':'')+c+' '+r.resn+' '+r.resi;
-        strip.appendChild(sp);
-        const key=entry+':'+c+':'+r.resi;
-        seqResidues.push({el:sp,chain:c,resi:r.resi,key});
-        if(!seqResidueByKey.has(key))seqResidueByKey.set(key,[]);
-        seqResidueByKey.get(key).push(sp);
-      });
-      rowWrap.appendChild(strip);
-      body.appendChild(rowWrap);
-    });
-  }
-  function paintSeqKey(key,on){
-    const els=seqResidueByKey.get(key); if(!els)return;
-    els.forEach(el=>{ el.style.background=on?'#fdd835':'transparent'; el.style.color=on?'#1a1a1a':'#c8c8c8'; });
-  }
-  function syncSeqHighlight(residueKeys){
-    if(!seqResidueByKey.size)return;
-    const next=residueKeys||selectionInfo(state.selectionSel).residueKeys, dirty=new Set();
-    activeSeqKeys.forEach(k=>dirty.add(k));
-    next.forEach(k=>dirty.add(k));
-    dirty.forEach(k=>{ const on=next.has(k); if(activeSeqKeys.has(k)!==on)paintSeqKey(k,on); });
-    activeSeqKeys=new Set(next);
-  }
   function hasHugeDisplayedAtoms(){ return atoms.length>=HUGE_FIT_ATOM_LIMIT; }
   function cancelPanelRefresh(){
     if(panelRefreshTimer==null)return;
@@ -2184,9 +2070,7 @@ function boot(){
   }
   function runPanelRefresh(){
     buildHierarchy();
-    buildSequence();
     updateStatusBar();
-    syncSeqHighlight();
     showHover(null);
   }
   function schedulePanelRefresh(delay){
@@ -2599,7 +2483,7 @@ function boot(){
     if(opts.preserveView&&opts.view)restoreViewNoRender(opts.view);
     else if(opts.zoom!==false) fitVisible({render:false});
     presentViewer(visibleEntryRecords(),true);
-    buildEntriesList(); buildHierarchy(); buildSequence(); updateStatusBar(); syncSeqHighlight();
+    buildEntriesList(); buildHierarchy(); updateStatusBar();
     showHover(null);
     if(visible.length){
       setStatus(visible.length===1?currentName+' \u00b7 '+atoms.length.toLocaleString()+' atoms':visible.length+' entries displayed');
@@ -2643,7 +2527,7 @@ function boot(){
       clearInteractionShapes();
       updateInteractionAggregate([]);
       clearSelectionHighlight();
-      buildEntriesList(); buildHierarchy(); updateStatusBar(); syncSeqHighlight();
+      buildEntriesList(); buildHierarchy(); updateStatusBar();
       showHover(null);
       presentViewer(null,false);
       updateInteractionSummary(0);
@@ -2855,18 +2739,6 @@ function boot(){
       setClipValue(which,v);
     });
     renderClipUI();
-  }
-
-  // ---------- Navigator thumbnail ----------
-  function drawNavigator(){
-    const cv=$('navCanvas'); if(!cv||!atoms.length)return; const ctx=cv.getContext('2d'); ctx.clearRect(0,0,cv.width,cv.height);
-    let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-    atoms.forEach(a=>{ if(a.x<minx)minx=a.x; if(a.y<miny)miny=a.y; if(a.x>maxx)maxx=a.x; if(a.y>maxy)maxy=a.y; });
-    const w=cv.width,h=cv.height,pad=14,sx=(w-pad*2)/(maxx-minx||1),sy=(h-pad*2)/(maxy-miny||1),s=Math.min(sx,sy);
-    const cx=w/2-((minx+maxx)/2)*s, cy=h/2+((miny+maxy)/2)*s;
-    const step=Math.max(1,Math.floor(atoms.length/1400));
-    for(let i=0;i<atoms.length;i+=step){ const a=atoms[i]; ctx.fillStyle=isProtein(a)?chainColor(a.chain):elementColor(a); ctx.globalAlpha=0.85; ctx.fillRect(a.x*s+cx, -a.y*s+cy, 1.4, 1.4); }
-    ctx.globalAlpha=1;
   }
 
   // ---------- Mouse (ported) ----------
@@ -3126,12 +2998,6 @@ function installFrameSyncedMotion(targetViewer){
     window.addEventListener('resize',function(){ if(viewer)viewer.resize(); });
   }
 
-  // ---------- Build tabs ----------
-  function buildTabs(){
-    const row=$('tabRow'); if(!row)return; row.innerHTML='';
-    tabs.forEach((t,i)=>{ const tab=document.createElement('span'); tab.setAttribute('data-tab',''); tab.textContent=t; tab.style.cssText='flex:none;padding:0 12px;height:29px;line-height:29px;font-size:11.5px;color:'+(i===0?'#cfe6ff':'#6cb0e0')+';border-bottom:2px solid '+(i===0?'#3a7bd5':'transparent')+';cursor:pointer'; tab.onclick=function(){ row.querySelectorAll('[data-tab]').forEach(x=>{ x.style.color='#6cb0e0'; x.style.borderBottomColor='transparent'; }); tab.style.color='#cfe6ff'; tab.style.borderBottomColor='#3a7bd5'; setStatus('Task: '+t); }; row.appendChild(tab); });
-  }
-
   // ---------- Settings ----------
   function toHex(col){ if(/^#[0-9a-f]{6}$/i.test(col))return col; try{ const cx=document.createElement('canvas').getContext('2d'); cx.fillStyle=col; if(/^#[0-9a-f]{6}$/i.test(cx.fillStyle))return cx.fillStyle; }catch(e){} return '#888888'; }
   function setBackground(c){ state.bgColor=c; if(viewer&&viewer.setBackgroundColor){ viewer.setBackgroundColor(c); viewer.render(); } if($('bgCustom'))$('bgCustom').value=toHex(c); document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.style.borderColor=(b.getAttribute('data-bg').toLowerCase()===String(c).toLowerCase())?'#3a7bd5':'#777'; }); }
@@ -3183,7 +3049,7 @@ function installFrameSyncedMotion(targetViewer){
     chainColors[key]=normalizeEditableColor(color);
     const input=document.querySelector('#chainColorList input[data-chain="'+key+'"]');
     updateColorInputTile(input,chainColors[key]);
-    applyStylesFull(true); buildHierarchy(); drawNavigator();
+    applyStylesFull(true); buildHierarchy();
     if(!opts||opts.persist!==false)savePreferences();
     return chainColors[key];
   }
@@ -3194,20 +3060,20 @@ function installFrameSyncedMotion(targetViewer){
     elemColors[key]=normalizeEditableColor(color);
     const input=document.querySelector('#atomColorList input[data-atom="'+key+'"]');
     updateColorInputTile(input,elemColors[key]);
-    applyStylesFull(true); buildHierarchy(); drawNavigator();
+    applyStylesFull(true); buildHierarchy();
     if(!opts||opts.persist!==false)savePreferences();
     return elemColors[key];
   }
   function resetChainColors(opts){
     Object.keys(chainColors).forEach(k=>delete chainColors[k]);
     Object.assign(chainColors,defaultChainColors);
-    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList();
+    applyStylesFull(true); buildHierarchy(); buildChainColorList();
     if(!opts||opts.persist!==false)savePreferencesNow();
   }
   function resetAtomColors(opts){
     Object.keys(elemColors).forEach(k=>delete elemColors[k]);
     Object.assign(elemColors,defaultElementColors);
-    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildAtomColorList();
+    applyStylesFull(true); buildHierarchy(); buildAtomColorList();
     if(!opts||opts.persist!==false)savePreferencesNow();
   }
   function resetColorSchemes(opts){
@@ -3215,7 +3081,7 @@ function installFrameSyncedMotion(targetViewer){
     Object.assign(chainColors,defaultChainColors);
     Object.keys(elemColors).forEach(k=>delete elemColors[k]);
     Object.assign(elemColors,defaultElementColors);
-    applyStylesFull(true); buildHierarchy(); drawNavigator(); buildChainColorList(); buildAtomColorList();
+    applyStylesFull(true); buildHierarchy(); buildChainColorList(); buildAtomColorList();
     if(!opts||opts.persist!==false)savePreferencesNow();
   }
   function buildChainColorList(){
@@ -3243,7 +3109,6 @@ function installFrameSyncedMotion(targetViewer){
   }
   function buildMouseMatrix(){
     const wrap=$('mouseMatrix'); if(!wrap)return; wrap.innerHTML='';
-    updateMousePresetButtons();
     const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:84px repeat(4,1fr);gap:9px 8px;align-items:center';
     grid.appendChild(document.createElement('span'));
     MOUSE_ACTIONS.forEach(a=>{ const h=document.createElement('span'); h.textContent=a[1]; h.style.cssText='font-size:11px;color:#8f8f8f;text-align:center'; grid.appendChild(h); });
@@ -3263,12 +3128,6 @@ function installFrameSyncedMotion(targetViewer){
       });
     });
     wrap.appendChild(grid);
-  }
-  function updateMousePresetButtons(){
-    document.querySelectorAll('[data-mouse-preset]').forEach(btn=>{
-      const on=btn.getAttribute('data-mouse-preset')===state.mousePreset;
-      btn.classList.toggle('is-active',on);
-    });
   }
   function openSettings(){
     buildMouseMatrix();
@@ -3294,7 +3153,6 @@ function installFrameSyncedMotion(targetViewer){
     if(next==='select-left'){ settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel=mousePresets['select-left'].wheel; }
     resetMouseDrag();
     buildMouseMatrix();
-    updateMousePresetButtons();
     if(opts.persist!==false)savePreferencesNow();
     if(opts.status!==false)setStatus('Mouse preset: '+next);
     setupAtomEvents();
@@ -3329,7 +3187,6 @@ function installFrameSyncedMotion(targetViewer){
     state.mousePreset=opts.preset==='select-left'?'select-left':'custom';
     resetMouseDrag();
     buildMouseMatrix();
-    updateMousePresetButtons();
     if(opts.persist!==false)savePreferencesNow();
     if(opts.status!==false)setStatus('Mouse: L '+settings.mouse.buttons.left+' / R '+settings.mouse.buttons.right+' / M '+settings.mouse.buttons.middle+' / W '+settings.mouse.wheel);
     setupAtomEvents();
@@ -3430,7 +3287,7 @@ function installFrameSyncedMotion(targetViewer){
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg')); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value); };
   $('resetColorSchemes').onclick=function(){ resetColorSchemes(); };
-  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); drawNavigator(); savePreferencesNow(); openSettings(); };
+  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000'); applyStylesFull(true); buildHierarchy(); savePreferencesNow(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
