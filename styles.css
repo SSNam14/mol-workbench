@@ -173,8 +173,8 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .rep-group{display:flex;align-items:center;gap:4px;padding-right:9px;border-right:1px solid #2a2a2a}
 .rep-ctl{display:flex;align-items:center;gap:4px;height:24px}
 .rep-label{font-size:11px;color:#a7a7a7;line-height:1;white-space:nowrap}
-.rep-sel{width:68px;height:24px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:12px;font-family:inherit;padding:0 3px;cursor:pointer}
-#repBackbone{width:78px}
+.rep-sel{width:64px;height:24px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:12px;font-family:inherit;padding:0 3px;cursor:pointer}
+#repBackbone{width:70px}
 
 /* Dynamic DOM fragments created by app.js. */
 .hover-empty{padding:0 10px;color:#6b6b6b}
