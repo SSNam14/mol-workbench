@@ -39,7 +39,7 @@ Open:
 http://127.0.0.1:8704/
 ```
 
-The first launch starts with an empty viewer unless a previous server-side session exists. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, or `xyz` file.
+The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, or `xyz` file.
 
 ## Agent Control
 

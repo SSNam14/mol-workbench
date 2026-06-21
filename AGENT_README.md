@@ -543,7 +543,7 @@ If a session, entry, preference, or interaction-cache write fails, the app logs 
 
 Open browser clients poll lightweight `/api/session-meta` revisions and reload the full session only when the revision changes. If a full session reload fails, the client retries the same revision on the next poll rather than marking it handled. This lets agent-side entry additions/deletions appear in already-open browsers without repeatedly downloading structure data.
 
-`/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
+`/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session. On a clean install with no saved session or legacy structure, reading it returns `404 {"error":"not_found"}`.
 
 Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files. Cached interaction serials are stored in entry-local source-serial space so a cached index remains valid even when the browser assigns different global atom serials after loading multiple entries.
 
