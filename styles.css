@@ -170,11 +170,10 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .find-view-controls .u-017{height:22px;padding:0 8px;border-radius:4px;font-size:11px}
 
 /* Compact per-category representation dropdowns (toolbar, replaces Style popover). */
-.rep-group{display:flex;align-items:flex-end;gap:7px;padding-right:9px;border-right:1px solid #2a2a2a}
-.rep-ctl{display:flex;flex-direction:column;align-items:center;gap:2px}
-.rep-ico{display:flex;align-items:center;justify-content:center;width:16px;height:15px}
-.rep-ico svg{width:16px;height:16px;display:block}
-.rep-sel{width:54px;height:18px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:10px;font-family:inherit;padding:0 2px;cursor:pointer}
+.rep-group{display:flex;align-items:center;gap:9px;padding-right:9px;border-right:1px solid #2a2a2a}
+.rep-ctl{display:flex;align-items:center;gap:4px;height:24px}
+.rep-label{font-size:10px;color:#9a9a9a;line-height:1;white-space:nowrap}
+.rep-sel{width:82px;height:22px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:11px;font-family:inherit;padding:0 4px;cursor:pointer}
 
 /* Dynamic DOM fragments created by app.js. */
 .hover-empty{padding:0 10px;color:#6b6b6b}
