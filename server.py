@@ -731,7 +731,7 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             active = session.get("activeEntry")
             entry = next((item for item in session.get("entries", []) if item.get("name") == active), None)
         if not entry:
-            self.send_json(500, {"error": "invalid_state"})
+            self.send_json(404, {"error": "not_found"})
             return
         self.send_json(200, {"entry": entry})
 
