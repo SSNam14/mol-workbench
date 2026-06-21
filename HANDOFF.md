@@ -49,9 +49,9 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Entry titles are user-editable display labels. Double-clicking an Entries title edits `entry.title` only; it must not change `entry.name`, cached model identity, selection scopes, or included-entry state. Agents can call `molAgent.renameEntry(...)` / `molAgent.setEntryTitle(...)`.
 - Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, and MAEGZ. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing.
 - Loading a new structure adds a unique entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
-- Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
-- An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed and `activeEntry` must be `""`; only a missing `includedEntries` field uses legacy fallback to all entries.
-- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
+- Entry rows do not have an active-entry state. The `In` checkbox controls display inclusion, double-clicking the title edits only the display title, and multiple entries must be displayable at the same time.
+- An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed; only a missing `includedEntries` field uses legacy fallback to all entries.
+- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included-entry state through lightweight `/api/session-state`; it writes small state/meta files and must not rewrite full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
 - Persistence failures must be visible through console diagnostics and, for user-visible session/preference operations, status text. Large entry saves must not report success before the actual server write finishes.
 - Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
@@ -143,7 +143,7 @@ Server-side entry update endpoints:
 PUT /api/session-entry              # add one entry JSON object; duplicate ids get a unique suffix unless replace=true
 PUT /api/session-entry-title        # rename one entry title by unique entry id
 DELETE /api/session-entry/<name>    # remove one entry by entry name
-PUT /api/session-state              # update includedEntries and activeEntry only
+PUT /api/session-state              # update includedEntries only
 GET /api/session-meta               # lightweight revision for open-client sync
 POST /api/convert-structure         # raw MAE/MAEGZ bytes to a PDB entry JSON payload
 ```
@@ -151,7 +151,7 @@ POST /api/convert-structure         # raw MAE/MAEGZ bytes to a PDB entry JSON pa
 `PUT /api/session-state` preserves explicit empty display state:
 
 ```json
-{"includedEntries": [], "activeEntry": ""}
+{"includedEntries": []}
 ```
 
 Do not convert that payload to "show the first/all entries"; only absent `includedEntries` is legacy fallback.

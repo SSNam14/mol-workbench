@@ -155,8 +155,7 @@ molAgent.selectAtoms({chain: "H", resi: "30-35"}).slice(0, 5);
 
 Useful `getState()` fields:
 
-- `file`: current active entry id
-- `entries`: loaded entries with unique internal `name`, human-facing `title`, `included`, and `active`
+- `entries`: loaded entries with unique internal `name`, human-facing `title`, and `included`
 - `includedEntries`: unique entry ids currently displayed in the viewer
 - `atoms`: total loaded atom count
 - `proteinBackbone`: protein backbone representation, usually `cartoon`, `tube`, or `off`
@@ -530,7 +529,8 @@ molAgent.removeEntry("Display Title");
 Rename one loaded entry title without changing its internal id:
 
 ```js
-const entry = molAgent.getState().entries.find(e => e.title === "1FJS.cif" && e.active);
+const matches = molAgent.getState().entries.filter(e => e.title === "1FJS.cif");
+const entry = matches[1] || matches[0];
 await molAgent.renameEntry(entry.name, "1FJS reference");
 ```
 
@@ -538,17 +538,17 @@ await molAgent.renameEntry(entry.name, "1FJS reference");
 
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, and `maegz`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
 
-Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
+Loading a structure clears current selection/style rules for the viewer, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
-Loading a new structure adds a new unique entry and includes it in the displayed set. Loading the same filename again later creates another entry rather than replacing the existing one. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry, disposes its cached 3Dmol model, and updates the persisted server session.
+Loading a new structure adds a new unique entry and includes it in the displayed set. Loading the same filename again later creates another entry rather than replacing the existing one. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown, double-clicking the title renames the display label, and the row `X` button deletes that entry, disposes its cached 3Dmol model, and updates the persisted server session.
 
 The viewer starts background interaction indexing for each displayed entry. When multiple entries are displayed, each ready entry's own interactions can be rendered at the same time; cross-entry interactions are intentionally not generated.
 
-The viewer stores the loaded entry list on the server through `/api/session`; included-entry state and active entry are also mirrored in small server-side state/meta files. A browser refresh restores the full session first. If no saved session exists, the viewer stays empty until a user or agent loads a structure.
+The viewer stores the loaded entry list on the server through `/api/session`; included-entry state is also mirrored in small server-side state/meta files. A browser refresh restores the full session first. If no saved session exists, the viewer stays empty until a user or agent loads a structure.
 
-Entries checkbox toggles update only `includedEntries` and `activeEntry` through lightweight `/api/session-state`. This endpoint updates small state/meta files and does not rewrite full structure payloads. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
+Entries checkbox toggles update only `includedEntries` through lightweight `/api/session-state`. This endpoint updates small state/meta files and does not rewrite full structure payloads. The viewer keeps loaded 3Dmol models cached and toggles display with model `show()`/`hide()` rather than clearing and reparsing all entries.
 
-An explicit empty display set is valid. `includedEntries: []` means no entries are displayed, and `activeEntry` should be an empty string. Agents must not treat an empty array as "show all"; only a missing `includedEntries` field is legacy fallback.
+An explicit empty display set is valid. `includedEntries: []` means no entries are displayed. Agents must not treat an empty array as "show all"; only a missing `includedEntries` field is legacy fallback.
 
 If a session, entry, preference, or interaction-cache write fails, the app logs a diagnostic. User-visible session and preference failures also update the status text. Large entry saves complete only after the server write finishes; do not assume `loadUrl(...)` persistence succeeded until the returned promise resolves.
 

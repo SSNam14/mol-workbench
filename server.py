@@ -143,17 +143,10 @@ def normalize_session(value):
         included_entries = [str(name) for name in included if str(name) in names]
     else:
         included_entries = [entry["name"] for entry in entries]
-    active = str(value.get("activeEntry") or value.get("currentName") or "").strip()
-    if included_entries:
-        if active not in included_entries:
-            active = included_entries[0]
-    else:
-        active = ""
     return {
         "schema": SESSION_SCHEMA,
         "entries": entries,
         "includedEntries": included_entries,
-        "activeEntry": active,
     }
 
 
@@ -291,7 +284,7 @@ def legacy_last_structure_session():
     entry = normalize_entry(payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload)
     if not entry:
         return None
-    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]], "activeEntry": entry["name"]})
+    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]]})
 
 
 def normalize_session_state(value, entries, fallback=None):
@@ -304,13 +297,7 @@ def normalize_session_state(value, entries, fallback=None):
         included_entries = [name for name in fallback.get("includedEntries", []) if name in names]
     if not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
-    active = str((value if isinstance(value, dict) else {}).get("activeEntry") or fallback.get("activeEntry") or "").strip()
-    if included_entries:
-        if active not in included_entries:
-            active = included_entries[0]
-    else:
-        active = ""
-    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries, "activeEntry": active}
+    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries}
 
 
 def apply_session_state(session):
@@ -324,7 +311,6 @@ def apply_session_state(session):
         raise
     normalized = normalize_session_state(state, session.get("entries", []), session)
     session["includedEntries"] = normalized["includedEntries"]
-    session["activeEntry"] = normalized["activeEntry"]
     return session
 
 
@@ -375,7 +361,6 @@ def session_meta(session=None):
             for entry in entries
         ],
         "includedEntries": session.get("includedEntries", []) if session else [],
-        "activeEntry": session.get("activeEntry", "") if session else "",
     }
 
 
@@ -411,18 +396,11 @@ def normalize_stored_session_meta(value):
     included_entries = [str(name) for name in included if str(name) in names] if isinstance(included, list) else []
     if entries and not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
-    active = str(value.get("activeEntry") or "").strip()
-    if included_entries:
-        if active not in included_entries:
-            active = included_entries[0]
-    else:
-        active = ""
     return {
         "schema": SESSION_SCHEMA,
         "revision": session_revision(),
         "entries": entries,
         "includedEntries": included_entries,
-        "activeEntry": active,
     }
 
 
@@ -468,10 +446,8 @@ def write_session(session):
     with STATE_LOCK:
         write_json_atomic(SESSION_PATH, session)
         write_session_state(session)
-        active_name = session.get("activeEntry")
-        active = next((entry for entry in session.get("entries", []) if entry.get("name") == active_name), None)
-        if active:
-            write_json_atomic(LAST_STRUCTURE_PATH, {"entry": active})
+        if session.get("entries"):
+            write_json_atomic(LAST_STRUCTURE_PATH, {"entry": session["entries"][0]})
         write_session_meta(session)
 
 
@@ -488,7 +464,7 @@ def upsert_session_entry(entry, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "activeEntry": entry["name"]}
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": []}
         entries = session["entries"]
         stored_entry = dict(entry)
         existing_idx = next((idx for idx, existing in enumerate(entries) if existing.get("name") == stored_entry["name"]), None)
@@ -500,7 +476,7 @@ def upsert_session_entry(entry, replace=False):
         included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
         if stored_entry["name"] not in included:
             included.append(stored_entry["name"])
-        session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": stored_entry["name"]})
+        session = normalize_session({"entries": entries, "includedEntries": included})
         write_session(session)
         return session, stored_entry
 
@@ -519,13 +495,7 @@ def remove_session_entry(name):
             return None
         names = {entry["name"] for entry in entries}
         included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
-        active = session.get("activeEntry")
-        if included:
-            if active not in included:
-                active = included[0]
-        else:
-            active = ""
-        next_session = normalize_session({"entries": entries, "includedEntries": included, "activeEntry": active})
+        next_session = normalize_session({"entries": entries, "includedEntries": included})
         write_session(next_session)
         return next_session
 
@@ -558,7 +528,7 @@ def update_session_state(value):
             return None
         entries = session.get("entries", [])
         state = normalize_session_state(value, entries, session)
-        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"], "activeEntry": state["activeEntry"]})
+        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"]})
         write_session_state(next_session)
         write_session_meta(next_session)
         return next_session
@@ -866,8 +836,14 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         entry = None
         if session:
-            active = session.get("activeEntry")
-            entry = next((item for item in session.get("entries", []) if item.get("name") == active), None)
+            entries = session.get("entries", [])
+            by_name = {item.get("name"): item for item in entries}
+            for name in session.get("includedEntries", []):
+                entry = by_name.get(name)
+                if entry:
+                    break
+            if not entry and entries:
+                entry = entries[0]
         if not entry:
             self.send_json(404, {"error": "not_found"})
             return
