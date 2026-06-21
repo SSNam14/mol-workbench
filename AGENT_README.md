@@ -525,7 +525,7 @@ molAgent.removeEntry("structure-id");
 molAgent.removeEntry("Display Title");
 ```
 
-Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
+Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, and `maegz`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
 
 Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
@@ -685,7 +685,7 @@ PY
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Static serving intentionally blocks dot-directories, `.viewer_state`, git metadata, logs, pid files, server source, and project memory/docs. Do not bypass this with a generic static server for normal use.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

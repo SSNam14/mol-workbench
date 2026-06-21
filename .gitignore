@@ -1,4 +1,5 @@
 server_*.log
+viewer.log
 server_*.pid
 .viewer_state/
 .cpu_prj.code-workspace

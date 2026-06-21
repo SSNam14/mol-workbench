@@ -45,6 +45,7 @@ function boot(){
   const VIEWER_SESSION_STATE_API = 'api/session-state';
   const LAST_STRUCTURE_API = 'api/last-structure';
   const PREFERENCES_API = 'api/preferences';
+  const STRUCTURE_CONVERT_API = 'api/convert-structure';
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
@@ -2259,11 +2260,50 @@ function boot(){
   function stepFind(d){ if(!findMatches.length)return; findIndex=(findIndex+d+findMatches.length)%findMatches.length; gotoFindMatch(); }
 
   // ---------- Load ----------
+  function isMaestroFormat(fmt){
+    fmt=normText(fmt).toLowerCase();
+    return fmt==='mae'||fmt==='maegz'||fmt==='mae.gz';
+  }
+  function urlFileName(url){
+    const raw=normText(url);
+    try{
+      const parsed=new URL(raw,window.location.href);
+      const part=parsed.pathname.split('/').filter(Boolean).pop();
+      return part?decodeURIComponent(part):raw;
+    }catch(err){
+      return raw.split(/[\\/]/).filter(Boolean).pop()||raw;
+    }
+  }
+  async function convertStructureBuffer(buffer,fmt,name,title,pdbId){
+    const params=new URLSearchParams({
+      fmt:fmt||'',
+      name:name||'structure',
+      title:title||name||'structure',
+      pdbId:pdbId||''
+    });
+    const result=await fetchJsonResult(STRUCTURE_CONVERT_API+'?'+params.toString(),{
+      method:'POST',
+      headers:{'Content-Type':'application/octet-stream'},
+      body:buffer
+    });
+    if(!result.ok)throw new Error('Structure conversion failed: '+persistenceErrorText(result));
+    const entry=normalizeStructureEntry(result.data&&result.data.entry);
+    if(!entry)throw new Error('Structure conversion returned no coordinates.');
+    return entry;
+  }
   async function loadUrl(url,fmt,name,title,pdbId){
-    setStatus('Loading: '+(name||url));
+    const entryName=name||urlFileName(url)||url;
+    const explicitFmt=normText(fmt).toLowerCase();
+    let sourceFmt=explicitFmt||inferFormat(entryName);
+    if(!explicitFmt&&sourceFmt==='pdb'&&entryName!==url)sourceFmt=inferFormat(url);
+    setStatus('Loading: '+(entryName||url));
     const res=await fetch(url); if(!res.ok)throw new Error(res.status+' '+res.statusText);
+    if(isMaestroFormat(sourceFmt)){
+      const entry=await convertStructureBuffer(await res.arrayBuffer(),sourceFmt,entryName,title||entryName,pdbId||'');
+      return persistAndLoadEntry(entry);
+    }
     const data=await res.text();
-    const e={name,title:title||name,pdbId:pdbId||'',data,fmt:fmt||'pdb'};
+    const e={name:entryName,title:title||entryName,pdbId:pdbId||'',data,fmt:sourceFmt||'pdb'};
     return persistAndLoadEntry(e);
   }
   async function persistAndLoadEntry(e){
@@ -2866,7 +2906,7 @@ function boot(){
     if(opts.persist!==false)saveViewerSessionEntryDeferred(e,{status:false}).then(ok=>{ if(!ok)setStatus('Loaded but not saved on server: '+e.title); });
     return e;
   }
-  function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
+  function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.maegz')||n.endsWith('.mae.gz'))return 'maegz'; if(n.endsWith('.mae'))return 'mae'; if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   function hasLineMatch(text,pattern){ return pattern.test(String(text||'')); }
   function validateStructureCoordinates(entry){
     const fmt=normText(entry&&entry.fmt||'').toLowerCase();
@@ -2889,8 +2929,10 @@ function boot(){
     suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+60000);
     for(const f of list){
       try{
-        const data=await f.text();
-        const e2={name:f.name,title:f.name,pdbId:'',data,fmt:inferFormat(f.name)};
+        const fmt=inferFormat(f.name);
+        let e2;
+        if(isMaestroFormat(fmt))e2=await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,'');
+        else e2={name:f.name,title:f.name,pdbId:'',data:await f.text(),fmt};
         await persistAndLoadEntry(e2);
         loaded.push(f.name);
       }catch(err){

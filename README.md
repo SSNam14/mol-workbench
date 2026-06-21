@@ -18,6 +18,7 @@ MolWorkbench is a static WebGL viewer with a small Python persistence server. It
 
 - `index.html`, `styles.css`, `app.js`: browser UI and viewer logic.
 - `server.py`: static file server plus persisted session/preference/interaction APIs.
+- `maestro_convert.py`: pure-Python MAE/MAEGZ to PDB converter used by the loader.
 - `interaction-worker.js`: background interaction index builder.
 - `wide-lines.js`: 3Dmol-integrated wide-line renderer.
 - `assets/`: local 3Dmol bundle and UI icons.
@@ -39,7 +40,7 @@ Open:
 http://127.0.0.1:8704/
 ```
 
-The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, or `xyz` file.
+The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, `xyz`, `mae`, or `maegz` file. MAE/MAEGZ loading uses the bundled pure-Python converter and does not require a Schrodinger installation.
 
 ## Agent Control
 
@@ -58,7 +59,7 @@ See `AGENT_README.md` for the full command surface, selector syntax, persistence
 ## Verification
 
 ```bash
-python3 -m unittest tests.test_session_state
+python3 -m unittest tests.test_session_state tests.test_maestro_conversion
 python3 -m py_compile server.py
 node --check app.js
 node --check interaction-worker.js

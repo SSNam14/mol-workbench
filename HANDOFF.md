@@ -13,9 +13,10 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `index.html`: static DOM structure only.
 - `styles.css`: static UI styling.
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
+- `maestro_convert.py`: pure-Python MAE/MAEGZ to PDB converter. Normal file loading must not depend on Schrodinger being installed.
 - `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: shader-backed 3Dmol scene-mesh wide-line renderer. It keeps static segment/cap geometry in the scene and expands screen-pixel width in the vertex shader with depth/zoom scaling, screen-pixel clamps, and depth testing.
-- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
+- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/`: ignored local-only structures. Do not commit molecular structure files to the public repository.
@@ -44,6 +45,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
 - Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
+- Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, and MAEGZ. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
 - An explicit empty display set is valid session state. `includedEntries: []` means no entries are displayed and `activeEntry` must be `""`; only a missing `includedEntries` field uses legacy fallback to all entries.
@@ -138,6 +140,7 @@ PUT /api/session-entry              # upsert one entry JSON object
 DELETE /api/session-entry/<name>    # remove one entry by entry name
 PUT /api/session-state              # update includedEntries and activeEntry only
 GET /api/session-meta               # lightweight revision for open-client sync
+POST /api/convert-structure         # raw MAE/MAEGZ bytes to a PDB entry JSON payload
 ```
 
 `PUT /api/session-state` preserves explicit empty display state:

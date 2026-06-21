@@ -8,7 +8,9 @@ import tempfile
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+from maestro_convert import MaestroConversionError, infer_structure_format, is_maestro_format, maestro_bytes_to_pdb
 
 
 ROOT = Path(__file__).resolve().parent
@@ -63,6 +65,30 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     return {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+
+
+def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
+    source_fmt = infer_structure_format(filename, fmt)
+    if not is_maestro_format(source_fmt) and bytes(payload or b"")[:2] == b"\x1f\x8b":
+        source_fmt = "maegz"
+    if not is_maestro_format(source_fmt):
+        raise MaestroConversionError("unsupported_format")
+    pdb_data, meta = maestro_bytes_to_pdb(payload, filename, source_fmt)
+    name = str(filename or "structure.pdb").strip() or "structure.pdb"
+    if name.lower().endswith((".maegz", ".mae.gz", ".mae")):
+        name = name.rsplit(".", 1)[0] + ".pdb"
+        if name.lower().endswith(".mae.pdb"):
+            name = name[:-8] + ".pdb"
+    entry = normalize_entry({
+        "name": name,
+        "title": title or name,
+        "pdbId": pdb_id,
+        "data": pdb_data,
+        "fmt": "pdb",
+    })
+    if not entry:
+        raise MaestroConversionError("conversion_failed")
+    return entry, {"sourceFormat": source_fmt, "convertedFormat": "pdb", **meta}
 
 
 def normalize_session(value):
@@ -552,6 +578,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/preferences":
             self.handle_put_preferences()
             return
+        if path == "/api/convert-structure":
+            self.handle_convert_structure()
+            return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
             return
@@ -612,6 +641,18 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"error": "invalid_json"})
             return None
+
+    def read_raw_body(self, max_bytes):
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = int(raw_length or "0")
+        except ValueError:
+            self.send_json(400, {"error": "invalid_content_length"})
+            return None
+        if length <= 0 or length > max_bytes:
+            self.send_json(413 if length > max_bytes else 400, {"error": "invalid_body_size"})
+            return None
+        return self.rfile.read(length)
 
     def handle_get_session(self):
         try:
@@ -705,6 +746,24 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": "preferences_write_failed"})
             return
         self.send_json(200, {"ok": True, "preferences": preferences})
+
+    def handle_convert_structure(self):
+        payload = self.read_raw_body(MAX_STRUCTURE_BYTES)
+        if payload is None:
+            return
+        query = parse_qs(urlparse(self.path).query)
+        name = (query.get("name") or ["structure"])[0]
+        title = (query.get("title") or [name])[0]
+        fmt = (query.get("fmt") or [""])[0]
+        pdb_id = (query.get("pdbId") or [""])[0]
+        try:
+            entry, meta = convert_structure_bytes(payload, name, fmt, title, pdb_id)
+        except MaestroConversionError as exc:
+            error = str(exc) or "conversion_failed"
+            status = 400 if error in {"unsupported_format", "invalid_maegz", "no_atoms"} else 500
+            self.send_json(status, {"error": error})
+            return
+        self.send_json(200, {"ok": True, "entry": entry, **meta})
 
     def handle_delete_session_entry(self, name):
         if not name:
