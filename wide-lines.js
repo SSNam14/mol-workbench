@@ -67,10 +67,10 @@ function viewKey(viewer){
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
 const DEFAULT_LINE_WIDTH = 2;
-const MODEL_UNITS_PER_LINE_WIDTH = 0.45;
+const MODEL_UNITS_PER_LINE_WIDTH = 1.125;
 const MODEL_UNITS_PER_POINT_RADIUS = 0.045;
-const MIN_SCREEN_LINE_WIDTH = 0.75;
-const MAX_SCREEN_LINE_WIDTH = 2.0;
+const MIN_SCREEN_LINE_WIDTH = 2.0;
+const MAX_SCREEN_LINE_WIDTH = 4.0;
 const MIN_SCREEN_POINT_RADIUS = 0.10;
 const MAX_SCREEN_POINT_RADIUS = 2.12;
 const LINE_CAP_OVERLAP = 0.55;

@@ -1858,6 +1858,34 @@ function boot(){
     if(by.solvents.length)setStyleForSerials(by.solvents,solventStyleSpec(),false);
     if(by.other.length)setStyleForSerials(by.other,otherStyleSpec(),false);
   }
+  function hasStyleSpec(spec){ return !!(spec&&Object.keys(spec).length); }
+  function setModelStyle(model,selector,spec,add){
+    if(!model||typeof model.setStyle!=='function'||!hasStyleSpec(spec))return;
+    model.setStyle(selector||{},spec,!!add);
+  }
+  function setModelStyleForAtoms(model,list,spec,add){
+    if(!model||typeof model.setStyle!=='function'||!hasStyleSpec(spec))return;
+    const serials=serialsForAtoms(list);
+    if(serials.length)model.setStyle({serial:serials},spec,!!add);
+  }
+  function applyBaseStylesForRecord(record){
+    if(!record||!record.model||!record.atoms)return;
+    const model=record.model, by={ligands:[],solvents:[],other:[]};
+    let hasProtein=false;
+    record.atoms.forEach(a=>{
+      const c=atomCategory(a);
+      if(c==='protein')hasProtein=true;
+      else if(by[c])by[c].push(a);
+    });
+    model.setStyle({},{});
+    if(hasProtein){
+      setModelStyle(model,{hetflag:false},proteinBackboneStyleSpec(),false);
+      setModelStyle(model,{hetflag:false},proteinAtomStyleSpec(),true);
+    }
+    if(by.ligands.length)setModelStyleForAtoms(model,by.ligands,ligandStyleSpec(),false);
+    if(by.solvents.length&&state.solvent!=='off')setModelStyleForAtoms(model,by.solvents,solventStyleSpec(),false);
+    if(by.other.length&&state.other!=='off')setModelStyleForAtoms(model,by.other,otherStyleSpec(),false);
+  }
   function applyRuleOverlays(){
     for(const r of state.styleRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelStyleRule(r); else viewer.addStyle(styleSelection(r.selector,r.options), styleSpec(r.representation,r.options)); }catch(e){} }
     for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(r.options&&r.options.atomLevel)applyAtomLevelHideRule(r); else viewer.setStyle(styleSelection(r.selector,r.options),{}); }catch(e){} }
@@ -2343,8 +2371,11 @@ function boot(){
   }
   function hideCachedEntry(record){
     if(!viewer||!record||!record.atoms)return;
-    const serials=serialsForAtoms(record.atoms);
-    if(serials.length)viewer.setStyle({serial:serials},{});
+    if(record.model&&typeof record.model.setStyle==='function')record.model.setStyle({},{});
+    else{
+      const serials=serialsForAtoms(record.atoms);
+      if(serials.length)viewer.setStyle({serial:serials},{});
+    }
     record.sceneBuilt=false;
     record._molAgentShown=false;
   }
@@ -2518,8 +2549,7 @@ function boot(){
   }
   function restyleEntryRecord(record){
     if(!record||!record.atoms||!record.atoms.length)return;
-    setStyleForSerials(record.atoms,{},false);
-    applyBaseStylesForAtoms(record.atoms);
+    applyBaseStylesForRecord(record);
     record.styleGeneration=styleGeneration;
     record.sceneBuilt=false;
   }
