@@ -12,6 +12,14 @@ def entry(name):
     return {"name": name, "title": name, "pdbId": "", "fmt": "pdb", "data": "ATOM\n"}
 
 
+class RecordingHandler:
+    def __init__(self):
+        self.sent = None
+
+    def send_json(self, status, payload):
+        self.sent = (status, payload)
+
+
 class SessionStateTests(unittest.TestCase):
     def setUp(self):
         self.entries = [entry("one"), entry("two")]
@@ -55,6 +63,16 @@ class SessionStateTests(unittest.TestCase):
         state = server.normalize_stored_session_meta(meta)
         self.assertEqual(state["includedEntries"], [])
         self.assertEqual(state["activeEntry"], "")
+
+    def test_get_last_structure_returns_not_found_without_session(self):
+        original = server.load_session_or_legacy
+        server.load_session_or_legacy = lambda: None
+        try:
+            handler = RecordingHandler()
+            server.ViewerHandler.handle_get_last_structure(handler)
+            self.assertEqual(handler.sent, (404, {"error": "not_found"}))
+        finally:
+            server.load_session_or_legacy = original
 
 
 if __name__ == "__main__":
