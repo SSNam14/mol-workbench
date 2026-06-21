@@ -153,7 +153,7 @@ Useful `getState()` fields:
 
 ## Interaction Index Commands
 
-The viewer builds a nonbonded interaction index in a Web Worker when a structure is loaded. The completed index is stored on the server by structure key and reused when switching back to the same loaded molecule.
+The viewer builds nonbonded interaction indexes in a Web Worker per displayed entry. Completed indexes are stored on the server by structure key and reused when switching back to the same loaded molecule or adding another displayed entry.
 
 Inspect index status:
 
@@ -163,11 +163,13 @@ molAgent.getInteractionIndex();
 
 Expected fields:
 
-- `status`: `empty`, `multi-entry`, `loading-cache`, `ready`, `unavailable`, or `error`
-- `source`: `worker` or `server` when ready
-- `structureKey`: server cache key for the current structure
-- `counts`: precomputed interaction counts by type
-- `elapsedMs`: worker build time when available
+- `status`: aggregate status for displayed entries, such as `empty`, `pending`, `loading`, `ready`, `unavailable`, or `error`
+- `source`: `entry-indexes` for the aggregate view
+- `structureKey`: current displayed-set key
+- `counts`: summed precomputed interaction counts for ready displayed entries
+- `readyEntries`: number of displayed entries with ready interaction indexes
+- `totalEntries`: number of displayed entries
+- `entries`: per-entry interaction index status and counts
 
 Force a rebuild:
 
@@ -177,7 +179,8 @@ molAgent.rebuildInteractionIndex();
 
 Rendering rules:
 
-- Interaction indexing/rendering is enabled only when exactly one entry is displayed. When two or more entries are included, interactions are disabled to avoid accidental cross-entry interactions.
+- Interaction rendering covers every displayed entry whose index is ready. Cross-entry interactions are not computed or drawn.
+- If a newly displayed entry has no ready index yet, indexes that are already ready remain visible while the missing entry builds in the background.
 - All nonbonded interaction guide lines are dashed.
 - A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
 - Protein cartoon alone does not count as atom-level display for interaction endpoints.
@@ -504,11 +507,11 @@ molAgent.removeEntry("Display Title");
 
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, and `cif`. For API calls, pass the format explicitly when known.
 
-Loading a structure clears current selection/style/interactions, rebuilds Entries/Hierarchy, and starts background interaction indexing. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
+Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
 Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain displayed. In the Entries panel, the `In` checkbox controls whether each loaded entry is currently shown. Clicking an entry row makes it the active entry for UI context without excluding the others. The row `X` button deletes that entry and updates the persisted server session.
 
-When exactly one entry is displayed, the viewer starts background interaction indexing for that entry. When multiple entries are displayed, interaction rendering is disabled until the displayed set is reduced to one entry.
+The viewer starts background interaction indexing for each displayed entry. When multiple entries are displayed, each ready entry's own interactions can be rendered at the same time; cross-entry interactions are intentionally not generated.
 
 The viewer stores the loaded entry list, included-entry state, and active entry on the server through `/api/session`. A browser refresh restores that full session first; the bundled sample structure is only used when no saved session exists.
 
@@ -518,7 +521,7 @@ Open browser clients poll lightweight `/api/session-meta` revisions and reload t
 
 `/api/last-structure` remains as a compatibility endpoint for older agents. Writing to it upserts that one structure into the server session instead of replacing the whole session.
 
-Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files.
+Interaction indexes are stored through `/api/interaction-index/<structureKey>`. They are runtime cache files, not source files. Cached interaction serials are stored in entry-local source-serial space so a cached index remains valid even when the browser assigns different global atom serials after loading multiple entries.
 
 ## `molAgent.run` Compatibility Commands
 

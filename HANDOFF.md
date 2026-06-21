@@ -48,8 +48,8 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Entry row `X` buttons delete entries and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
-- Loading/displaying exactly one entry starts nonbonded interaction indexing in a Web Worker. The finished index is cached on the server by structure key so switching back to a previously loaded single entry does not recompute interactions.
-- When multiple entries are displayed, nonbonded interaction indexing/rendering is disabled to avoid accidental cross-entry interactions.
+- Loading/displaying entries starts nonbonded interaction indexing per visible entry in a Web Worker. Finished indexes are cached on the server by structure key and retained in memory by entry, so switching entries or adding another displayed entry does not discard existing interaction display.
+- When multiple entries are displayed, render the ready interaction indexes for each visible entry and never compute cross-entry interactions. Index worker builds are queued to avoid starting several heavy builds at once.
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
 - Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
 - Default mouse preset is `select-left`:
