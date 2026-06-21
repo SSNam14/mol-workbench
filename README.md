@@ -8,7 +8,7 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
-- `wide-lines.js`: shader-backed 3Dmol scene-mesh renderer for app-managed line representations with world-space width, screen-pixel clamps, and depth testing
+- `wide-lines.js`: shader-backed 3Dmol scene-mesh renderer for app-managed line representations with screen-pixel width, depth/zoom scaling, screen-pixel clamps, and depth testing
 - `server.py`: static file server plus persisted viewer-session, preference, and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
@@ -113,6 +113,9 @@ Selector notes:
 - `_entryName` scopes a selector to one loaded entry. This is useful when several entries are displayed at once and chain/residue names overlap.
 - `resi: "30-35"` means an inclusive residue range.
 - Arrays match any listed value.
+
+The visible Find control mirrors these selector fields. Its input placeholder changes with the selected type: residue number examples are `289` or `300-310`, residue name is `ARG`, atom name is `CA`, chain is `A`, and element is `C`.
+
 - Numeric and string residue numbers are both accepted where the loaded model provides numeric residue values.
 - For CIF files without explicit atom group records, standard amino-acid residues with N/CA/C backbone atoms are normalized as protein, so `{hetflag: false}` remains usable for protein selectors.
 
@@ -264,7 +267,7 @@ molAgent.setSelection({chain: "A"});
 
 If the user asks to change application behavior rather than manipulate the currently open viewer, modify source code instead of executing page commands.
 
-Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, `sphere`, or `cpk`, the highlight follows that atom-level representation using the selection color. Agents may still change highlight options programmatically:
+Selection highlight is intentionally not exposed in the visible GUI. The default is a yellow `line` highlight. With protein atom display set to `off`, selected atoms are drawn as app-managed wide lines over the cartoon. If selected atoms are already displayed as `line`, `stick`, `sphere`, or `cpk`, the highlight follows that atom-level representation using the selection color. For atoms already displayed as `line`, matching base-line bonds are masked from the normal line collection and redrawn in the selection collection to avoid depth fighting. Agents may still change highlight options programmatically:
 
 ```js
 molAgent.setSelectionHighlight({
@@ -368,13 +371,13 @@ Common style options:
 - `radius`: stick radius
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
-- `linewidth`: app-managed `line` width scalar. It is converted to a world-space width, then constrained by screen-pixel min/max clamps in the wide-line shader so line thickness changes with zoom/depth without vanishing or becoming excessively thick.
+- `linewidth`: app-managed `line` width scalar. It is interpreted as a requested screen-pixel width and then scaled by camera depth/zoom inside the wide-line shader, with screen-pixel min/max clamps so far lines remain visible and close lines do not become excessively thick.
 - For `cpk`, `radius` controls stick radius and `scale` controls the VDW sphere multiplier. Atom sizes remain element-dependent through the configured VDW radii.
 
 Line rendering note:
 
 - App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to static segment/cap mesh geometry in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
-- Line thickness is world-space by default, so closer lines render thicker and farther lines render thinner under perspective projection. `wide-lines.js` expands width in the vertex shader and applies screen-pixel min/max clamps to prevent invisible far lines and over-thick close-up lines.
+- Line thickness is screen-pixel based with depth/zoom scaling, so closer lines render thicker and farther lines render thinner while still obeying min/max clamps. `wide-lines.js` expands width in the vertex shader and avoids per-frame JavaScript geometry rewrites.
 - Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
 - Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 

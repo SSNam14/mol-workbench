@@ -36,10 +36,11 @@ function pointDistance(a,b){
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
 const DEFAULT_LINE_WIDTH = 2;
-const MODEL_UNITS_PER_LINE_WIDTH = 1.125;
 const MODEL_UNITS_PER_POINT_RADIUS = 0.045;
 const MIN_SCREEN_LINE_WIDTH = 2.0;
-const MAX_SCREEN_LINE_WIDTH = 4.0;
+const MAX_SCREEN_LINE_WIDTH = 8.0;
+const LINE_WIDTH_FAR_PX_PER_WORLD = 12.0;
+const LINE_WIDTH_NEAR_PX_PER_WORLD = 90.0;
 const MIN_SCREEN_POINT_RADIUS = 0.10;
 const MAX_SCREEN_POINT_RADIUS = 2.12;
 const LINE_CAP_OVERLAP = 0.55;
@@ -58,15 +59,22 @@ attribute float radius;
 varying vec3 vColor;
 varying vec4 mvPosition;
 
-const float MIN_LINE_HALF_PX = ${Number(MIN_SCREEN_LINE_WIDTH/2).toFixed(4)};
-const float MAX_LINE_HALF_PX = ${Number(MAX_SCREEN_LINE_WIDTH/2).toFixed(4)};
+const float MIN_LINE_FULL_PX = ${Number(MIN_SCREEN_LINE_WIDTH).toFixed(4)};
+const float MAX_LINE_FULL_PX = ${Number(MAX_SCREEN_LINE_WIDTH).toFixed(4)};
+const float LINE_WIDTH_FAR_PX_PER_WORLD = ${Number(LINE_WIDTH_FAR_PX_PER_WORLD).toFixed(4)};
+const float LINE_WIDTH_NEAR_PX_PER_WORLD = ${Number(LINE_WIDTH_NEAR_PX_PER_WORLD).toFixed(4)};
 const float MIN_POINT_RADIUS_PX = ${Number(MIN_SCREEN_POINT_RADIUS).toFixed(4)};
 const float MAX_POINT_RADIUS_PX = ${Number(MAX_SCREEN_POINT_RADIUS).toFixed(4)};
 const float LINE_CAP_OVERLAP_PX = ${Number(LINE_CAP_OVERLAP).toFixed(4)};
 
 float worldToPixels(float worldSize, float depth) {
-  float safeDepth = max(0.0001, -depth);
+  float safeDepth = max(0.0001, abs(depth));
   return abs(worldSize) * projectionMatrix[1][1] * vHeight / (2.0 * safeDepth);
+}
+
+float pixelsPerWorldUnit(float depth) {
+  float safeDepth = max(0.0001, abs(depth));
+  return projectionMatrix[1][1] * vHeight / (2.0 * safeDepth);
 }
 
 void main() {
@@ -86,13 +94,16 @@ void main() {
   vec4 otherClip = projectionMatrix * otherMv;
   vec2 here = clip.xy / clip.w;
   vec2 there = otherClip.xy / otherClip.w;
-  vec2 along = here - there;
-  float screenLen = length(along);
-  if(screenLen < 0.000001) along = vec2(1.0, 0.0);
-  else along /= screenLen;
-  vec2 side = vec2(-along.y, along.x) * sign(radius);
-  float halfPx = clamp(worldToPixels(radius, mvPosition.z), MIN_LINE_HALF_PX, MAX_LINE_HALF_PX);
-  vec2 offsetPx = side * halfPx + along * (halfPx * LINE_CAP_OVERLAP_PX);
+  vec2 alongPx = (here - there) * vec2(vWidth * 0.5, vHeight * 0.5);
+  float screenLen = length(alongPx);
+  if(screenLen < 0.000001) alongPx = vec2(1.0, 0.0);
+  else alongPx /= screenLen;
+  vec2 sidePx = vec2(-alongPx.y, alongPx.x) * sign(radius);
+  float zoomT = smoothstep(LINE_WIDTH_FAR_PX_PER_WORLD, LINE_WIDTH_NEAR_PX_PER_WORLD, pixelsPerWorldUnit(mvPosition.z));
+  float requestedFullPx = max(1.0, abs(radius) * 2.0);
+  float fullPx = clamp(requestedFullPx * mix(1.0, 4.0, zoomT), MIN_LINE_FULL_PX, MAX_LINE_FULL_PX);
+  float halfPx = fullPx * 0.5;
+  vec2 offsetPx = sidePx * halfPx + alongPx * (halfPx * LINE_CAP_OVERLAP_PX);
   clip.xy += offsetPx * pixelToNdc * clip.w;
   gl_Position = clip;
 }
@@ -472,10 +483,9 @@ class MolWideLineLayer{
     group.normalArray[vi+2]=p.z;
   }
 
-  lineWorldHalf(line,options){
-    const explicit=finiteNumber(line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,NaN);
-    const width=Number.isFinite(explicit)?explicit:finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
-    return Math.max(0.001,width/2);
+  linePixelHalf(line,options){
+    const width=finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH);
+    return Math.max(0.5,width/2);
   }
 
   pointWorldRadius(point,options){
@@ -487,7 +497,7 @@ class MolWideLineLayer{
   fillLineQuad(group,base,item,color){
     this.fillQuadIndices(group,base);
     this.fillColor(group,base,color);
-    const line=item.data, a=line.start, b=line.end, half=this.lineWorldHalf(line,item.options);
+    const line=item.data, a=line.start, b=line.end, half=this.linePixelHalf(line,item.options);
     this.writePoint(group,base,a);
     this.writePoint(group,base+1,a);
     this.writePoint(group,base+2,b);
@@ -498,8 +508,8 @@ class MolWideLineLayer{
     this.writeOther(group,base+3,a);
     group.radiusArray[base]=half;
     group.radiusArray[base+1]=-half;
-    group.radiusArray[base+2]=half;
-    group.radiusArray[base+3]=-half;
+    group.radiusArray[base+2]=-half;
+    group.radiusArray[base+3]=half;
   }
 
   fillPointQuad(group,base,item,color){
