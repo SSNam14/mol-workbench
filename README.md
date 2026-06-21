@@ -114,6 +114,13 @@ Selector notes:
 - `resi: "30-35"` means an inclusive residue range.
 - Arrays match any listed value.
 - Numeric and string residue numbers are both accepted where the loaded model provides numeric residue values.
+- For CIF files without explicit atom group records, standard amino-acid residues with N/CA/C backbone atoms are normalized as protein, so `{hetflag: false}` remains usable for protein selectors.
+
+## Structure Parsing Notes
+
+Some Schrodinger-style CIF exports omit `_atom_site.group_PDB`, which can cause the raw 3Dmol parser to treat every atom as hetero. The viewer normalizes standard amino-acid residues with N/CA/C backbone atoms back to protein after parsing.
+
+If a protein CIF has no HELIX/SHEET or mmCIF secondary-structure annotation, the viewer applies a conservative phi/psi fallback for cartoon helix/sheet/loop display. Structures that already include secondary-structure annotation keep their source-provided assignments.
 
 ## State Inspection
 

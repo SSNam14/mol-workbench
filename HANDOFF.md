@@ -51,6 +51,8 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Loading/displaying entries starts nonbonded interaction indexing per visible entry in a Web Worker. Finished indexes are cached on the server by structure key and retained in memory by entry, so switching entries or adding another displayed entry does not discard existing interaction display.
 - When multiple entries are displayed, render the ready interaction indexes for each visible entry and never compute cross-entry interactions. Index worker builds are queued to avoid starting several heavy builds at once.
 - Structure loading must preserve explicit hydrogens (`keepH:true` for 3Dmol loads), otherwise H-bond indexing becomes meaningless.
+- CIF files that omit `_atom_site.group_PDB` must still classify standard amino-acid residues with N/CA/C backbone atoms as protein. This fallback is required for Schrodinger-style CIF exports where 3Dmol marks every atom as hetero by default.
+- If a protein CIF lacks HELIX/SHEET or mmCIF secondary-structure annotations, assign a conservative phi/psi-based `ss` fallback after parsing so cartoon display is not all-loop. Do not override structures that already provide helix/sheet annotation.
 - Optional sample/predicted-structure shortcuts should load bundled local data without remote dependencies.
 - Default mouse preset is `select-left`:
   - left click selects
