@@ -25,6 +25,7 @@ INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
 MAX_SESSION_BYTES = 500 * 1024 * 1024
 MAX_SESSION_STATE_BYTES = 64 * 1024
+MAX_SESSION_TITLE_BYTES = 16 * 1024
 MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 SESSION_SCHEMA = "viewer-session-v1"
@@ -86,6 +87,11 @@ def unique_entry_name(name, entries):
         if candidate not in names:
             return candidate
         counter += 1
+
+
+def normalize_entry_title(value):
+    title = str(value or "").strip()
+    return title or None
 
 
 def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
@@ -524,6 +530,25 @@ def remove_session_entry(name):
         return next_session
 
 
+def update_session_entry_title(name, title):
+    with STATE_LOCK:
+        session = load_session_or_legacy()
+        if not session:
+            return None
+        target = str(name or "").strip()
+        next_title = normalize_entry_title(title)
+        if not target or not next_title:
+            return None
+        for entry in session.get("entries", []):
+            if entry.get("name") == target:
+                entry["title"] = next_title
+                normalized = normalize_session(session)
+                write_session(normalized)
+                stored = next(item for item in normalized["entries"] if item.get("name") == target)
+                return normalized, stored
+        return None
+
+
 def update_session_state(value):
     with STATE_LOCK:
         if not isinstance(value, dict):
@@ -594,6 +619,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/session-entry":
             self.handle_put_session_entry()
             return
+        if path == "/api/session-entry-title":
+            self.handle_put_session_entry_title()
+            return
         if path == "/api/session-state":
             self.handle_put_session_state()
             return
@@ -618,6 +646,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/session-entry":
             self.handle_put_session_entry()
+            return
+        if path == "/api/session-entry-title":
+            self.handle_put_session_entry_title()
             return
         if path == "/api/session-state":
             self.handle_put_session_state()
@@ -728,6 +759,29 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": "state_write_failed"})
             return
         self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session)})
+
+    def handle_put_session_entry_title(self):
+        payload = self.read_json_body(MAX_SESSION_TITLE_BYTES)
+        if payload is None:
+            return
+        if not isinstance(payload, dict):
+            self.send_json(400, {"error": "invalid_title_update"})
+            return
+        name = str(payload.get("name") or payload.get("entry") or "").strip()
+        title = normalize_entry_title(payload.get("title", payload.get("newTitle", "")))
+        if not name or not title:
+            self.send_json(400, {"error": "invalid_title_update"})
+            return
+        try:
+            result = update_session_entry_title(name, title)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        if not result:
+            self.send_json(404, {"error": "not_found"})
+            return
+        session, entry = result
+        self.send_json(200, {"ok": True, "entry": entry, "entries": len(session["entries"]), "session": session_meta(session)})
 
     def handle_put_session_state(self):
         payload = self.read_json_body(MAX_SESSION_STATE_BYTES)

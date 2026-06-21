@@ -107,6 +107,36 @@ class SessionStateTests(unittest.TestCase):
                 for key, value in originals.items():
                     setattr(server, key, value)
 
+    def test_update_session_entry_title_preserves_entry_id(self):
+        originals = {
+            "STATE_DIR": server.STATE_DIR,
+            "LAST_STRUCTURE_PATH": server.LAST_STRUCTURE_PATH,
+            "SESSION_PATH": server.SESSION_PATH,
+            "SESSION_STATE_PATH": server.SESSION_STATE_PATH,
+            "SESSION_META_PATH": server.SESSION_META_PATH,
+            "PREFERENCES_PATH": server.PREFERENCES_PATH,
+            "INTERACTION_INDEX_DIR": server.INTERACTION_INDEX_DIR,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.STATE_DIR = root
+            server.LAST_STRUCTURE_PATH = root / "last_structure.json"
+            server.SESSION_PATH = root / "session.json"
+            server.SESSION_STATE_PATH = root / "session_state.json"
+            server.SESSION_META_PATH = root / "session_meta.json"
+            server.PREFERENCES_PATH = root / "preferences.json"
+            server.INTERACTION_INDEX_DIR = root / "interaction_indexes"
+            try:
+                _, stored = server.upsert_session_entry(entry("same"))
+                session, renamed = server.update_session_entry_title(stored["name"], "second copy")
+                self.assertEqual(renamed["name"], "same")
+                self.assertEqual(renamed["title"], "second copy")
+                self.assertEqual(session["entries"][0]["name"], "same")
+                self.assertEqual(session["entries"][0]["title"], "second copy")
+            finally:
+                for key, value in originals.items():
+                    setattr(server, key, value)
+
 
 if __name__ == "__main__":
     unittest.main()

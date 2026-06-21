@@ -527,6 +527,15 @@ molAgent.removeEntry("structure-id");
 molAgent.removeEntry("Display Title");
 ```
 
+Rename one loaded entry title without changing its internal id:
+
+```js
+const entry = molAgent.getState().entries.find(e => e.title === "1FJS.cif" && e.active);
+await molAgent.renameEntry(entry.name, "1FJS reference");
+```
+
+`molAgent.setEntryTitle(...)` is an alias. Prefer the unique `entry.name` from `molAgent.getState().entries` when two entries share the same title; title lookup is allowed but selects the first match.
+
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, and `maegz`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
 
 Loading a structure clears current selection/style rules for the active viewer context, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
@@ -669,6 +678,24 @@ PY
 ```
 
 `/api/session-entry` also treats `name` as an entry id. If the id already exists, the server appends a unique suffix and returns the stored `entry` in the response. To intentionally replace an existing id, send `{"entry": entry, "replace": true}` or add `?replace=1`.
+
+Rename an entry title from an external agent:
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+body = json.dumps({"name": "entry-id", "title": "New display title"}).encode()
+req = urllib.request.Request(
+    f"{base_url}/api/session-entry-title",
+    data=body,
+    method="PUT",
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
 
 Remove one entry:
 

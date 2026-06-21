@@ -46,6 +46,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Each load must create a unique internal entry id (`entry.name`) while preserving the original filename or requested display name as `entry.title`. Loading the same filename again later must add another entry, not replace the existing one.
+- Entry titles are user-editable display labels. Double-clicking an Entries title edits `entry.title` only; it must not change `entry.name`, cached model identity, selection scopes, or included-entry state. Agents can call `molAgent.renameEntry(...)` / `molAgent.setEntryTitle(...)`.
 - Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, and MAEGZ. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing.
 - Loading a new structure adds a unique entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
@@ -125,6 +126,8 @@ molAgent.reloadVisualConfig();
 molAgent.getInteractionIndex();
 molAgent.rebuildInteractionIndex();
 molAgent.loadUrl(url, fmt, name, title, pdbId);
+molAgent.renameEntry(nameOrTitleOrEntry, newTitle);
+molAgent.setEntryTitle(nameOrTitleOrEntry, newTitle);
 molAgent.removeEntry(nameOrTitleOrPdbId);
 molAgent.run(commandObject);
 molAgent.viewer();
@@ -138,6 +141,7 @@ Server-side entry update endpoints:
 
 ```text
 PUT /api/session-entry              # add one entry JSON object; duplicate ids get a unique suffix unless replace=true
+PUT /api/session-entry-title        # rename one entry title by unique entry id
 DELETE /api/session-entry/<name>    # remove one entry by entry name
 PUT /api/session-state              # update includedEntries and activeEntry only
 GET /api/session-meta               # lightweight revision for open-client sync

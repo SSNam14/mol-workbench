@@ -41,6 +41,7 @@ function boot(){
   };
   const VIEWER_SESSION_API = 'api/session';
   const VIEWER_SESSION_ENTRY_API = 'api/session-entry';
+  const VIEWER_SESSION_ENTRY_TITLE_API = 'api/session-entry-title';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const VIEWER_SESSION_STATE_API = 'api/session-state';
   const LAST_STRUCTURE_API = 'api/last-structure';
@@ -399,6 +400,17 @@ function boot(){
     suppressSessionPollUntil=Date.now()+1500;
     return fetchJsonResult(VIEWER_SESSION_ENTRY_API+'/'+encodeURIComponent(name),{method:'DELETE'}).then(result=>{
       if(!result.ok)return reportPersistenceFailure('Viewer session entry delete',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
+  }
+  function saveViewerSessionEntryTitle(name,title,opts){
+    opts=opts||{};
+    const cleanName=normText(name), cleanTitle=normText(title);
+    if(!cleanName||!cleanTitle)return Promise.resolve(false);
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetchJsonResult(VIEWER_SESSION_ENTRY_TITLE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cleanName,title:cleanTitle})}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session entry title',result,opts);
       rememberSessionResponse(result.data);
       return true;
     });
@@ -1886,6 +1898,33 @@ function boot(){
   }
 
   // ---------- Hierarchy & Entries ----------
+  function beginEntryTitleEdit(entry,labelEl){
+    if(!entry||!labelEl)return;
+    const input=document.createElement('input');
+    input.type='text';
+    input.value=entry.title||entry.name||'';
+    input.style.cssText='width:100%;min-width:0;height:18px;box-sizing:border-box;background:#101010;color:#fff;border:1px solid #3a7bd5;border-radius:3px;padding:0 4px;font:inherit;outline:none';
+    labelEl.replaceWith(input);
+    let done=false;
+    function finish(save){
+      if(done)return;
+      done=true;
+      const next=normText(input.value);
+      if(save&&next&&next!==entry.title){
+        renameEntry(entry.name,next).catch(err=>{ setStatus('Rename failed: '+(err&&err.message||err)); buildEntriesList(); });
+      }else{
+        buildEntriesList();
+      }
+    }
+    input.onclick=function(ev){ ev.stopPropagation(); };
+    input.ondblclick=function(ev){ ev.stopPropagation(); };
+    input.onkeydown=function(ev){
+      if(ev.key==='Enter'){ ev.preventDefault(); finish(true); }
+      else if(ev.key==='Escape'){ ev.preventDefault(); finish(false); }
+    };
+    input.onblur=function(){ finish(true); };
+    setTimeout(()=>{ input.focus(); input.select(); },0);
+  }
   function buildEntriesList(){
     const el=$('entriesList'); el.innerHTML='';
     entries.forEach((e,i)=>{
@@ -1902,7 +1941,9 @@ function boot(){
       paintChk();
       chk.onclick=function(ev){ ev.stopPropagation(); };
       chk.onchange=function(){ setEntryIncludedWithBusy(e,chk.checked); };
-      const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; ttl.title=e.title;
+      const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:'+(active?'#fff':'#d4d4d4')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'; ttl.title='Double-click to rename: '+e.title;
+      ttl.onclick=function(ev){ ev.stopPropagation(); };
+      ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
       const del=document.createElement('button');
       del.type='button';
       del.textContent='\u00d7';
@@ -2893,6 +2934,39 @@ function boot(){
     const key=normText(value);
     return entries.find(e=>e.name===key||e.title===key||e.pdbId===key)||null;
   }
+  function refreshEntryTitleReferences(entry){
+    const record=entryModelCache.get(entry&&entry.name);
+    if(record){
+      record.entry=entry;
+      (record.atoms||[]).forEach(a=>{ a._entryTitle=entry.title; });
+      record.hierarchy=buildEntryHierarchyCache(entry,record.atoms||[]);
+    }
+    interactionIndexByKey.forEach(rec=>{
+      if(rec&&rec.entryName===entry.name)rec.entryTitle=entry.title;
+    });
+  }
+  async function renameEntry(value,title,opts){
+    opts=opts||{};
+    const entry=entryByIdentifier(value);
+    if(!entry)throw new Error('Entry not found: '+normText(value||''));
+    const nextTitle=normText(title);
+    if(!nextTitle)throw new Error('Entry title cannot be empty.');
+    if(entry.title===nextTitle)return {name:entry.name,title:entry.title,pdbId:entry.pdbId,fmt:entry.fmt};
+    entry.title=nextTitle;
+    refreshEntryTitleReferences(entry);
+    buildEntriesList();
+    buildHierarchy();
+    updateInteractionAggregate();
+    updateStatusBar();
+    if(opts.persist!==false){
+      const saved=await saveViewerSessionEntryTitle(entry.name,nextTitle,{status:false});
+      if(!saved)setStatus('Renamed locally but not saved on server: '+nextTitle);
+      else setStatus('Renamed entry: '+nextTitle);
+    }else{
+      setStatus('Renamed entry: '+nextTitle);
+    }
+    return {name:entry.name,title:entry.title,pdbId:entry.pdbId,fmt:entry.fmt};
+  }
   function removeEntry(value){
     const entry=entryByIdentifier(value);
     if(!entry)throw new Error('Entry not found: '+normText(value||''));
@@ -3544,6 +3618,7 @@ function installFrameSyncedMotion(targetViewer){
     if(type==='focus')return focus(command.selector||command.target||state.selectionSel);
     if(type==='style'){ state.styleRules.push({selector:command.selector||command.target||{},representation:command.representation||command.style||'cartoon',options:command.options||command}); applyStylesFull(true); return state.styleRules[state.styleRules.length-1]; }
     if(type==='hide'){ state.hiddenRules.push({selector:command.selector||command.target||{},representation:'hide',options:command.options||command}); applyStylesFull(true); return state.hiddenRules[state.hiddenRules.length-1]; }
+    if(type==='renameentry'||type==='setentrytitle')return renameEntry(command.name||command.entry||command.target,command.title||command.newTitle||command.value,command.options||command);
     if(type==='removeentry'||type==='deleteentry')return removeEntry(command.name||command.entry||command.target);
     throw new Error('Unsupported run() command type: '+(type||'-'));
   }
@@ -3561,7 +3636,7 @@ function installFrameSyncedMotion(targetViewer){
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, removeEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
+    loadUrl, removeEntry, renameEntry, setEntryTitle:renameEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------

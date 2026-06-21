@@ -40,14 +40,15 @@ Open:
 http://127.0.0.1:8704/
 ```
 
-The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, `xyz`, `mae`, or `maegz` file. MAE/MAEGZ loading uses the bundled pure-Python converter and does not require a Schrodinger installation. Each load gets a unique internal entry id, so loading the same filename again creates another entry while preserving the filename as the display title.
+The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, `xyz`, `mae`, or `maegz` file. MAE/MAEGZ loading uses the bundled pure-Python converter and does not require a Schrodinger installation. Each load gets a unique internal entry id, so loading the same filename again creates another entry while preserving the filename as the display title. Double-click an entry title in the Entries panel to rename that displayed title.
 
 ## Agent Control
 
 Agents should use the structured API exposed in the page:
 
 ```js
-await molAgent.loadUrl("path/to/structure.pdb", "pdb", "entry-name", "Display title", "");
+const entry = await molAgent.loadUrl("path/to/structure.pdb", "pdb", "entry-name", "Display title", "");
+await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
 molAgent.focus();
 molAgent.setProteinAtomStyle("line");
