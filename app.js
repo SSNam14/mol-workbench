@@ -1943,14 +1943,6 @@ function boot(){
       el.appendChild(row);
     });
   }
-  function catRow(label,count,indent){
-    const row=document.createElement('div');
-    row.style.cssText='display:flex;align-items:center;gap:7px;height:21px;padding:0 8px 0 '+(indent||22)+'px;font-size:11.5px';
-    const lab=document.createElement('span'); lab.textContent=label; lab.style.cssText='color:#d4d4d4;font-weight:600';
-    const cnt=document.createElement('span'); cnt.textContent=count?'('+count+')':''; cnt.style.cssText='color:#777;font-size:10px';
-    row.appendChild(lab); row.appendChild(cnt);
-    return row;
-  }
   function chainVisibilityKey(entry,chain){ return (entry||'')+'\u0001'+(chain||'?'); }
   function chainVisibilityValue(entry,chain){
     const key=chainVisibilityKey(entry,chain);
@@ -2104,10 +2096,11 @@ function boot(){
   function syncHierarchySelectionHighlight(){
     const tree=$('hierarchyTree');
     if(!tree)return;
-    const chainKeys=new Set(),groupKeys=new Set(),entryKeys=new Set();
+    const chainKeys=new Set(),groupKeys=new Set(),entryKeys=new Set(),sectionKeys=new Set();
     (selectionAtoms||[]).forEach(a=>{
       if(!a)return;
       entryKeys.add(a._entryName||'');
+      sectionKeys.add(hierarchySectionKey(a._entryName||'',atomCategory(a)));
       chainKeys.add(chainVisibilityKey(a._entryName,a.chain));
       groupKeys.add(groupVisibilityKeyFromAtom(a));
     });
@@ -2119,6 +2112,7 @@ function boot(){
         if(m.type==='chain')on=chainKeys.has(m.key);
         else if(m.type==='group')on=groupKeys.has(m.key);
         else if(m.type==='entry')on=entryKeys.has(m.key);
+        else if(m.type==='section')on=sectionKeys.has(m.key);
       }
       row.classList.toggle('is-selected',on);
     });
@@ -2143,20 +2137,71 @@ function boot(){
     return parts.join(' ');
   }
   function residueGroupKey(a){ return [a._entryName||'',a.chain||'',a.resn||'',a.resi==null?'':a.resi].join('\u0001'); }
+  function hierarchySectionKey(entryName,section){ return (entryName||'')+'\u0001section\u0001'+(section||''); }
+  function hierarchyAtomsFromGroups(groups){
+    const out=[];
+    (groups||[]).forEach(g=>{ (g&&g.atoms||[]).forEach(a=>out.push(a)); });
+    return out;
+  }
+  function hierarchySelectAtoms(list,e){
+    const sel=serialSelectorForAtoms(list||[]);
+    if(sel)hierarchySelect(sel,e);
+    else setStatus('No atoms in hierarchy section.');
+  }
+  function toggleHierarchyCollapse(key,collapsed){
+    if(collapsed)delete state.hierarchyCollapsed[key];
+    else state.hierarchyCollapsed[key]=true;
+    buildHierarchy();
+  }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
   function entryHeaderRow(entry,count,collapsed){
     const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.__hierarchyMatch={type:'entry',key:entry.name};
+    hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:700;border-top:1px solid #242424;background:#2d2d2d;cursor:pointer';
-    row.title=collapsed?'Expand entry':'Collapse entry';
-    const arrow=document.createElement('span'); arrow.className='tree-arrow'; arrow.textContent=collapsed?'\u25b8':'\u25be';
-    const lab=document.createElement('span'); lab.textContent=entryTitleForHierarchy(entry); lab.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    row.title='Select entry';
+    const arrow=document.createElement('span');
+    arrow.className='tree-arrow';
+    arrow.textContent=collapsed?'\u25b8':'\u25be';
+    arrow.title=collapsed?'Expand entry':'Collapse entry';
+    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none';
+    const lab=document.createElement('span'); lab.textContent=entryTitleForHierarchy(entry); lab.title='Select entry: '+entryTitleForHierarchy(entry); lab.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const cnt=document.createElement('span'); cnt.textContent=count?'('+count+')':''; cnt.style.cssText='color:#777;font-size:10px;font-weight:400;flex:none';
     row.appendChild(arrow); row.appendChild(lab); row.appendChild(cnt);
-    row.onclick=function(){
-      if(collapsed)delete state.hierarchyCollapsed[entry.name];
-      else state.hierarchyCollapsed[entry.name]=true;
-      buildHierarchy();
+    arrow.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      toggleHierarchyCollapse(entry.name,collapsed);
     };
+    row.onclick=function(e){ hierarchySelect({_entryName:entry.name},e); };
+    return row;
+  }
+  function hierarchySectionHeaderRow(opts){
+    const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.__hierarchyMatch={type:'section',key:hierarchySectionKey(opts.entryName,opts.section)};
+    hierarchyRows.push(row);
+    row.style.cssText='display:flex;align-items:center;gap:6px;height:21px;padding:0 8px 0 '+(opts.indent||22)+'px;font-size:11.5px;cursor:pointer';
+    row.title='Select '+opts.label;
+    const arrow=document.createElement('span');
+    arrow.className='tree-arrow';
+    arrow.textContent=opts.collapsed?'\u25b8':'\u25be';
+    arrow.title=opts.collapsed?'Expand '+opts.label:'Collapse '+opts.label;
+    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#cfcfcf';
+    const lab=document.createElement('span');
+    lab.textContent=opts.label;
+    lab.style.cssText='color:#d4d4d4;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const cnt=document.createElement('span');
+    cnt.textContent=opts.count?'('+opts.count+')':'';
+    cnt.style.cssText='color:#777;font-size:10px;flex:none';
+    row.appendChild(arrow); row.appendChild(lab); row.appendChild(cnt);
+    arrow.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      toggleHierarchyCollapse(opts.collapseKey,opts.collapsed);
+    };
+    row.onclick=function(e){ hierarchySelectAtoms(opts.atoms,e); };
     return row;
   }
   function buildHierarchy(){
@@ -2173,46 +2218,58 @@ function boot(){
       if(collapsed)return;
 
       if(counts.ligands){
-        tree.appendChild(catRow('Ligands',counts.ligands,22));
-        hierarchy.ligands.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'ligands'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'ligands',label:'Ligands',count:counts.ligands,atoms:hierarchyAtomsFromGroups(hierarchy.ligands),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.ligands.forEach(g=>{
+            const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#FF8A65',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          });
+        }
       }
 
       if(counts.protein){
-        tree.appendChild(catRow('Protein',counts.protein,22));
-        hierarchy.proteinChains.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain};
-          tree.appendChild(hierarchyChildRow({
-            label:'Chain '+g.chain,
-            title:hierarchyPrefix(g,shown.length>1)+'Chain '+g.chain,
-            count:g.atoms.length,
-            color:chainColor(g.chain),
-            indent:34,
-            match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
-            checkbox:true,
-            checked:chainVisibilityValue(g.entry,g.chain),
-            oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
-            onselect:function(e){ hierarchySelect(sel,e); }
-          }));
-        });
+        const key=hierarchySectionKey(entry.name,'protein'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'protein',label:'Protein',count:counts.protein,atoms:hierarchyAtomsFromGroups(hierarchy.proteinChains),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.proteinChains.forEach(g=>{
+            const sel={_entryName:g.entry,chain:g.chain};
+            tree.appendChild(hierarchyChildRow({
+              label:'Chain '+g.chain,
+              title:hierarchyPrefix(g,shown.length>1)+'Chain '+g.chain,
+              count:g.atoms.length,
+              color:chainColor(g.chain),
+              indent:34,
+              match:{type:'chain',key:chainVisibilityKey(g.entry,g.chain)},
+              checkbox:true,
+              checked:chainVisibilityValue(g.entry,g.chain),
+              oncheck:function(){ setChainVisibility(g.entry,g.chain,this.checked); applyVisibilityForAtoms(g.atoms,{_entryName:g.entry,chain:g.chain}); },
+              onselect:function(e){ hierarchySelect(sel,e); }
+            }));
+          });
+        }
       }
 
       if(counts.solvents){
-        tree.appendChild(catRow('Solvents',counts.solvents,22));
-        hierarchy.solvents.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'solvents'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'solvents',label:'Solvents',count:counts.solvents,atoms:hierarchyAtomsFromGroups(hierarchy.solvents),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.solvents.forEach(g=>{
+            const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#4DD0E1',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          });
+        }
       }
 
       if(counts.other){
-        tree.appendChild(catRow('Other',counts.other,22));
-        hierarchy.other.forEach(g=>{
-          const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
-          tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
-        });
+        const key=hierarchySectionKey(entry.name,'other'), collapsedSection=state.hierarchyCollapsed[key]===true;
+        tree.appendChild(hierarchySectionHeaderRow({entryName:entry.name,section:'other',label:'Other',count:counts.other,atoms:hierarchyAtomsFromGroups(hierarchy.other),collapseKey:key,collapsed:collapsedSection,indent:22}));
+        if(!collapsedSection){
+          hierarchy.other.forEach(g=>{
+            const sel={_entryName:g.entry,chain:g.chain,resi:g.resi,resn:g.resn};
+            tree.appendChild(hierarchyChildRow({label:moleculeLabel(g,false),title:moleculeLabel(g,true),count:g.atoms.length,color:'#CE93D8',indent:34,match:{type:'group',key:groupVisibilityKeyFromGroup(g)},checkbox:true,checked:groupVisibilityValue(g),oncheck:function(){ setGroupVisibility(g,this.checked); applyVisibilityForAtoms(g.atoms); },onselect:function(e){ hierarchySelect(sel,e); }}));
+          });
+        }
       }
       if(!entryAtoms.length){
         tree.appendChild(hierarchySubhead('No atoms displayed',22));
