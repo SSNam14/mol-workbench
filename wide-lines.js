@@ -24,12 +24,20 @@ function sub(a,b){
   return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};
 }
 
+function scale(v,s){
+  return {x:v.x*s,y:v.y*s,z:v.z*s};
+}
+
 function cross(a,b){
   return {x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x};
 }
 
+function length(v){
+  return Math.hypot(v.x,v.y,v.z);
+}
+
 function normalize(v){
-  const d=Math.hypot(v.x,v.y,v.z)||1;
+  const d=length(v)||1;
   return {x:v.x/d,y:v.y/d,z:v.z/d};
 }
 
@@ -59,6 +67,12 @@ function viewKey(viewer){
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
 const DEFAULT_LINE_WIDTH = 2;
+const MODEL_UNITS_PER_LINE_WIDTH = 0.045;
+const MIN_SCREEN_LINE_WIDTH = 0.10;
+const MAX_SCREEN_LINE_WIDTH = 2.0;
+const MIN_SCREEN_POINT_RADIUS = 0.10;
+const MAX_SCREEN_POINT_RADIUS = 2.12;
+const LINE_CAP_OVERLAP = 0.55;
 
 class MolWideLineLayer{
   constructor(host,getViewer){
@@ -161,12 +175,18 @@ class MolWideLineLayer{
         width:Math.max(1,Number(line.width||line.linewidth||(options&&options.linewidth)||DEFAULT_LINE_WIDTH)),
         opacity:line.opacity==null?(options&&options.opacity):line.opacity,dashed:!!line.dashed,
         dashLength:line.dashLength||options&&options.dashLength,
-        gapLength:line.gapLength||options&&options.gapLength
+        gapLength:line.gapLength||options&&options.gapLength,
+        modelWidth:line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,
+        minPixelWidth:line.minPixelWidth||options&&options.minPixelWidth,
+        maxPixelWidth:line.maxPixelWidth||options&&options.maxPixelWidth
       })),
       points:(points||[]).filter(finitePoint).map(point=>({
         x:Number(point.x)||0,y:Number(point.y)||0,z:Number(point.z)||0,color:point.color||options&&options.color,
         radius:Math.max(1,Number(point.radius||(options&&options.pointRadius)||(options&&options.linewidth)||DEFAULT_LINE_WIDTH)),
-        opacity:point.opacity==null?(options&&options.opacity):point.opacity
+        opacity:point.opacity==null?(options&&options.opacity):point.opacity,
+        modelRadius:point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,
+        minPixelRadius:point.minPixelRadius||options&&options.minPixelRadius,
+        maxPixelRadius:point.maxPixelRadius||options&&options.maxPixelRadius
       })),
       options:Object.assign({color:'#fdd835',linewidth:DEFAULT_LINE_WIDTH,opacity:1,pointRadius:DEFAULT_LINE_WIDTH},options||{})
     };
@@ -190,7 +210,10 @@ class MolWideLineLayer{
       start:clonePoint(line.start),end:clonePoint(line.end),color:line.color,
       width:Math.max(1,Number(line.width||line.linewidth||DEFAULT_LINE_WIDTH)),opacity:line.opacity,dashed:!!line.dashed,
       dashLength:line.dashLength,
-      gapLength:line.gapLength
+      gapLength:line.gapLength,
+      modelWidth:line.modelWidth||line.worldWidth,
+      minPixelWidth:line.minPixelWidth,
+      maxPixelWidth:line.maxPixelWidth
     });
     this.collections.set(key,group);
     this.meshDirty=true;
@@ -355,17 +378,59 @@ class MolWideLineLayer{
     group.normalArray[vi+2]=n.z;
   }
 
+  modelUnitsPerPixel(viewer){
+    if(!viewer||typeof viewer.screenOffsetToModel!=='function')return 1;
+    const off=viewer.screenOffsetToModel(1,0), d=off&&length(off);
+    return Number.isFinite(d)&&d>1e-9?d:1;
+  }
+
+  clampModelSize(viewer,size,minPx,maxPx){
+    let out=Math.max(0.001,Number(size)||0);
+    const modelPerPixel=this.modelUnitsPerPixel(viewer);
+    if(Number.isFinite(minPx)&&minPx>0)out=Math.max(out,modelPerPixel*minPx);
+    if(Number.isFinite(maxPx)&&maxPx>0)out=Math.min(out,modelPerPixel*maxPx);
+    return out;
+  }
+
+  screenDirection(viewer,x,y,fallback){
+    if(viewer&&typeof viewer.screenOffsetToModel==='function'){
+      const off=viewer.screenOffsetToModel(x,y);
+      if(off&&length(off)>1e-9)return normalize(off);
+    }
+    return normalize(fallback||{x:1,y:0,z:0});
+  }
+
+  lineHalfWidthModel(viewer,line,options){
+    const explicit=finiteNumber(line.modelWidth||line.worldWidth||options&&options.modelWidth||options&&options.worldWidth,NaN);
+    const width=Number.isFinite(explicit)?explicit:finiteNumber(line.width||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    const minPx=finiteNumber(line.minPixelWidth||options&&options.minPixelWidth,MIN_SCREEN_LINE_WIDTH);
+    const maxPx=finiteNumber(line.maxPixelWidth||options&&options.maxPixelWidth,MAX_SCREEN_LINE_WIDTH);
+    return this.clampModelSize(viewer,width/2,minPx/2,maxPx/2);
+  }
+
+  pointRadiusModel(viewer,point,options){
+    const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
+    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    const minPx=finiteNumber(point.minPixelRadius||options&&options.minPixelRadius,MIN_SCREEN_POINT_RADIUS);
+    const maxPx=finiteNumber(point.maxPixelRadius||options&&options.maxPixelRadius,MAX_SCREEN_POINT_RADIUS);
+    return this.clampModelSize(viewer,radius,minPx,maxPx);
+  }
+
   writeLineQuad(viewer,entry,projected){
     const line=entry.item.data, a=line.start, b=line.end, pa=projected[entry.coordOffset], pb=projected[entry.coordOffset+1];
     if(!pa||!pb||!Number.isFinite(pa.x)||!Number.isFinite(pb.x))return;
     let dx=pb.x-pa.x, dy=pb.y-pa.y, len=Math.hypot(dx,dy);
     if(len<1e-4){ dx=1; dy=0; len=1; }
-    const half=Math.max(0.5,Number(line.width||entry.item.options.linewidth||DEFAULT_LINE_WIDTH)/2);
-    const off=viewer.screenOffsetToModel(-dy/len*half,dx/len*half);
-    const v0={x:a.x+off.x,y:a.y+off.y,z:a.z+off.z};
-    const v1={x:a.x-off.x,y:a.y-off.y,z:a.z-off.z};
-    const v2={x:b.x+off.x,y:b.y+off.y,z:b.z+off.z};
-    const v3={x:b.x-off.x,y:b.y-off.y,z:b.z-off.z};
+    const dir=this.screenDirection(viewer,-dy/len,dx/len,{x:0,y:1,z:0});
+    const half=this.lineHalfWidthModel(viewer,line,entry.item.options);
+    const off=scale(dir,half), bond=sub(b,a), bondLen=length(bond), bondDir=normalize(bond);
+    const cap=Math.min(half*LINE_CAP_OVERLAP,bondLen*0.08);
+    const a0={x:a.x-bondDir.x*cap,y:a.y-bondDir.y*cap,z:a.z-bondDir.z*cap};
+    const b0={x:b.x+bondDir.x*cap,y:b.y+bondDir.y*cap,z:b.z+bondDir.z*cap};
+    const v0={x:a0.x+off.x,y:a0.y+off.y,z:a0.z+off.z};
+    const v1={x:a0.x-off.x,y:a0.y-off.y,z:a0.z-off.z};
+    const v2={x:b0.x+off.x,y:b0.y+off.y,z:b0.z+off.z};
+    const v3={x:b0.x-off.x,y:b0.y-off.y,z:b0.z-off.z};
     const n=normalize(cross(sub(b,a),off));
     this.writeVertex(entry.group,entry.base,v0,n);
     this.writeVertex(entry.group,entry.base+1,v1,n);
@@ -374,8 +439,8 @@ class MolWideLineLayer{
   }
 
   writePointQuad(viewer,entry){
-    const p=entry.item.data, radius=Math.max(1,Number(p.radius||entry.item.options.pointRadius||entry.item.options.linewidth||DEFAULT_LINE_WIDTH));
-    const ox=viewer.screenOffsetToModel(radius,0), oy=viewer.screenOffsetToModel(0,radius);
+    const p=entry.item.data, radius=this.pointRadiusModel(viewer,p,entry.item.options);
+    const ox=scale(this.screenDirection(viewer,1,0,{x:1,y:0,z:0}),radius), oy=scale(this.screenDirection(viewer,0,1,{x:0,y:1,z:0}),radius);
     const n=normalize(cross(ox,oy));
     this.writeVertex(entry.group,entry.base,{x:p.x-ox.x-oy.x,y:p.y-ox.y-oy.y,z:p.z-ox.z-oy.z},n);
     this.writeVertex(entry.group,entry.base+1,{x:p.x+ox.x-oy.x,y:p.y+ox.y-oy.y,z:p.z+ox.z-oy.z},n);
