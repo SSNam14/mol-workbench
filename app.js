@@ -1809,10 +1809,7 @@ function boot(){
   }
   function updateSelectionStatus(info){
     info=info||selectionInfo(state.selectionSel);
-    const hasSelection=!!state.selectionSel;
     $('stSel').textContent=info.atomCount.toLocaleString()+' atoms, '+info.residueCount.toLocaleString()+' residues';
-    const label=$('curSelLabel');
-    if(label)label.textContent=hasSelection?(info.atomCount.toLocaleString()+' atoms selected'):'Current Selection';
   }
 
   // ---------- Hierarchy & Entries ----------
