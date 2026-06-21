@@ -8,7 +8,7 @@ Runtime layout:
 - `styles.css`: static UI styling
 - `app.js`: viewer state, 3Dmol integration, mouse controls, settings, automation API
 - `interaction-worker.js`: background nonbonded interaction index builder
-- `wide-lines.js`: 3Dmol scene-mesh renderer for app-managed line representations with world-space width, screen-pixel clamps, and depth testing
+- `wide-lines.js`: shader-backed 3Dmol scene-mesh renderer for app-managed line representations with world-space width, screen-pixel clamps, and depth testing
 - `server.py`: static file server plus persisted viewer-session, preferences, and interaction-index APIs
 - `config/visualization.json`: tracked visual defaults, including CPK radii and scales
 - `assets/3Dmol-min.js`: local 3Dmol dependency
@@ -121,6 +121,12 @@ Selector notes:
 Some Schrodinger-style CIF exports omit `_atom_site.group_PDB`, which can cause the raw 3Dmol parser to treat every atom as hetero. The viewer normalizes standard amino-acid residues with N/CA/C backbone atoms back to protein after parsing.
 
 If a protein CIF has no HELIX/SHEET or mmCIF secondary-structure annotation, the viewer applies a conservative phi/psi fallback for cartoon helix/sheet/loop display. Structures that already include secondary-structure annotation keep their source-provided assignments.
+
+## Large Structure Performance Notes
+
+For very large entries, first display can still take seconds because 3Dmol parsing, atom-map construction, hierarchy building, and initial scene generation run in the browser. After an entry is cached, display inclusion should be much faster.
+
+When changing full-entry visibility or restyling large entries, avoid generating huge selectors such as `{serial: [many thousands of serials]}`. Prefer entry/model-scoped operations, cached model `show()`/`hide()`, model-local selectors, or direct model resets. Large serial-array selectors can force 3Dmol to scan the model once for each serial and can make the browser appear frozen.
 
 ## State Inspection
 
@@ -362,13 +368,13 @@ Common style options:
 - `radius`: stick radius
 - `scale`: sphere scale
 - `thickness`: tube trace thickness
-- `linewidth`: app-managed `line` width scalar. It is converted to a world-space mesh width, then constrained by screen-pixel min/max clamps so line thickness changes with zoom/depth without vanishing or becoming excessively thick.
+- `linewidth`: app-managed `line` width scalar. It is converted to a world-space width, then constrained by screen-pixel min/max clamps in the wide-line shader so line thickness changes with zoom/depth without vanishing or becoming excessively thick.
 - For `cpk`, `radius` controls stick radius and `scale` controls the VDW sphere multiplier. Atom sizes remain element-dependent through the configured VDW radii.
 
 Line rendering note:
 
-- App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to camera-facing mesh quads in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
-- Line thickness is world-space by default, so closer lines render thicker and farther lines render thinner under perspective projection. `wide-lines.js` also applies screen-pixel min/max clamps to prevent invisible far lines and over-thick close-up lines.
+- App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to static segment/cap mesh geometry in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
+- Line thickness is world-space by default, so closer lines render thicker and farther lines render thinner under perspective projection. `wide-lines.js` expands width in the vertex shader and applies screen-pixel min/max clamps to prevent invisible far lines and over-thick close-up lines.
 - Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
 - Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 

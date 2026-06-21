@@ -14,7 +14,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `styles.css`: static UI styling.
 - `app.js`: viewer state, 3Dmol integration, selection, settings, mouse actions, API.
 - `interaction-worker.js`: background nonbonded interaction index builder.
-- `wide-lines.js`: camera-facing mesh-quad line renderer with world-space width, screen-pixel clamps, and depth testing.
+- `wide-lines.js`: shader-backed 3Dmol scene-mesh wide-line renderer. It keeps static segment/cap geometry in the scene and expands width in the vertex shader with world-space width, screen-pixel clamps, and depth testing.
 - `server.py`: static file server plus `/api/session`, lightweight `/api/session-state`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
@@ -44,7 +44,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Loading a new structure adds or replaces an entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows mark the active UI context; the `In` checkbox controls display inclusion. Multiple entries must be displayable at the same time.
-- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state` instead of rewriting full structure payloads.
+- Entry inclusion toggles should use cached 3Dmol models and `show()`/`hide()` rather than clearing and reparsing all displayed entries. Persist included/active entry state through lightweight `/api/session-state` instead of rewriting full structure payloads. Large-entry restyling must avoid full-entry `serial: [...]` selectors; prefer model-local selectors and direct model resets such as `model.setStyle({}, {})`.
 - Entry row `X` buttons delete entries and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list.
@@ -76,7 +76,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.
 - Selection changes must stay incremental. Default line selection uses the `wide-lines.js` selection collection for atom-level `none`/`line` groups and temporary 3Dmol style overlays for visible stick/sphere/cpk groups. Explicit non-line highlight modes may still use removable shapes for small selections and a temporary style overlay for large selections. Do not trigger full protein/ligand restyling on every selection event.
 - Large range selections must avoid O(atom count * selector size) matching. Large `serial: [...]` selectors use cached Set lookup and reuse the selected atom list for highlight/status updates.
-- `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to camera-facing mesh quads inside the 3Dmol scene, so they participate in depth testing. Width is world-space by default and therefore scales with zoom/depth; screen-pixel min/max clamps only prevent vanishingly thin or excessively thick close-up lines. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
+- `line` rendering is handled by `wide-lines.js`, not native WebGL line width. Protein atom lines, ligand lines, style-rule lines/tube side lines, selection line highlights, and interaction lines are converted to static segment/cap mesh geometry inside the 3Dmol scene, so they participate in depth testing. The vertex shader expands the geometry in screen space from world-space width, avoiding per-frame JavaScript projection/vertex rewrites. Width scales with zoom/depth; current screen-pixel clamps keep molecular lines around 2-4 px. Dashed wide lines are for interaction guide rendering only, not molecular representation styling.
 - All nonbonded interaction guide lines are dashed.
 - Nonbonded pair interactions are drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`). Cartoon-only protein atoms do not count as visible endpoints for interaction rendering.
 - Hydrogen-bond guide lines must connect `H -> acceptor`; the donor heavy atom is stored for classification/scope but is not the displayed line endpoint.
