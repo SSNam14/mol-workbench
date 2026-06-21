@@ -452,6 +452,8 @@ Default `select-left` behavior:
 - middle drag: pan
 - wheel: zoom
 
+Hierarchy panel selection uses list-style modifiers: normal click replaces selection, Ctrl/Cmd-click toggles one row into or out of the current selection, and Shift-click selects the contiguous visible row range from the first selected anchor row to the clicked row. The left disclosure triangle on hierarchy headers is the only collapse/expand target.
+
 Mouse action changes made through the Preference panel or `molAgent.setMouseActions(...)` are saved to the server through `/api/preferences`. Global representation choices changed through the top toolbar are saved through the same preferences API.
 
 ## Preference Commands
