@@ -2814,7 +2814,7 @@ function boot(){
     nh.style.left=np+'%'; fh.style.left=fp+'%';
     if(rg){ rg.style.left=np+'%'; rg.style.width=Math.max(0,fp-np)+'%'; }
     if(val)val.textContent=Math.round(clip.near)+' / '+Math.round(clip.far);
-    if(cap)cap.textContent=active?'Clip active':'Clip off';
+    if(cap)cap.textContent='Clip';
     if(ctrl)ctrl.classList.toggle('is-active',active);
   }
   function applyClip(){
