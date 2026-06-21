@@ -385,6 +385,7 @@ Line rendering note:
 
 - App-managed `line` paths do not rely on browser `gl.lineWidth`. They are converted to static segment/cap mesh geometry in the 3Dmol scene, so they are depth-tested against the molecule and avoid the platform line-width limit.
 - Line thickness is screen-pixel based with depth/zoom scaling, so closer lines render thicker and farther lines render thinner while still obeying min/max clamps. `wide-lines.js` expands width in the vertex shader and avoids per-frame JavaScript geometry rewrites.
+- `wide-lines.js` maintains separate scene meshes for style, selection, interaction, and primitive/shape line collections. Routine selection updates should update only the selection collection and should not force molecular line collections to be rebuilt.
 - Covered paths include protein atom `line`, ligand `line`, `molAgent.style(..., "line", ...)`, tube side lines, selection highlight `representation: "line"`, and interaction guide lines.
 - Dashed wide lines are reserved for interaction guide rendering, not molecular representation styling.
 

@@ -11,6 +11,8 @@ function boot(){
   const entryModelCache = new Map();
   let nextAtomSerial = 1;
   let styleGeneration = 1;
+  let visibilityGeneration = 1;
+  let wideLineStyleGeneration = 1;
   const entries = [];
   const entryChecked = Object.create(null);
   let displayedCount = 0;
@@ -952,16 +954,17 @@ function boot(){
     return chainAwareAtomColor(a);
   }
   function appendWideBond(lines,a,b,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
-    if(skipBondKeys&&skipBondKeys.has(bondLineKey(a,b)))return;
+    const key=bondLineKey(a,b);
+    if(skipBondKeys&&skipBondKeys.has(key))return;
     const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     const ca=lineColorForAtom(a,o,defaultColorFn),cb=lineColorForAtom(b,o,defaultColorFn);
     if(ca===cb){
-      lines.push({start:point(a),end:point(b),color:ca,width,opacity,dashed:!!dashed});
+      lines.push({start:point(a),end:point(b),color:ca,width,opacity,dashed:!!dashed,key});
       return;
     }
     const mid=midpoint(a,b);
-    lines.push({start:point(a),end:mid,color:ca,width,opacity,dashed:!!dashed});
-    lines.push({start:mid,end:point(b),color:cb,width,opacity,dashed:!!dashed});
+    lines.push({start:point(a),end:mid,color:ca,width,opacity,dashed:!!dashed,key});
+    lines.push({start:mid,end:point(b),color:cb,width,opacity,dashed:!!dashed,key});
   }
   function appendWideAtomLines(lines,points,selected,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
     const data=selectionBondData(selected);
@@ -972,7 +975,53 @@ function boot(){
       p.color=lineColorForAtom(a,o,defaultColorFn);
       p.opacity=opacity;
       p.radius=Math.max(2,width*0.6);
+      p.key=atomLineKey(a);
       points.push(p);
+    });
+  }
+  function appendWideStyleAtomsFromList(lines,points,list,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
+    const selected=(list||[]).filter(isAtomVisibleNow);
+    if(selected.length)appendWideAtomLines(lines,points,selected,o||{},defaultColorFn,widthDefault,dashed,skipBondKeys);
+  }
+  function recordAtomsForSelector(list,sel,opts){
+    const r=resolveSelector(sel);
+    return (list||[]).filter(a=>{
+      if(opts&&opts.sidechainOnly&&(!isProtein(a)||backboneAtoms.has(a.atom)))return false;
+      return matchesResolvedSelector(a,r);
+    });
+  }
+  function collectWideLineStylesForAtoms(sourceAtoms,skipBondKeys){
+    const lines=[],points=[],by={protein:[],ligands:[],solvents:[],other:[]};
+    (sourceAtoms||[]).forEach(a=>{ const c=atomCategory(a); if(by[c])by[c].push(a); });
+    if(state.proteinAtoms==='line'&&by.protein.length)appendWideStyleAtomsFromList(lines,points,by.protein,{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false,skipBondKeys);
+    if(state.ligand==='line'&&by.ligands.length)appendWideStyleAtomsFromList(lines,points,by.ligands,{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skipBondKeys);
+    if(state.solvent==='line'&&by.solvents.length)appendWideStyleAtomsFromList(lines,points,by.solvents,{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skipBondKeys);
+    if(state.other==='line'&&by.other.length)appendWideStyleAtomsFromList(lines,points,by.other,{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skipBondKeys);
+    for(const r of state.styleRules){
+      if(r.disabled)continue;
+      const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
+      if(rep==='line')appendWideStyleAtomsFromList(lines,points,recordAtomsForSelector(sourceAtoms,r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.protein,false,skipBondKeys);
+      else if(rep==='tube')appendWideStyleAtomsFromList(lines,points,recordAtomsForSelector(sourceAtoms,r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.tube,false,skipBondKeys);
+    }
+    return {lines,points};
+  }
+  function wideLineStyleCacheKey(record){
+    return [record&&record.cacheKey||'',wideLineStyleGeneration,visibilityGeneration].join('|');
+  }
+  function wideLineStyleCollectionForRecord(record){
+    if(!record||!record.atoms)return {lines:[],points:[]};
+    const key=wideLineStyleCacheKey(record);
+    if(record.wideLineStyleCache&&record.wideLineStyleCache.key===key)return record.wideLineStyleCache;
+    const next=collectWideLineStylesForAtoms(record.atoms,null);
+    record.wideLineStyleCache={key,lines:next.lines,points:next.points};
+    return record.wideLineStyleCache;
+  }
+  function invalidateWideLineStyleCacheForAtoms(list){
+    const names=new Set();
+    (list||[]).forEach(a=>{ if(a&&a._entryName)names.add(a._entryName); });
+    names.forEach(name=>{
+      const record=entryModelCache.get(name);
+      if(record)record.wideLineStyleCache=null;
     });
   }
   function appendSelectedLineOverlay(lines,points,selected,o,widthDefault,keysOut){
@@ -997,10 +1046,12 @@ function boot(){
     });
     selected.forEach(a=>{
       if(a.serial!=null&&covered.has(a.serial))return;
+      if(keysOut)keysOut.add(atomLineKey(a));
       const p=point(a);
       p.color=color;
       p.opacity=opacity;
       p.radius=Math.max(2,width*0.65);
+      p.key=atomLineKey(a);
       points.push(p);
     });
   }
@@ -1081,10 +1132,6 @@ function boot(){
     drawSelectionRepGroup(groups.cpk,'cpk',o,job);
     return !!(lines.length||points.length||groups.stick.length||groups.sphere.length||groups.cpk.length);
   }
-  function addWideStyleAtoms(lines,points,sel,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
-    const selected=filterAtoms(sel).filter(isAtomVisibleNow);
-    if(selected.length)appendWideAtomLines(lines,points,selected,o||{},defaultColorFn,widthDefault,dashed,skipBondKeys);
-  }
   function hasWideStyleLayer(){
     if(state.proteinAtoms==='line'||state.ligand==='line'||state.solvent==='line'||state.other==='line')return true;
     return state.styleRules.some(r=>{
@@ -1097,19 +1144,19 @@ function boot(){
     if(!wideLineLayer)return;
     if(!model||!atoms.length){ wideLineLayer.clearCollection('styles'); return; }
     if(!hasWideStyleLayer()){ wideLineLayer.clearCollection('styles'); return; }
-    const lines=[],points=[];
-    const cs=_catSer||categorySerials();
     const skip=lineSelectionStyleMaskActive?selectedLineBondKeys:null;
-    if(state.proteinAtoms==='line'&&cs.protein.length)addWideStyleAtoms(lines,points,{serial:cs.protein},{linewidth:lineWidths.protein},chainAwareAtomColor,lineWidths.protein,false,skip);
-    if(state.ligand==='line'&&cs.ligands.length)addWideStyleAtoms(lines,points,{serial:cs.ligands},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
-    if(state.solvent==='line'&&cs.solvents.length)addWideStyleAtoms(lines,points,{serial:cs.solvents},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
-    if(state.other==='line'&&cs.other.length)addWideStyleAtoms(lines,points,{serial:cs.other},{linewidth:lineWidths.ligand},elementColor,lineWidths.ligand,false,skip);
-    for(const r of state.styleRules){
-      if(r.disabled)continue;
-      const rep=normText(r.representation).toLowerCase(),opts=r.options||{};
-      if(rep==='line')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.protein,false,skip);
-      else if(rep==='tube')addWideStyleAtoms(lines,points,styleSelection(r.selector,opts),opts,chainAwareAtomColor,opts.linewidth||lineWidths.tube,false,skip);
-    }
+    let lines=[],points=[];
+    visibleEntryRecords().forEach(record=>{
+      const cached=wideLineStyleCollectionForRecord(record);
+      if(cached.lines&&cached.lines.length){
+        const next=skip?cached.lines.filter(line=>!line.key||!skip.has(line.key)):cached.lines;
+        if(next.length)lines=lines.concat(next);
+      }
+      if(cached.points&&cached.points.length){
+        const next=skip?cached.points.filter(point=>!point.key||!skip.has(point.key)):cached.points;
+        if(next.length)points=points.concat(next);
+      }
+    });
     wideLineLayer.setCollection('styles',lines,points,{linewidth:lineWidths.protein,opacity:1,pointRadius:lineWidths.fallback});
   }
   function drawSelectionChunks(shape,bonds,looseAtoms,rep,opts,job){
@@ -1163,6 +1210,7 @@ function boot(){
     if(!viewer||!model)return;
     opts=opts||{};
     styleGeneration++;
+    wideLineStyleGeneration++;
     resetAtomLevelCache();
     selectionStyleActive=false;
     _catSer=categorySerials();
@@ -2071,6 +2119,7 @@ function boot(){
   }
   let visibilityRefreshTimer=null, visibilityInteractionTimer=null;
   function scheduleVisibilityLayerRefresh(){
+    visibilityGeneration++;
     resetAtomLevelCache();
     if(visibilityRefreshTimer!=null)clearTimeout(visibilityRefreshTimer);
     const run=function(){
@@ -3372,6 +3421,24 @@ function boot(){
     const selected=selectedAtomsForRule(rule);
     if(selected.length)atomLevelHideStyleForAtoms(selected);
   }
+  function applyHiddenRulesForAtoms(list){
+    const source=(list||[]).filter(a=>a&&a.serial!=null);
+    if(!source.length)return;
+    for(const r of state.hiddenRules){
+      if(r.disabled)continue;
+      let selected=[];
+      try{
+        const resolved=resolveSelector(r.selector);
+        selected=source.filter(a=>matchesResolvedSelector(a,resolved));
+      }catch(e){}
+      if(!selected.length)continue;
+      if(r.options&&r.options.atomLevel)atomLevelHideStyleForAtoms(selected);
+      else{
+        const sel=serialSelectorForAtoms(selected);
+        if(sel)viewer.setStyle(sel,{});
+      }
+    }
+  }
   function currentSelectionToolbarAtoms(){
     const selected=state.selectionSel?selectedAtomsForSelector(state.selectionSel):[];
     if(!selected.length)setStatus('No selected atoms');
@@ -3422,7 +3489,21 @@ function boot(){
     state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
     state.styleRules=removeSerialsFromDirectRules(state.styleRules,serials);
     state.styleRules.push({selector:sel,representation:rep,options:{source:'selection-toolbar',atomLevel:true}});
-    applyStylesFull(true);
+    styleGeneration++;
+    resetAtomLevelCache();
+    const visible=selected.filter(isAtomVisibleNow);
+    atomLevelStyleSpecForAtoms(rep,{source:'selection-toolbar',atomLevel:true},visible);
+    applyVisibility();
+    applyHiddenRulesForAtoms(visible);
+    invalidateWideLineStyleCacheForAtoms(selected);
+    redrawWideLineStyles();
+    redrawInteractions(false);
+    if(state.selectionSel){
+      selectionAtoms=selectedAtomsForSelector(state.selectionSel);
+      renderSelectionHighlight(false,selectionAtoms);
+    }
+    updateStatusBar();
+    if(viewer)viewer.render();
     setStatus('Selected atoms set to '+rep+': '+selected.length.toLocaleString());
   }
   function runSelectionToolbarAction(action){
