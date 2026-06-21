@@ -67,8 +67,9 @@ function viewKey(viewer){
 // 3Dmol's internal Coloring enum is not exported on window.$3Dmol.
 const VERTEX_COLORS = 2;
 const DEFAULT_LINE_WIDTH = 2;
-const MODEL_UNITS_PER_LINE_WIDTH = 0.045;
-const MIN_SCREEN_LINE_WIDTH = 0.10;
+const MODEL_UNITS_PER_LINE_WIDTH = 0.45;
+const MODEL_UNITS_PER_POINT_RADIUS = 0.045;
+const MIN_SCREEN_LINE_WIDTH = 0.75;
 const MAX_SCREEN_LINE_WIDTH = 2.0;
 const MIN_SCREEN_POINT_RADIUS = 0.10;
 const MAX_SCREEN_POINT_RADIUS = 2.12;
@@ -520,7 +521,7 @@ class MolWideLineLayer{
 
   pointWorldRadius(point,options){
     const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
-    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_POINT_RADIUS;
     return Math.max(0.001,radius);
   }
 
@@ -621,7 +622,7 @@ class MolWideLineLayer{
 
   pointRadiusModel(viewer,point,options,frame){
     const explicit=finiteNumber(point.modelRadius||point.worldRadius||options&&options.modelRadius||options&&options.worldRadius,NaN);
-    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_LINE_WIDTH;
+    const radius=Number.isFinite(explicit)?explicit:finiteNumber(point.radius||options&&options.pointRadius||options&&options.linewidth,DEFAULT_LINE_WIDTH)*MODEL_UNITS_PER_POINT_RADIUS;
     const minPx=finiteNumber(point.minPixelRadius||options&&options.minPixelRadius,MIN_SCREEN_POINT_RADIUS);
     const maxPx=finiteNumber(point.maxPixelRadius||options&&options.maxPixelRadius,MAX_SCREEN_POINT_RADIUS);
     return this.clampModelSize(viewer,radius,minPx,maxPx,frame);
