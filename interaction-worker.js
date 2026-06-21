@@ -3,6 +3,7 @@
 
 const WATER_NAMES = new Set(['HOH','WAT','DOD','H2O']);
 const ION_NAMES = new Set(['NA','CL','K','MG','CA','ZN','MN','FE','CU','CO','NI','CD','HG','SR','BA','CS','RB','LI','AL','IOD','BR']);
+const AA_RESN = new Set(['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','HIE','HID','HIP','ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL','MSE','SEC','PYL']);
 const BACKBONE_ATOMS = new Set(['N','CA','C','O','OXT']);
 const AROMATIC_DEFS = {
   PHE:['CG','CD1','CD2','CE1','CE2','CZ'],
@@ -43,10 +44,26 @@ function elemOf(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A
 function atomName(a){ return normUpper(a.atom||''); }
 function resName(a){ return normUpper(a.resn||''); }
 function residueKey(a){ return (a.chain||'')+':'+(a.resi==null?'':a.resi)+':'+resName(a); }
+function residueClassKey(a){ return (a.entry||'')+':'+(a.chain||'')+':'+(a.resi==null?'':a.resi)+':'+resName(a); }
 function isWater(a){ return WATER_NAMES.has(resName(a)); }
-function isProtein(a){ return !a.hetflag&&!isWater(a); }
-function isLigand(a){ return !!a.hetflag&&!isWater(a)&&!ION_NAMES.has(resName(a)); }
-function category(a){ if(isWater(a))return 'solvents'; if(isLigand(a))return 'ligands'; if(a.hetflag)return 'other'; return 'protein'; }
+let proteinResidueLike = new Set();
+function buildProteinResidueLike(atoms){
+  const by=new Map();
+  atoms.forEach(a=>{
+    if(!AA_RESN.has(resName(a)))return;
+    const key=residueClassKey(a);
+    if(!by.has(key))by.set(key,new Set());
+    by.get(key).add(atomName(a));
+  });
+  proteinResidueLike=new Set();
+  by.forEach((names,key)=>{
+    if(names.has('N')&&names.has('CA')&&names.has('C'))proteinResidueLike.add(key);
+  });
+}
+function isProteinLikeResidue(a){ return AA_RESN.has(resName(a))&&proteinResidueLike.has(residueClassKey(a)); }
+function isProtein(a){ const r=resName(a); if(WATER_NAMES.has(r)||ION_NAMES.has(r))return false; return !a.hetflag||isProteinLikeResidue(a); }
+function isLigand(a){ const r=resName(a); return !!a.hetflag&&!isProtein(a)&&!WATER_NAMES.has(r)&&!ION_NAMES.has(r); }
+function category(a){ if(isWater(a))return 'solvents'; if(isProtein(a))return 'protein'; if(ION_NAMES.has(resName(a)))return 'other'; if(isLigand(a))return 'ligands'; if(a.hetflag)return 'other'; return 'protein'; }
 function point(a){ return {x:a.x,y:a.y,z:a.z}; }
 function sub(a,b){ return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z}; }
 function dot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
@@ -298,6 +315,7 @@ function detectContacts(atoms,maps,criteria){
 
 function buildIndex(payload){
   const started=Date.now(),atoms=(payload.atoms||[]).filter(a=>Number.isFinite(a.x)&&Number.isFinite(a.y)&&Number.isFinite(a.z)&&a.serial!=null);
+  buildProteinResidueLike(atoms);
   const criteria=criteriaWith(payload.criteria),maps=buildMaps(atoms),firstResi=firstResiduesByChain(atoms),rings=aromaticRings(atoms);
   const interactions={
     hbond:detectHBonds(atoms,maps,criteria),

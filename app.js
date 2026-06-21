@@ -28,7 +28,7 @@ function boot(){
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
   };
-  const INTERACTION_INDEX_SCHEMA = 'interaction-index-v5';
+  const INTERACTION_INDEX_SCHEMA = 'interaction-index-v6';
   const INTERACTION_INDEX_API = 'api/interaction-index/';
   const INTERACTION_CRITERIA = {
     hbond:{indexMaxDistance:4.0,maxDistance:2.8,minDonorAngle:120,minAcceptorAngle:90,maxAcceptorAngle:360},
@@ -79,6 +79,7 @@ function boot(){
   const MAX_INTERACTION_WORKERS = 1;
   let interactionBuildSeq = 0;
   let interactionIndex = {status:'empty',jobId:0,interactions:null,counts:{}};
+  let proteinResidueLikeCache = null;
   let resetMouseDrag = function(){};
   let preferencesSaveTimer = null;
   let panelRefreshTimer = null;
@@ -327,6 +328,7 @@ function boot(){
     sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
   function atomElem(a){ return normUpper(a.elem||a.element||a.atom||'').replace(/[^A-Z]/g,''); }
+  function atomName(a){ return normUpper(a&&a.atom); }
   function chainColor(ch){
     const c=normText(ch||'?'),u=c.toUpperCase();
     if(chainColors[u])return chainColors[u];
@@ -334,8 +336,41 @@ function boot(){
     let h=0; for(let i=0;i<c.length;i++)h=((h*31)+c.charCodeAt(i))>>>0; return 'hsl('+(h%360)+',72%,64%)';
   }
   function elementColor(a){ return elemColors[atomElem(a)]||'#D1D5DB'; }
-  function isProtein(a){ return !a.hetflag && !waterNames.has(normUpper(a.resn)); }
-  function isLigand(a){ return !!a.hetflag && !waterNames.has(normUpper(a.resn)) && !ionNames.has(normUpper(a.resn)); }
+  function isStandardAminoResidueName(r){ return Object.prototype.hasOwnProperty.call(aa3to1,normUpper(r)); }
+  function proteinResidueClassKey(a){ return (a._entryName||'')+'\u0001'+(a.chain||'')+'\u0001'+(a.resi==null?'':a.resi)+'\u0001'+normUpper(a.resn); }
+  function proteinResidueLikeKeysForAtoms(sourceAtoms){
+    const by=new Map();
+    (sourceAtoms||[]).forEach(a=>{
+      const r=normUpper(a.resn);
+      if(!isStandardAminoResidueName(r))return;
+      const key=proteinResidueClassKey(a);
+      if(!by.has(key))by.set(key,new Set());
+      by.get(key).add(atomName(a));
+    });
+    const out=new Set();
+    by.forEach((names,key)=>{
+      if(names.has('N')&&names.has('CA')&&names.has('C'))out.add(key);
+    });
+    return out;
+  }
+  function proteinResidueLikeKeys(){
+    if(proteinResidueLikeCache)return proteinResidueLikeCache;
+    proteinResidueLikeCache=proteinResidueLikeKeysForAtoms(atoms);
+    return proteinResidueLikeCache;
+  }
+  function isProteinLikeResidue(a){
+    if(!isStandardAminoResidueName(a&&a.resn))return false;
+    return proteinResidueLikeKeys().has(proteinResidueClassKey(a));
+  }
+  function isProtein(a){
+    const r=normUpper(a&&a.resn);
+    if(waterNames.has(r)||ionNames.has(r))return false;
+    return !a.hetflag||isProteinLikeResidue(a);
+  }
+  function isLigand(a){
+    const r=normUpper(a&&a.resn);
+    return !!a.hetflag&&!isProtein(a)&&!waterNames.has(r)&&!ionNames.has(r);
+  }
   function isPolar(a){ return ['N','O','S'].includes(atomElem(a)); }
   function isHydrogenAtom(a){ return atomElem(a)==='H'; }
   function bondedAtoms(a){ return (a.bonds||[]).map(idx=>atomByEntryIndex.get(atomEntryIndexKey(a._entryName,idx))||atomByIndex.get(idx)).filter(Boolean); }
@@ -345,7 +380,22 @@ function boot(){
   function point(a){ return {x:a.x,y:a.y,z:a.z}; }
   function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z; return dx*dx+dy*dy+dz*dz; }
   function distance(a,b){ return Math.sqrt(dist2(a,b)); }
-  function atomCategory(a){ const r=normUpper(a.resn); if(waterNames.has(r))return 'solvents'; if(isLigand(a))return 'ligands'; if(a.hetflag)return 'other'; if(ionNames.has(r))return 'other'; return 'protein'; }
+  function vecSub(a,b){ return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z}; }
+  function vecScale(a,s){ return {x:a.x*s,y:a.y*s,z:a.z*s}; }
+  function vecDot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
+  function vecCross(a,b){ return {x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x}; }
+  function vecLen(a){ return Math.sqrt(vecDot(a,a)); }
+  function vecNormalize(a){ const l=vecLen(a); return l>1e-8?vecScale(a,1/l):null; }
+  function dihedralDeg(a,b,c,d){
+    const b0=vecSub(a,b),b1=vecSub(c,b),b2=vecSub(d,c),b1n=vecNormalize(b1);
+    if(!b1n)return null;
+    const v=vecSub(b0,vecScale(b1n,vecDot(b0,b1n)));
+    const w=vecSub(b2,vecScale(b1n,vecDot(b2,b1n)));
+    if(vecLen(v)<1e-8||vecLen(w)<1e-8)return null;
+    const x=vecDot(v,w),y=vecDot(vecCross(b1n,v),w);
+    return Math.atan2(y,x)*180/Math.PI;
+  }
+  function atomCategory(a){ const r=normUpper(a.resn); if(waterNames.has(r))return 'solvents'; if(isProtein(a))return 'protein'; if(ionNames.has(r))return 'other'; if(isLigand(a))return 'ligands'; if(a.hetflag)return 'other'; return 'protein'; }
   function chainAwareAtomColor(a){ if(!a)return '#D1D5DB'; const e=atomElem(a); if(isProtein(a)&&(!e||e==='C'))return state.carbonByChain?chainColor(a.chain):elementColor(a); return elementColor(a); }
   function chainRibbonColor(a){ return chainColor(a&&a.chain); }
   function colorFnFromOptions(o,r){ const f=o&&o.color; if(f)return function(){return f;}; return r?chainRibbonColor:chainAwareAtomColor; }
@@ -886,7 +936,7 @@ function boot(){
   function diffRes(a,b){ return residueKey(a)!==residueKey(b); }
   const ATOM_REPS=new Set(['line','stick','sphere','cpk']);
   let _lvlCache=null, _lvlSerialCache=null, _catSer=null;
-  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; }
+  function resetAtomLevelCache(){ _lvlCache=null; _lvlSerialCache=null; _catSer=null; proteinResidueLikeCache=null; }
   function categorySerials(){
     const out={protein:[],ligands:[],solvents:[],other:[]};
     for(const a of atoms){
@@ -1832,6 +1882,103 @@ function boot(){
     state.groupVisible={};
     state.hierarchyCollapsed={};
   }
+  function residueOrderValue(v){
+    const n=Number(v);
+    return Number.isFinite(n)?n:null;
+  }
+  function secondaryResidueRecords(sourceAtoms,proteinKeys){
+    const by=new Map();
+    (sourceAtoms||[]).forEach((a,order)=>{
+      if(!proteinKeys.has(proteinResidueClassKey(a)))return;
+      const key=proteinResidueClassKey(a);
+      let rec=by.get(key);
+      if(!rec){
+        rec={key,chain:normText(a.chain),resi:a.resi,resn:a.resn,order,atoms:[],atomByName:new Map()};
+        by.set(key,rec);
+      }
+      rec.atoms.push(a);
+      const name=atomName(a);
+      if(name&&!rec.atomByName.has(name)&&Number.isFinite(a.x)&&Number.isFinite(a.y)&&Number.isFinite(a.z)){
+        rec.atomByName.set(name,a);
+      }
+    });
+    return Array.from(by.values()).sort((a,b)=>{
+      if(a.chain!==b.chain)return a.chain<b.chain?-1:1;
+      const an=residueOrderValue(a.resi),bn=residueOrderValue(b.resi);
+      if(an!=null&&bn!=null&&an!==bn)return an-bn;
+      return a.order-b.order;
+    });
+  }
+  function residueAtom(rec,name){ return rec&&rec.atomByName.get(name)||null; }
+  function secondaryCandidate(phi,psi){
+    if(!Number.isFinite(phi)||!Number.isFinite(psi))return 'c';
+    if(phi>=-95&&phi<=-35&&psi>=-75&&psi<=-10)return 'h';
+    if(phi>=-170&&phi<=-80&&((psi>=80&&psi<=180)||(psi>=-180&&psi<=-150)))return 's';
+    return 'c';
+  }
+  function keepSecondaryRuns(chars,type,minLen){
+    let start=0;
+    while(start<chars.length){
+      while(start<chars.length&&chars[start]!==type)start++;
+      let end=start;
+      while(end<chars.length&&chars[end]===type)end++;
+      if(end-start>0&&end-start<minLen){
+        for(let i=start;i<end;i++)chars[i]='c';
+      }
+      start=end+1;
+    }
+  }
+  function setResidueSecondary(chainResidues,chars){
+    for(let i=0;i<chainResidues.length;i++){
+      const ss=chars[i]||'c',rec=chainResidues[i];
+      rec.atoms.forEach(a=>{
+        a.ss=ss;
+        delete a.ssbegin;
+        delete a.ssend;
+      });
+    }
+    for(let i=0;i<chainResidues.length;i++){
+      const ss=chars[i]||'c';
+      if(ss==='c')continue;
+      const prev=i>0?chars[i-1]:'c',next=i<chars.length-1?chars[i+1]:'c';
+      chainResidues[i].atoms.forEach(a=>{
+        if(prev!==ss)a.ssbegin=true;
+        if(next!==ss)a.ssend=true;
+      });
+    }
+  }
+  function assignSecondaryStructureFallback(sourceAtoms,proteinKeys){
+    if(!proteinKeys||!proteinKeys.size)return;
+    const proteinAtoms=(sourceAtoms||[]).filter(a=>proteinKeys.has(proteinResidueClassKey(a)));
+    const hasAnnotated=proteinAtoms.some(a=>{ const s=normText(a.ss).toLowerCase(); return s==='h'||s==='s'; });
+    if(hasAnnotated)return;
+    const residues=secondaryResidueRecords(sourceAtoms,proteinKeys),byChain=new Map();
+    residues.forEach(r=>{
+      if(!byChain.has(r.chain))byChain.set(r.chain,[]);
+      byChain.get(r.chain).push(r);
+    });
+    byChain.forEach(chainResidues=>{
+      const chars=new Array(chainResidues.length).fill('c');
+      for(let i=1;i<chainResidues.length-1;i++){
+        const prev=chainResidues[i-1],cur=chainResidues[i],next=chainResidues[i+1];
+        const prevC=residueAtom(prev,'C'),n=residueAtom(cur,'N'),ca=residueAtom(cur,'CA'),c=residueAtom(cur,'C'),nextN=residueAtom(next,'N');
+        if(!prevC||!n||!ca||!c||!nextN)continue;
+        const phi=dihedralDeg(prevC,n,ca,c),psi=dihedralDeg(n,ca,c,nextN);
+        chars[i]=secondaryCandidate(phi,psi);
+      }
+      keepSecondaryRuns(chars,'h',4);
+      keepSecondaryRuns(chars,'s',4);
+      setResidueSecondary(chainResidues,chars);
+    });
+  }
+  function normalizeParsedAtoms(sourceAtoms){
+    const proteinKeys=proteinResidueLikeKeysForAtoms(sourceAtoms);
+    if(!proteinKeys.size)return;
+    (sourceAtoms||[]).forEach(a=>{
+      if(proteinKeys.has(proteinResidueClassKey(a)))a.hetflag=false;
+    });
+    assignSecondaryStructureFallback(sourceAtoms,proteinKeys);
+  }
   function prepareDisplayedAtoms(entry,list,serialStart){
     list.forEach(a=>{
       a._entryName=entry.name;
@@ -1854,6 +2001,7 @@ function boot(){
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
     const list=m.selectedAtoms({});
     nextAtomSerial=prepareDisplayedAtoms(entry,list,nextAtomSerial);
+    normalizeParsedAtoms(list);
     const record={entry,model:m,atoms:list,cacheKey};
     entryModelCache.set(entry.name,record);
     return record;
@@ -1883,6 +2031,7 @@ function boot(){
       if(atomSourceSerial(a)!=null)atomByEntrySourceSerial.set(atomEntryIndexKey(a._entryName,atomSourceSerial(a)),a);
       if(a.serial!=null)atomBySerial.set(Number(a.serial),a);
     });
+    resetAtomLevelCache();
   }
   function finishStructureRefresh(visible,opts){
     opts=opts||{};
@@ -2659,7 +2808,7 @@ function installFrameSyncedMotion(targetViewer){
 
   // ---------- Wire UI ----------
   $('selLevel').onchange=function(){ state.selectionMode=$('selLevel').value; state.rangeAnchor=null; setStatus('Selection level: '+state.selectionMode); };
-  $('qsP').onclick=function(){ setSelection({hetflag:false},{}); };
+  $('qsP').onclick=function(){ const prot=atoms.filter(isProtein),sel=serialSelectorForAtoms(prot); if(sel)setSelection(sel,{}); else setStatus('No protein'); };
   $('qsL').onclick=function(){ const lig=atoms.filter(isLigand); const sel=serialSelectorForAtoms(lig); if(sel)setSelection(sel,{}); else setStatus('No ligand'); };
   $('qsS').onclick=function(){ setSelection({resn:Array.from(waterNames)},{}); };
   $('qsAll').onclick=function(){ setSelection({},{}); };
