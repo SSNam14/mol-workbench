@@ -13,7 +13,8 @@
 <div class="u-001">
 
   <div class="u-002">
-    <label data-menu class="u-003">Open file<input id="fileInput" type="file" accept=".pdb,.ent,.sdf,.mol,.mol2,.xyz,.cif,.mae,.maegz" multiple class="u-004"></label>
+    <label data-menu class="u-003">Open file<input id="fileInput" type="file" accept=".pdb,.ent,.sdf,.mol,.mol2,.xyz,.cif,.mae,.maegz,.psazip" multiple class="u-004"></label>
+    <button id="serverOpenBtn" data-menu class="u-005">Open server</button>
     <button id="settingsBtn" data-menu class="u-005">Preference</button>
   </div>
 
@@ -149,6 +150,27 @@
   </div>
 
   <div id="hoverBar" class="u-065"></div>
+
+  <div id="serverFileOverlay" class="server-file-overlay">
+    <div class="server-file-dialog">
+      <div class="server-file-head">
+        <span class="server-file-title">Open server file</span>
+        <button id="serverFileClose" data-btn class="server-file-close">&#10005;</button>
+      </div>
+      <div class="server-file-body">
+        <div class="server-file-toolbar">
+          <select id="serverFileRoots" class="server-file-roots"></select>
+          <button id="serverFileUp" data-btn class="server-file-up">Up</button>
+        </div>
+        <div id="serverFilePath" class="server-file-path"></div>
+        <div id="serverFileList" class="server-file-list"></div>
+      </div>
+      <div class="server-file-foot">
+        <span id="serverFileStatus" class="server-file-status"></span>
+        <button id="serverFileCancel" data-btn class="server-file-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <div class="u-066">
     <div class="status-metrics">

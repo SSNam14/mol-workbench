@@ -2,11 +2,14 @@
 """Static file server with a tiny persisted viewer-state API."""
 
 import argparse
+import io
 import json
 import os
+import pickle
 import tempfile
 import threading
 import time
+import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -31,6 +34,8 @@ MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 MAX_AGENT_ACTION_BYTES = 128 * 1024
 MAX_AGENT_ACTIONS = 100
+MAX_SERVER_FILE_ITEMS = 1000
+MAX_SURFACE_CHUNK_VERTICES = 60000
 SESSION_SCHEMA = "viewer-session-v1"
 PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
@@ -60,6 +65,8 @@ RESERVED_KEY_BINDINGS = {"delete", "control", "ctrl", "shift", "alt", "meta", "c
 BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
+SERVER_FILE_ROOTS = [Path.home()]
+SERVER_STRUCTURE_SUFFIXES = (".pdb", ".ent", ".sdf", ".mol", ".mol2", ".xyz", ".cif", ".mmcif", ".mae", ".maegz", ".mae.gz", ".psazip")
 AGENT_ACTION_TYPES = {
     "querywithin",
     "showwithin",
@@ -108,6 +115,144 @@ def normalize_key_binding_value(value):
     return key
 
 
+def normalize_server_file_roots(values):
+    roots = []
+    for value in values or []:
+        try:
+            path = Path(str(value or "")).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if path.is_dir() and path not in roots:
+            roots.append(path)
+    if not roots:
+        roots.append(ROOT)
+    return roots
+
+
+def is_supported_server_structure(path):
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in SERVER_STRUCTURE_SUFFIXES)
+
+
+def resolve_server_file_path(value):
+    roots = SERVER_FILE_ROOTS or [ROOT]
+    raw = str(value or "").strip()
+    candidate = Path(raw).expanduser() if raw else roots[0]
+    if not candidate.is_absolute():
+        candidate = roots[0] / candidate
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None, None
+    for root in roots:
+        try:
+            rel = resolved.relative_to(root)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            return None, None
+        return resolved, root
+    return None, None
+
+
+def server_file_roots_payload():
+    return [{"path": str(root), "name": str(root)} for root in SERVER_FILE_ROOTS]
+
+
+def server_file_item(path):
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if path.is_dir():
+        return {"name": path.name, "path": str(path), "type": "directory", "size": None, "mtime": stat.st_mtime, "loadable": False}
+    if path.is_file() and is_supported_server_structure(path):
+        return {"name": path.name, "path": str(path), "type": "file", "size": stat.st_size, "mtime": stat.st_mtime, "loadable": True}
+    return None
+
+
+def list_server_files(value):
+    path, root = resolve_server_file_path(value)
+    if path is None:
+        return None, "forbidden"
+    if not path.is_dir():
+        return None, "not_directory"
+    items = []
+    try:
+        children = list(path.iterdir())
+    except PermissionError:
+        return None, "permission_denied"
+    except OSError:
+        return None, "read_failed"
+    for child in children:
+        resolved, _ = resolve_server_file_path(str(child))
+        if resolved is None:
+            continue
+        item = server_file_item(resolved)
+        if item:
+            items.append(item)
+        if len(items) >= MAX_SERVER_FILE_ITEMS:
+            break
+    items.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
+    parent = ""
+    if path != root:
+        parent_candidate, _ = resolve_server_file_path(str(path.parent))
+        if parent_candidate is not None:
+            parent = str(parent_candidate)
+    return {
+        "ok": True,
+        "path": str(path),
+        "root": str(root),
+        "parent": parent,
+        "roots": server_file_roots_payload(),
+        "items": items,
+        "truncated": len(items) >= MAX_SERVER_FILE_ITEMS,
+    }, None
+
+
+def load_server_file_entry(value):
+    path, _ = resolve_server_file_path(value)
+    if path is None:
+        return None, "forbidden"
+    if not path.is_file():
+        return None, "not_file"
+    if not is_supported_server_structure(path):
+        return None, "unsupported_format"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None, "read_failed"
+    if size <= 0 or size > MAX_STRUCTURE_BYTES:
+        return None, "invalid_body_size"
+    try:
+        payload = path.read_bytes()
+    except PermissionError:
+        return None, "permission_denied"
+    except OSError:
+        return None, "read_failed"
+    filename = path.name
+    fmt = infer_structure_format(filename)
+    if fmt == "psazip":
+        try:
+            return convert_structure_bytes(payload, filename, fmt, filename, "")
+        except MaestroConversionError as exc:
+            return None, str(exc) or "conversion_failed"
+    if is_maestro_format(fmt) or payload[:2] == b"\x1f\x8b":
+        try:
+            entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
+        except MaestroConversionError as exc:
+            return None, str(exc) or "conversion_failed"
+        return entry, meta
+    try:
+        data = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "decode_failed"
+    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt})
+    if not entry:
+        return None, "invalid_structure"
+    return entry, {"sourceFormat": fmt, "convertedFormat": fmt}
+
+
 def normalize_deleted_source_serials(value):
     if not isinstance(value, list):
         return []
@@ -142,10 +287,59 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    surfaces = normalize_entry_surfaces(value.get("surfaces"))
+    if surfaces:
+        entry["surfaces"] = surfaces
     deleted = normalize_deleted_source_serials(value.get("deletedSourceSerials"))
     if deleted:
         entry["deletedSourceSerials"] = deleted
     return entry
+
+
+def normalize_entry_surfaces(value):
+    if not isinstance(value, list):
+        return []
+    out = []
+    for raw in value[:8]:
+        if not isinstance(raw, dict):
+            continue
+        raw_chunks = raw.get("chunks")
+        chunks = []
+        if isinstance(raw_chunks, list):
+            for chunk in raw_chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                vertices = chunk.get("vertices")
+                faces = chunk.get("faces")
+                normals = chunk.get("normals")
+                colors = chunk.get("colors")
+                if not isinstance(vertices, list) or not isinstance(faces, list):
+                    continue
+                clean = {"vertices": vertices, "faces": faces}
+                if isinstance(normals, list):
+                    clean["normals"] = normals
+                if isinstance(colors, list):
+                    clean["colors"] = colors
+                chunks.append(clean)
+        if not chunks:
+            continue
+        surface = {
+            "name": str(raw.get("name") or "Surface")[:120],
+            "kind": str(raw.get("kind") or "surface")[:80],
+            "color": str(raw.get("color") or "#8ecae6")[:32],
+            "opacity": raw.get("opacity", 0.85),
+            "colorMode": str(raw.get("colorMode") or "")[:80],
+            "colorField": str(raw.get("colorField") or "")[:80],
+            "vertexCount": raw.get("vertexCount"),
+            "faceCount": raw.get("faceCount"),
+            "chunks": chunks,
+        }
+        if isinstance(raw.get("valueRange"), list):
+            surface["valueRange"] = raw.get("valueRange")[:2]
+        if raw.get("source"):
+            surface["source"] = str(raw.get("source"))[:160]
+        out.append(surface)
+    return out
 
 
 def truthy(value):
@@ -175,6 +369,8 @@ def normalize_entry_title(value):
 
 def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
     source_fmt = infer_structure_format(filename, fmt)
+    if source_fmt == "psazip":
+        return psazip_bytes_to_entry(payload, filename, title, pdb_id)
     if not is_maestro_format(source_fmt) and bytes(payload or b"")[:2] == b"\x1f\x8b":
         source_fmt = "maegz"
     if not is_maestro_format(source_fmt):
@@ -195,6 +391,328 @@ def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id="
     if not entry:
         raise MaestroConversionError("conversion_failed")
     return entry, {"sourceFormat": source_fmt, "convertedFormat": "pdb", **meta}
+
+
+def _psazip_read_panel_state(zipf, names):
+    panel_name = next((name for name in names if name.lower().endswith("_panel_state.json")), "")
+    if not panel_name:
+        return {}
+    try:
+        return json.loads(zipf.read(panel_name).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+
+
+def _psazip_structure_name(names):
+    for suffix in (".maegz", ".mae.gz", ".mae", ".cif", ".mmcif", ".pdb"):
+        found = [name for name in names if name.lower().endswith(suffix)]
+        if found:
+            return found[0]
+    return ""
+
+
+def _psazip_surface_vis_name(names):
+    found = [name for name in names if name.lower().endswith(".vis")]
+    return found[0] if found else ""
+
+
+def _psazip_patch_pickle_name(names):
+    found = [name for name in names if name.lower().endswith(".pkl")]
+    return found[0] if found else ""
+
+
+def _round_float(value, digits):
+    return round(float(value), digits)
+
+
+def _flush_surface_chunk(chunks, vertices, normals, colors, faces, include_normals, include_colors):
+    if not vertices or not faces:
+        return
+    chunk = {
+        "vertices": [_round_float(coord, 3) for point in vertices for coord in point],
+        "faces": [int(idx) for face in faces for idx in face],
+    }
+    if include_normals:
+        chunk["normals"] = [_round_float(coord, 4) for point in normals for coord in point]
+    if include_colors:
+        chunk["colors"] = [int(value) for point in colors for value in point]
+    chunks.append(chunk)
+
+
+def chunk_surface_mesh(coords, normals, faces, colors=None):
+    chunks = []
+    vertex_map = {}
+    out_vertices = []
+    out_normals = []
+    out_colors = []
+    out_faces = []
+    include_normals = normals is not None and len(normals) == len(coords)
+    include_colors = colors is not None and len(colors) == len(coords)
+
+    for face in faces:
+        needed = [int(idx) for idx in face if int(idx) not in vertex_map]
+        if out_faces and len(out_vertices) + len(needed) > MAX_SURFACE_CHUNK_VERTICES:
+            _flush_surface_chunk(chunks, out_vertices, out_normals, out_colors, out_faces, include_normals, include_colors)
+            vertex_map = {}
+            out_vertices = []
+            out_normals = []
+            out_colors = []
+            out_faces = []
+        mapped = []
+        for raw_idx in face:
+            idx = int(raw_idx)
+            mapped_idx = vertex_map.get(idx)
+            if mapped_idx is None:
+                mapped_idx = len(out_vertices)
+                vertex_map[idx] = mapped_idx
+                out_vertices.append(coords[idx])
+                if include_normals:
+                    out_normals.append(normals[idx])
+                if include_colors:
+                    out_colors.append(colors[idx])
+            mapped.append(mapped_idx)
+        out_faces.append(mapped)
+    _flush_surface_chunk(chunks, out_vertices, out_normals, out_colors, out_faces, include_normals, include_colors)
+    return chunks
+
+
+def _decode_hdf_attr(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _surface_opacity(panel_state, attrs):
+    raw = panel_state.get("settings_trans_front", attrs.get("Transparency", 15))
+    try:
+        transparency = max(0.0, min(100.0, float(raw)))
+    except (TypeError, ValueError):
+        transparency = 15.0
+    return round(1.0 - transparency / 100.0, 3)
+
+
+class _SafePsazipUnpickler(pickle.Unpickler):
+    _dummy_classes = {}
+    _allowed = {
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "scalar"),
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("_codecs", "encode"),
+        ("builtins", "set"),
+        ("__builtin__", "set"),
+        ("builtins", "frozenset"),
+        ("__builtin__", "frozenset"),
+        ("collections", "OrderedDict"),
+    }
+
+    @classmethod
+    def _dummy_class(cls, module, name):
+        key = (module, name)
+        if key in cls._dummy_classes:
+            return cls._dummy_classes[key]
+
+        def __new__(dummy_cls, *args, **kwargs):
+            obj = object.__new__(dummy_cls)
+            obj.__args__ = args
+            return obj
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __setstate__(self, state):
+            if isinstance(state, dict):
+                self.__dict__.update(state)
+            else:
+                self.__state__ = state
+
+        dummy = type(name, (object,), {
+            "__module__": module,
+            "__new__": __new__,
+            "__init__": __init__,
+            "__setstate__": __setstate__,
+        })
+        cls._dummy_classes[key] = dummy
+        return dummy
+
+    def find_class(self, module, name):
+        if (module, name) in self._allowed:
+            return super().find_class(module, name)
+        if module == "schrodinger.application.bioluminate.patch_utils.patch_finder" and name in {"ProteinProperties", "ResInfo"}:
+            return self._dummy_class(module, name)
+        raise pickle.UnpicklingError(f"blocked {module}.{name}")
+
+
+def parse_psazip_patch_values(pickle_payload):
+    if not pickle_payload:
+        return {}
+    try:
+        import numpy as np
+    except ImportError:
+        return {}
+    try:
+        obj = _SafePsazipUnpickler(io.BytesIO(pickle_payload)).load()
+    except (pickle.UnpicklingError, ValueError, TypeError, EOFError, ImportError):
+        return {}
+    arrays = []
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            if isinstance(item, np.ndarray) and item.ndim == 1 and np.issubdtype(item.dtype, np.number):
+                arrays.append(item.astype(float))
+    out = {}
+    if arrays:
+        out["hydrophobic"] = arrays[0]
+    if len(arrays) >= 2:
+        out["electrostatic"] = arrays[1]
+    return out
+
+
+def _panel_rgb(panel_state, key, fallback):
+    value = panel_state.get(key, {}).get("color") if isinstance(panel_state.get(key), dict) else None
+    if not isinstance(value, list) or len(value) < 3:
+        return fallback
+    out = []
+    for raw, default in zip(value[:3], fallback):
+        try:
+            out.append(max(0, min(255, int(round(float(raw))))))
+        except (TypeError, ValueError):
+            out.append(default)
+    return tuple(out)
+
+
+def _lerp_rgb(a, b, t):
+    t = max(0.0, min(1.0, float(t)))
+    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
+
+
+def electrostatic_vertex_colors(values, panel_state):
+    try:
+        import numpy as np
+    except ImportError:
+        return None, None
+    if values is None:
+        return None, None
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 1 or arr.size == 0:
+        return None, None
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None, None
+    min_value = float(np.nanmin(finite))
+    max_value = float(np.nanmax(finite))
+    scale = max(abs(min_value), abs(max_value), 1e-9)
+    negative = _panel_rgb(panel_state, "settings_negative", (225, 30, 30))
+    positive = _panel_rgb(panel_state, "settings_positive", (0, 0, 180))
+    neutral = (245, 245, 245)
+    colors = []
+    for raw in arr:
+        if not np.isfinite(raw):
+            colors.append(neutral)
+        elif raw < 0:
+            colors.append(_lerp_rgb(neutral, negative, min(abs(float(raw)) / scale, 1.0)))
+        else:
+            colors.append(_lerp_rgb(neutral, positive, min(abs(float(raw)) / scale, 1.0)))
+    return colors, [round(min_value, 6), round(max_value, 6)]
+
+
+def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source="", patch_values=None):
+    try:
+        import h5py
+        import numpy as np
+    except ImportError as exc:
+        raise MaestroConversionError("surface_support_missing_h5py") from exc
+
+    panel_state = panel_state or {}
+    surfaces = []
+    with h5py.File(io.BytesIO(vis_payload), "r") as h5:
+        def visit(name, obj):
+            if not hasattr(obj, "keys"):
+                return
+            if "Coordinates of Vertices" not in obj or "Patches" not in obj:
+                return
+            coords = np.asarray(obj["Coordinates of Vertices"], dtype=float).reshape(-1, 3)
+            faces = np.asarray(obj["Patches"], dtype=np.int64).reshape(-1, 3)
+            normals = None
+            if "Normals of Vertices" in obj:
+                normals = np.asarray(obj["Normals of Vertices"], dtype=float).reshape(-1, 3)
+            if coords.size == 0 or faces.size == 0:
+                return
+            attrs = {key: _decode_hdf_attr(value) for key, value in obj.attrs.items()}
+            electrostatic = (patch_values or {}).get("electrostatic")
+            colors, value_range = electrostatic_vertex_colors(electrostatic, panel_state) if electrostatic is not None and len(electrostatic) == len(coords) else (None, None)
+            chunks = chunk_surface_mesh(coords, normals, faces, colors)
+            if not chunks:
+                return
+            surface = {
+                "name": str(attrs.get("Dataset Name") or name.rsplit("/", 1)[-1] or "Surface"),
+                "kind": "maestro-psazip-surface",
+                "source": source,
+                "color": "#8ecae6",
+                "opacity": _surface_opacity(panel_state, attrs),
+                "vertexCount": int(coords.shape[0]),
+                "faceCount": int(faces.shape[0]),
+                "chunks": chunks,
+            }
+            if colors is not None:
+                surface["colorMode"] = "red-white-blue"
+                surface["colorField"] = "electrostatic"
+                surface["valueRange"] = value_range
+            surfaces.append(surface)
+        h5.visititems(visit)
+    return surfaces
+
+
+def psazip_bytes_to_entry(payload, filename="", title=None, pdb_id=""):
+    try:
+        zipf = zipfile.ZipFile(io.BytesIO(bytes(payload or b"")))
+    except zipfile.BadZipFile as exc:
+        raise MaestroConversionError("invalid_psazip") from exc
+    with zipf:
+        names = [name for name in zipf.namelist() if not name.endswith("/")]
+        structure_name = _psazip_structure_name(names)
+        vis_name = _psazip_surface_vis_name(names)
+        pkl_name = _psazip_patch_pickle_name(names)
+        if not structure_name:
+            raise MaestroConversionError("psazip_no_structure")
+        if not vis_name:
+            raise MaestroConversionError("psazip_no_surface")
+        panel_state = _psazip_read_panel_state(zipf, names)
+        structure_payload = zipf.read(structure_name)
+        structure_fmt = infer_structure_format(structure_name)
+        if is_maestro_format(structure_fmt) or structure_payload[:2] == b"\x1f\x8b":
+            pdb_data, meta = maestro_bytes_to_pdb(structure_payload, structure_name, structure_fmt)
+            converted_fmt = "pdb"
+        else:
+            try:
+                pdb_data = structure_payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise MaestroConversionError("psazip_structure_decode_failed") from exc
+            meta = {"atomCount": None, "bondCount": None}
+            converted_fmt = structure_fmt or "pdb"
+        patch_values = parse_psazip_patch_values(zipf.read(pkl_name)) if pkl_name else {}
+        surfaces = parse_maestro_vis_surfaces(zipf.read(vis_name), panel_state, vis_name, patch_values)
+
+    name = str(filename or "surface.psazip").strip() or "surface.psazip"
+    if name.lower().endswith(".psazip"):
+        name = name[:-7] + ".pdb"
+    entry = normalize_entry({
+        "name": name,
+        "title": title or filename or name,
+        "pdbId": pdb_id,
+        "data": pdb_data,
+        "fmt": converted_fmt,
+        "surfaces": surfaces,
+    })
+    if not entry:
+        raise MaestroConversionError("conversion_failed")
+    return entry, {
+        "sourceFormat": "psazip",
+        "convertedFormat": converted_fmt,
+        "surfaceCount": len(surfaces),
+        "surfaceVertexCount": sum(int(s.get("vertexCount") or 0) for s in surfaces),
+        "surfaceFaceCount": sum(int(s.get("faceCount") or 0) for s in surfaces),
+        **meta,
+    }
 
 
 def normalize_session(value):
@@ -797,6 +1315,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/preferences":
             self.handle_get_preferences()
             return
+        if path == "/api/server-files":
+            self.handle_get_server_files()
+            return
         if path == "/api/last-structure":
             self.handle_get_last_structure()
             return
@@ -834,6 +1355,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/convert-structure":
             self.handle_convert_structure()
+            return
+        if path == "/api/server-file-load":
+            self.handle_server_file_load()
             return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
@@ -1064,6 +1588,38 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         self.send_json(200, {"ok": True, "preferences": preferences})
 
+    def handle_get_server_files(self):
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get("path") or [""])[0]
+        payload, error = list_server_files(requested)
+        if error:
+            status = 403 if error == "forbidden" else 404 if error == "not_directory" else 500
+            if error == "permission_denied":
+                status = 403
+            self.send_json(status, {"error": error, "roots": server_file_roots_payload()})
+            return
+        self.send_json(200, payload)
+
+    def handle_server_file_load(self):
+        payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
+        if payload is None:
+            return
+        if not isinstance(payload, dict):
+            self.send_json(400, {"error": "invalid_request"})
+            return
+        entry, meta = load_server_file_entry(payload.get("path"))
+        if not entry:
+            error = meta or "invalid_structure"
+            status = 403 if error in {"forbidden", "permission_denied"} else 413 if error == "invalid_body_size" else 400
+            self.send_json(status, {"error": error})
+            return
+        try:
+            session, stored_entry = upsert_session_entry(entry)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session), **meta})
+
     def handle_convert_structure(self):
         payload = self.read_raw_body(MAX_STRUCTURE_BYTES)
         if payload is None:
@@ -1077,7 +1633,8 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             entry, meta = convert_structure_bytes(payload, name, fmt, title, pdb_id)
         except MaestroConversionError as exc:
             error = str(exc) or "conversion_failed"
-            status = 400 if error in {"unsupported_format", "invalid_maegz", "no_atoms"} else 500
+            client_errors = {"unsupported_format", "invalid_maegz", "invalid_psazip", "psazip_no_structure", "psazip_no_surface", "psazip_structure_decode_failed", "no_atoms"}
+            status = 400 if error in client_errors else 500
             self.send_json(status, {"error": error})
             return
         self.send_json(200, {"ok": True, "entry": entry, **meta})
@@ -1173,13 +1730,17 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
 
 def main():
+    global SERVER_FILE_ROOTS
     parser = argparse.ArgumentParser(description="Serve the molecular viewer and persisted structure API.")
     parser.add_argument("--bind", default="0.0.0.0", help="address to bind")
     parser.add_argument("--port", type=int, default=8704, help="port to listen on")
+    parser.add_argument("--file-root", action="append", help="server-side root directory exposed to the Open server file browser; may be repeated")
     args = parser.parse_args()
 
+    SERVER_FILE_ROOTS = normalize_server_file_roots(args.file_root or [str(Path.home())])
     httpd = ThreadingHTTPServer((args.bind, args.port), ViewerHandler)
     print(f"Serving {ROOT} on http://{args.bind}:{args.port}/", flush=True)
+    print("Server file roots: " + ", ".join(str(root) for root in SERVER_FILE_ROOTS), flush=True)
     httpd.serve_forever()
 
 

@@ -647,6 +647,15 @@ molAgent.getState();
 
 The `name` argument is an identity base, not a guaranteed final id. Every UI or `molAgent.loadUrl(...)` load receives a fresh internal entry id by appending a timestamp-like suffix. The visible filename/title is kept in `title`. If you need to delete or target a newly loaded entry, read the actual id from `molAgent.getState().entries`.
 
+Load a structure that already exists on the server filesystem:
+
+```js
+const entry = await molAgent.loadServerFile("/home/user/project/structure.cif");
+molAgent.getState().entries.find(e => e.name === entry.name);
+```
+
+`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. They are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
+
 Remove an entry from the current viewer session:
 
 ```js
@@ -664,7 +673,16 @@ await molAgent.renameEntry(entry.name, "1FJS reference");
 
 `molAgent.setEntryTitle(...)` is an alias. Prefer the unique `entry.name` from `molAgent.getState().entries` when two entries share the same title; title lookup is allowed but selects the first match.
 
-Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, and `maegz`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
+Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, `maegz`, and Maestro `psazip`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
+
+Maestro `psazip` inputs are converted server-side as a combined structure + surface entry. The server extracts the embedded structure, converts MAE/MAEGZ content to PDB when needed, parses the `.vis` HDF5 surface mesh, chunks the mesh below the 3Dmol custom-shape index limit, and persists the surface data in the entry. If the PSAZIP includes Bioluminate patch pickle data, the second vertex scalar array is treated as the positive/negative electrostatic field and converted to per-vertex red-white-blue colors using the embedded positive/negative color settings. No Schrodinger runtime is required, but the server Python environment must provide `h5py` and `numpy`. Agents can load these files with either:
+
+```js
+await molAgent.loadUrl("path/to/surface.psazip", "psazip", "surface", "Surface", "");
+await molAgent.loadServerFile("/path/on/server/surface.psazip");
+```
+
+Loaded PSAZIP surface shapes follow the entry display state: hiding or deleting the entry hides or removes its surface together with the molecular model.
 
 Loading a structure clears current selection/style rules for the viewer, rebuilds Entries/Hierarchy, and starts or reuses background interaction indexing for displayed entries. The normal loader preserves hydrogens because hydrogen-bond indexing depends on explicit hydrogen atoms.
 
@@ -864,6 +882,36 @@ PY
 
 `/api/session-entry` also treats `name` as an entry id. If the id already exists, the server appends a unique suffix and returns the stored `entry` in the response. To intentionally replace an existing id, send `{"entry": entry, "replace": true}` or add `?replace=1`.
 
+Load one existing server-side structure file without manually reading the file in the agent process:
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+body = json.dumps({"path": "/home/user/project/structure.cif"}).encode()
+req = urllib.request.Request(
+    f"{base_url}/api/server-file-load",
+    data=body,
+    method="POST",
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+List allowed server directories and supported structure files:
+
+```bash
+python3 - <<'PY'
+import os, urllib.parse, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+path = urllib.parse.quote("/home/user/project")
+print(urllib.request.urlopen(f"{base_url}/api/server-files?path={path}").read().decode())
+PY
+```
+
 Rename an entry title from an external agent:
 
 ```bash
@@ -938,7 +986,7 @@ PY
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/server-files`, `/api/server-file-load`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Static serving intentionally blocks dot-directories, `.viewer_state`, git metadata, logs, pid files, server source, and project memory/docs. Do not bypass this with a generic static server for normal use.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

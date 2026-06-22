@@ -1,5 +1,10 @@
 import gzip
+import io
+import json
+import pickle
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 import sys
 
@@ -71,6 +76,55 @@ class MaestroConversionTests(unittest.TestCase):
         entry, meta = server.convert_structure_bytes(gzip.compress(SIMPLE_MAE), "uploaded", "", "Uploaded", "")
         self.assertEqual(entry["fmt"], "pdb")
         self.assertEqual(meta["sourceFormat"], "maegz")
+
+    def test_server_converter_loads_psazip_surface_mesh(self):
+        try:
+            import h5py
+            import numpy as np
+        except ImportError:
+            self.skipTest("h5py/numpy unavailable")
+
+        with tempfile.NamedTemporaryFile(suffix=".vis") as fh:
+            with h5py.File(fh.name, "w") as h5:
+                group = h5.create_group("Protein Patches/Protein Patches")
+                group.attrs["Dataset Name"] = b"Protein Patches"
+                group.attrs["Transparency"] = 20
+                group.create_dataset("Coordinates of Vertices", data=np.array([
+                    0.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0,
+                ], dtype=">f8"))
+                group.create_dataset("Normals of Vertices", data=np.array([
+                    0.0, 0.0, 1.0,
+                    0.0, 0.0, 1.0,
+                    0.0, 0.0, 1.0,
+                    0.0, 1.0, 0.0,
+                ], dtype=">f8"))
+                group.create_dataset("Patches", data=np.array([0, 1, 2, 0, 2, 3], dtype=">i4"))
+            vis_payload = Path(fh.name).read_bytes()
+
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as zf:
+            zf.writestr("basename.maegz", gzip.compress(SIMPLE_MAE))
+            zf.writestr("basename.vis", vis_payload)
+            zf.writestr("basename.pkl", pickle.dumps((
+                np.array([0.0, 0.1, 0.2, 0.3], dtype=float),
+                np.array([-0.2, 0.0, 0.2, -0.1], dtype=float),
+            ), protocol=2))
+            zf.writestr("basename_panel_state.json", json.dumps({"settings_trans_front": 25}))
+        entry, meta = server.convert_structure_bytes(payload.getvalue(), "surface.psazip", "psazip", "Surface", "")
+        self.assertEqual(entry["fmt"], "pdb")
+        self.assertEqual(entry["title"], "Surface")
+        self.assertEqual(meta["sourceFormat"], "psazip")
+        self.assertEqual(meta["surfaceCount"], 1)
+        self.assertEqual(entry["surfaces"][0]["vertexCount"], 4)
+        self.assertEqual(entry["surfaces"][0]["faceCount"], 2)
+        self.assertEqual(entry["surfaces"][0]["opacity"], 0.75)
+        self.assertEqual(entry["surfaces"][0]["colorField"], "electrostatic")
+        self.assertEqual(entry["surfaces"][0]["valueRange"], [-0.2, 0.2])
+        self.assertEqual(len(entry["surfaces"][0]["chunks"][0]["faces"]), 6)
+        self.assertEqual(len(entry["surfaces"][0]["chunks"][0]["colors"]), 12)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `maestro_convert.py`: pure-Python MAE/MAEGZ to PDB converter. Normal file loading must not depend on Schrodinger being installed.
 - `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: shader-backed 3Dmol scene-mesh wide-line renderer. It keeps static segment/cap geometry in the scene and expands screen-pixel width in the vertex shader with depth/zoom scaling, screen-pixel clamps, and depth testing.
-- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
+- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/server-files`, `/api/server-file-load`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/`: ignored local-only structures. Do not commit molecular structure files to the public repository.
@@ -43,12 +43,13 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 
 ## Must-Have Behavior
 
-- Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
+- Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `Open server`, `molAgent.loadUrl(...)`, `molAgent.loadServerFile(...)`, `/api/server-file-load`, or `/api/session-entry`.
 - Global representation choices, mouse actions, modifier rotation rules, configurable workspace key bindings, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed. If the preference file is missing, the app must use the built-in defaults and create a new server-side preferences file.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Each load must create a unique internal entry id (`entry.name`) while preserving the original filename or requested display name as `entry.title`. Loading the same filename again later must add another entry, not replace the existing one.
 - Entry titles are user-editable display labels. Double-clicking an Entries title edits `entry.title` only; it must not change `entry.name`, cached model identity, selection scopes, or included-entry state. Agents can call `molAgent.renameEntry(...)` / `molAgent.setEntryTitle(...)`.
-- Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, and MAEGZ. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing.
+- Supported normal load formats include PDB, CIF/mmCIF, SDF/MOL, MOL2, XYZ, MAE, MAEGZ, and Maestro PSAZIP. MAE/MAEGZ are converted through `/api/convert-structure` into PDB text before 3Dmol parsing. PSAZIP files are loaded as a combined structure + precomputed Maestro `.vis` surface entry; the surface mesh is parsed server-side with `h5py`/`numpy`, chunked below the 3Dmol custom-shape index limit, and rendered as entry-owned 3Dmol custom shapes. When Bioluminate patch pickle data is present, color the surface by the positive/negative electrostatic scalar array using the embedded red/blue color settings and a white zero point. This must not require a Schrodinger runtime.
+- `Open server` browses server-side files under configured `--file-root` directories only. It should list directories and supported molecular structure files, omit hidden path segments, reject paths outside the allowed roots, and load selected files through `/api/server-file-load` as new unique entries without editing the original source file.
 - Loading a new structure adds a unique entry and includes it in the displayed set. Existing included entries remain visible until their Entries `In` checkbox is turned off.
 - Entry rows do not have an active-entry state. The `In` checkbox controls display inclusion, double-clicking the title edits only the display title, and multiple entries must be displayable at the same time.
 - In the Hierarchy panel, entry and section headers select all descendant atoms when clicked. Only the left disclosure triangle collapses or expands that header.
@@ -149,6 +150,7 @@ molAgent.reloadVisualConfig();
 molAgent.getInteractionIndex();
 molAgent.rebuildInteractionIndex();
 molAgent.loadUrl(url, fmt, name, title, pdbId);
+molAgent.loadServerFile(path);
 molAgent.renameEntry(nameOrTitleOrEntry, newTitle);
 molAgent.setEntryTitle(nameOrTitleOrEntry, newTitle);
 molAgent.removeEntry(nameOrTitleOrPdbId);
@@ -170,7 +172,9 @@ PUT /api/session-state              # update includedEntries only
 GET /api/session-meta               # lightweight revision for open-client sync
 POST /api/agent-actions             # append one structured browser action for open clients
 DELETE /api/agent-actions           # clear pending action log
-POST /api/convert-structure         # raw MAE/MAEGZ bytes to a PDB entry JSON payload
+POST /api/convert-structure         # raw MAE/MAEGZ/PSAZIP bytes to an entry JSON payload
+GET /api/server-files               # list allowed server directories and supported structure files
+POST /api/server-file-load          # load one allowed server-side structure file into the session
 ```
 
 `PUT /api/session-state` preserves explicit empty display state:
