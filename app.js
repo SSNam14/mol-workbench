@@ -94,6 +94,8 @@ function boot(){
   let hierarchyRows = [];
   let hierarchySelectionAnchorKey = '';
   let hierarchyContextMenu = null;
+  const undoStack = [];
+  const MAX_UNDO_STACK = 20;
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
@@ -496,6 +498,7 @@ function boot(){
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
     return session;
@@ -504,6 +507,7 @@ function boot(){
     disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
   }
@@ -2134,7 +2138,8 @@ function boot(){
     return true;
   }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); return focus(state.selectionSel); }
-  function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  function isFocusHotkey(e){ return !!(e&&!(e.ctrlKey||e.metaKey||e.altKey)&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  function isUndoHotkey(e){ return !!(e&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
   const workspaceCycleState={ligand:'',chain:''};
   function workspaceCycleGroups(kind){
     const out=[],shown=includedEntries();
@@ -2928,29 +2933,94 @@ function boot(){
     });
     return out;
   }
+  function pushUndoAction(action){
+    if(!action||!action.type)return;
+    undoStack.push(action);
+    while(undoStack.length>MAX_UNDO_STACK)undoStack.shift();
+  }
+  function clearUndoStack(){ undoStack.splice(0,undoStack.length); }
+  function selectorForEntrySourceSerialItems(items){
+    const parts=[];
+    (items||[]).forEach(item=>{
+      const entryName=normText(item&&item.entryName), serials=normalizeDeletedSourceSerials(item&&item.serials);
+      if(entryName&&serials.length)parts.push({_entryName:entryName,_sourceSerial:serials});
+    });
+    if(!parts.length)return null;
+    return parts.length===1?parts[0]:{or:parts};
+  }
   async function deleteSelectedAtoms(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
-    const byEntry=selectedSourceSerialsByEntry(selected), updated=[];
+    const byEntry=selectedSourceSerialsByEntry(selected), updated=[], undoEntries=[];
     byEntry.forEach((serials,entryName)=>{
       const entry=entries.find(e=>e.name===entryName);
       if(!entry)return;
       const merged=new Set(normalizeDeletedSourceSerials(entry.deletedSourceSerials));
-      serials.forEach(serial=>merged.add(serial));
+      const added=[];
+      serials.forEach(serial=>{
+        if(merged.has(serial))return;
+        merged.add(serial);
+        added.push(serial);
+      });
+      if(!added.length)return;
       entry.deletedSourceSerials=normalizeDeletedSourceSerials(Array.from(merged));
       updated.push(entry);
+      undoEntries.push({entryName:entry.name,serials:normalizeDeletedSourceSerials(added)});
     });
     if(!updated.length){ setStatus('No deletable selected atoms'); return; }
+    pushUndoAction({type:'delete-atoms',entries:undoEntries});
+    const deletedCount=undoEntries.reduce((sum,item)=>sum+item.serials.length,0);
     resetSelectionState();
     updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
     rebuildDisplayedEntries({preserveView:true,zoom:false});
-    setStatus('Deleted from hierarchy: '+selected.length.toLocaleString()+' atoms');
+    setStatus('Deleted selected atoms: '+deletedCount.toLocaleString());
     let savedAll=true;
     for(const entry of updated){
       const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
       if(!saved)savedAll=false;
     }
     if(!savedAll)setStatus('Deleted locally but not saved on server.');
+  }
+  async function undoDeletedAtoms(action){
+    const updated=[], restoredItems=[];
+    (action&&action.entries||[]).forEach(item=>{
+      const entry=entries.find(e=>e.name===item.entryName);
+      if(!entry)return;
+      const restoreSet=new Set(normalizeDeletedSourceSerials(item.serials));
+      if(!restoreSet.size)return;
+      const prev=normalizeDeletedSourceSerials(entry.deletedSourceSerials), next=[], restored=[];
+      prev.forEach(serial=>{
+        if(restoreSet.has(serial))restored.push(serial);
+        else next.push(serial);
+      });
+      if(!restored.length)return;
+      entry.deletedSourceSerials=normalizeDeletedSourceSerials(next);
+      updated.push(entry);
+      restoredItems.push({entryName:entry.name,serials:normalizeDeletedSourceSerials(restored)});
+    });
+    if(!updated.length)return false;
+    resetSelectionState();
+    updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    const restoredSelector=selectorForEntrySourceSerialItems(restoredItems);
+    if(restoredSelector)setSelection(restoredSelector,{source:'undo-delete'});
+    const restoredCount=restoredItems.reduce((sum,item)=>sum+item.serials.length,0);
+    let savedAll=true;
+    for(const entry of updated){
+      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+      if(!saved)savedAll=false;
+    }
+    if(!savedAll)setStatus('Undo restored locally but not saved on server.');
+    else setStatus('Undo restored deleted atoms: '+restoredCount.toLocaleString());
+    return true;
+  }
+  async function undoLastAction(){
+    while(undoStack.length){
+      const action=undoStack.pop();
+      if(action&&action.type==='delete-atoms'&&await undoDeletedAtoms(action))return true;
+    }
+    setStatus('Nothing to undo');
+    return false;
   }
   function ensureHierarchyContextMenu(){
     if(hierarchyContextMenu)return hierarchyContextMenu;
@@ -4759,14 +4829,22 @@ function installFrameSyncedMotion(targetViewer){
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
     const tag=ae&&ae.tagName;
+    const isEditable=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||!!(ae&&ae.isContentEditable);
+    if(isUndoHotkey(e)){
+      if(isEditable)return;
+      if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
+      e.preventDefault();
+      if(!e.repeat)undoLastAction().catch(err=>setStatus('Undo failed: '+(err&&err.message||err)));
+      return;
+    }
     if(isFocusHotkey(e)){
       if(ae&&ae.closest&&ae.closest('#findGo,#findPrev,#findNext,#findClear,#findType'))return;
       if(ae&&ae.id==='findInput')e.preventDefault();
-      else if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+      else if(isEditable)return;
       if(!e.repeat)toggleFocus();
       return;
     }
-    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(isEditable)return;
     if(e.key==='Delete'){
       if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
       e.preventDefault();
