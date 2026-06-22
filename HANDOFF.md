@@ -77,7 +77,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - right drag rotates
   - middle-button drag pans
   - wheel zooms
-- Holding `Ctrl` while starting a custom mouse `rotate` drag constrains rotation to the dominant screen-space drag axis for that drag. This applies to whichever mouse button is currently assigned to `rotate`.
+- Modifier rotation applies to whichever mouse button is currently assigned to `rotate`: `Ctrl` + left/right drag rolls around the screen Z axis, and `Shift` + left/right drag rotates around the screen Y axis.
 - Custom mouse actions are configurable from the Preference panel and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
 - Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.

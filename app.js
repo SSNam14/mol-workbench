@@ -4447,20 +4447,21 @@ function installFrameSyncedMotion(targetViewer){
     const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e);
   }
   function bindCustomMouseActions(){
-    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0,constrainRotate:false,rotationAxis:null}; const tol=3;
-    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0;drag.constrainRotate=false;drag.rotationAxis=null; hideDragSelectBox(); }
+    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0,rotateAxis:null}; const tol=3;
+    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0;drag.rotateAxis=null; hideDragSelectBox(); }
     resetMouseDrag=resetDrag;
-    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.constrainRotate=action==='rotate'&&!!e.ctrlKey; drag.rotationAxis=null; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
-    function constrainedRotateRatios(p,d){
-      if(!drag.constrainRotate)return d;
-      const dx=p.x-drag.startX,dy=p.y-drag.startY;
-      if(!drag.rotationAxis){
-        if(Math.hypot(dx,dy)<=tol)return null;
-        drag.rotationAxis=Math.abs(dx)>=Math.abs(dy)?'x':'y';
-      }
-      return Object.assign({},d,drag.rotationAxis==='x'?{y:0}:{x:0});
+    function rotateAxisForEvent(e){ if(e.ctrlKey)return 'z'; if(e.shiftKey)return 'y'; return null; }
+    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.rotateAxis=action==='rotate'?rotateAxisForEvent(e):null; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
+    function rotateAxisFromDrag(d){
+      if(!drag.rotateAxis||!viewer||!drag.startQuaternion||!viewer.rotationGroup)return false;
+      const angle=d.x*Math.PI*2, s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
+      if(drag.rotateAxis==='z')q.set(0,0,s,c);
+      else q.set(0,s,0,c);
+      q.multiply(drag.startQuaternion);
+      showViewer();
+      return true;
     }
-    function rotateFromDrag(p){ if(!viewer||!drag.startQuaternion||!viewer.rotationGroup||!viewer.dq)return; let d=dragRatios(p,drag); d=constrainedRotateRatios(p,d); if(!d)return; const dist=Math.hypot(d.x,d.y); if(!dist)return; const f=Math.sin(dist*Math.PI)/dist; viewer.dq.x=Math.cos(dist*Math.PI);viewer.dq.y=0;viewer.dq.z=f*d.x;viewer.dq.w=-f*d.y; viewer.rotationGroup.quaternion.set(1,0,0,0); viewer.rotationGroup.quaternion.multiply(viewer.dq); viewer.rotationGroup.quaternion.multiply(drag.startQuaternion); showViewer(); }
+    function rotateFromDrag(p){ if(!viewer||!drag.startQuaternion||!viewer.rotationGroup||!viewer.dq)return; const d=dragRatios(p,drag); if(rotateAxisFromDrag(d))return; const dist=Math.hypot(d.x,d.y); if(!dist)return; const f=Math.sin(dist*Math.PI)/dist; viewer.dq.x=Math.cos(dist*Math.PI);viewer.dq.y=0;viewer.dq.z=f*d.x;viewer.dq.w=-f*d.y; viewer.rotationGroup.quaternion.set(1,0,0,0); viewer.rotationGroup.quaternion.multiply(viewer.dq); viewer.rotationGroup.quaternion.multiply(drag.startQuaternion); showViewer(); }
     function panFromDrag(p){ if(!viewer||!drag.startModelPos||!viewer.modelGroup||!viewer.screenOffsetToModel)return; const d=dragRatios(p,drag),off=viewer.screenOffsetToModel(d.xRatio*(p.x-drag.startX),d.yRatio*(p.y-drag.startY)); viewer.modelGroup.position.addVectors(drag.startModelPos,off); showViewer(); }
     function zoomFromDrag(p){ if(!viewer||!viewer.rotationGroup)return; const d=dragRatios(p,drag); let scale=0.85*(viewer.CAMERA_Z-viewer.rotationGroup.position.z); if(scale<80)scale=80; viewer.rotationGroup.position.z=drag.startZoom+d.y*scale; if(viewer.adjustZoomToLimits)viewer.rotationGroup.position.z=viewer.adjustZoomToLimits(viewer.rotationGroup.position.z); showViewer(); }
     function continueDrag(e){ if(!drag.mode)return; if(!isCustomMousePreset()){resetDrag();return;} stopMouseEvent(e); if(state.locked)return; const p=eventPagePoint(e); if(!p)return; const moved=Math.hypot(p.x-drag.startX,p.y-drag.startY)>tol; drag.moved=drag.moved||moved; if(drag.mode==='none')return; if(drag.mode==='select'&&drag.moved){ updateDragSelectBox({x:drag.startX,y:drag.startY},p); return; } if(drag.mode==='rotate')rotateFromDrag(p); else if(drag.mode==='pan')panFromDrag(p); else if(drag.mode==='zoom')zoomFromDrag(p); }
