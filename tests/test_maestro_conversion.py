@@ -45,7 +45,7 @@ f_m_ct {
   i_m_to
   i_m_order
   :::
-  1 1 2 1
+  1 1 2 2
  }
 }
 """
@@ -56,6 +56,7 @@ class MaestroConversionTests(unittest.TestCase):
         pdb, meta = maestro_convert.maestro_bytes_to_pdb(SIMPLE_MAE, "simple.mae", "mae")
         self.assertEqual(meta["atomCount"], 2)
         self.assertEqual(meta["bondCount"], 1)
+        self.assertEqual(meta["bondOrders"], [{"a": 1, "b": 2, "order": 2}])
         self.assertIn("ATOM      1  CA  ALA A   7", pdb)
         self.assertIn("ATOM      2  O   ALA A   7", pdb)
         self.assertIn("CONECT    1    2", pdb)
@@ -70,6 +71,7 @@ class MaestroConversionTests(unittest.TestCase):
         self.assertEqual(entry["fmt"], "pdb")
         self.assertEqual(entry["name"], "simple.pdb")
         self.assertEqual(entry["title"], "Simple")
+        self.assertEqual(entry["bondOrders"], [{"a": "1", "b": "2", "order": 2}])
         self.assertEqual(meta["sourceFormat"], "mae")
 
     def test_server_converter_detects_gzip_payload(self):

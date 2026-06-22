@@ -30,6 +30,7 @@ function boot(){
   const elemColors = {H:'#FFFFFF',B:'#2EFF2E',C:'#808080',N:'#2E2EFF',O:'#FF2E2E',F:'#6BFFB5',SI:'#FF962E',P:'#CC0066',S:'#FFFF6B',CL:'#008C00',BR:'#8C0000',I:'#FF2EFF',LI:'#FF6B6B',NA:'#FF6B6B',K:'#FF6B6B',RB:'#FF6B6B',CS:'#FF6B6B',FR:'#FF6B6B',BE:'#FF6BFF',MG:'#FF6BFF',CA:'#FF6BFF',SR:'#FF6BFF',BA:'#FF6BFF',RA:'#FF6BFF',HE:'#FF6BB5',NE:'#FF6BB5',AR:'#FF6BB5',KR:'#FF6BB5',XE:'#FF6BB5',RN:'#FF6BB5',AL:'#FFCB2E',GA:'#FFCB2E',GE:'#FFCB2E',IN:'#FFCB2E',SN:'#FFCB2E',SB:'#FFCB2E',TL:'#FFCB2E',PB:'#FFCB2E',BI:'#FFCB2E',PO:'#FFCB2E',AS:'#FF906B',SE:'#FF906B',TE:'#FF906B',AT:'#FF906B',SC:'#E6E6E6',TI:'#BFC2C7',V:'#A6A6AB',CR:'#8A99C7',MN:'#9C7AC7',FE:'#E54D00',CO:'#4D33CC',NI:'#00CC66',CU:'#CC4D1A',ZN:'#7D80B0',Y:'#94FFFF',ZR:'#94E0E0',NB:'#73C2C9',MO:'#54B5B5',TC:'#3B9E9E',RU:'#248F8F',RH:'#0A7D8C',PD:'#006985',AG:'#C0C0C0',CD:'#FFD98F',HF:'#4DC2FF',TA:'#4DA6FF',W:'#2194D6',RE:'#267DAB',OS:'#266696',IR:'#175487',PT:'#D0D0E0',AU:'#FFD123',HG:'#B8B8D0',LA:'#70D4FF',CE:'#FFFFC7',PR:'#D9FFC7',ND:'#C7FFC7',PM:'#A3FFC7',SM:'#8FFFC7',EU:'#61FFC7',GD:'#45FFC7',TB:'#30FFC7',DY:'#1FFFC7',HO:'#00FF9C',ER:'#00E675',TM:'#00D452',YB:'#00BF38',LU:'#00AB24',AC:'#70ABFA',TH:'#00BAFF',PA:'#00A1FF',U:'#008FFF',NP:'#0080FF',PU:'#006BFF',AM:'#545CF2',CM:'#785CE3',BK:'#8A4FE3',CF:'#A136D4',ES:'#B31FD4',FM:'#B31FBA',MD:'#B30DA6',NO:'#B30DA6',LR:'#C70066',RF:'#404040',DB:'#404040',SG:'#404040'};
   const elementColorKeys = Object.keys(elemColors);
   const lineWidths = {fallback:2,selection:2,protein:2,ligand:2,tube:2,interaction:2};
+  const BOND_ORDER_LINE_SEPARATION = 0.14;
   const DEFAULT_VISUAL_CONFIG = {
     cpk:{stickRadius:{},sphereScale:{},vdwRadii:{}}
   };
@@ -166,6 +167,30 @@ function boot(){
     });
     return Array.from(seen).sort(compareSourceSerialText);
   }
+  function normalizeEntryBondOrders(value){
+    if(!Array.isArray(value))return [];
+    const byPair=new Map();
+    value.forEach(item=>{
+      let a,b,order;
+      if(Array.isArray(item)){
+        a=item[0]; b=item[1]; order=item[2];
+      }else if(item&&typeof item==='object'){
+        a=item.a; b=item.b; order=item.order;
+      }else return;
+      const at=sourceSerialText(a),bt=sourceSerialText(b);
+      if(!at||!bt||at===bt)return;
+      let ov=Number(order);
+      if(!Number.isFinite(ov)||ov<=0)ov=1;
+      if(Math.abs(ov-Math.round(ov))<1e-6)ov=Math.round(ov);
+      const pair=compareSourceSerialText(at,bt)<=0?[at,bt]:[bt,at];
+      const key=pair[0]+'\u0001'+pair[1],prev=byPair.get(key);
+      byPair.set(key,{a:pair[0],b:pair[1],order:prev?Math.max(prev.order,ov):ov});
+    });
+    return Array.from(byPair.values()).sort((x,y)=>{
+      const c=compareSourceSerialText(x.a,y.a);
+      return c||compareSourceSerialText(x.b,y.b);
+    });
+  }
   function fnv1aHex(text){
     let h=0x811c9dc5;
     for(let i=0;i<text.length;i++){
@@ -177,7 +202,8 @@ function boot(){
   function structureCacheKey(e){
     const data=String(e&&e.data||''),fmt=normText(e&&e.fmt||'pdb').toLowerCase();
     const deleted=normalizeDeletedSourceSerials(e&&e.deletedSourceSerials).join(',');
-    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data)+'-d'+deleted.length.toString(36)+'-'+fnv1aHex(deleted);
+    const bondOrders=JSON.stringify(normalizeEntryBondOrders(e&&e.bondOrders));
+    return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data)+'-d'+deleted.length.toString(36)+'-'+fnv1aHex(deleted)+'-bo'+bondOrders.length.toString(36)+'-'+fnv1aHex(bondOrders);
   }
   function surfaceDataSignature(e){
     const surfaces=Array.isArray(e&&e.surfaces)?e.surfaces:[];
@@ -445,6 +471,8 @@ function boot(){
     const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
     const surfaces=normalizeEntrySurfaces(e.surfaces);
     if(surfaces.length)out.surfaces=surfaces;
+    const bondOrders=normalizeEntryBondOrders(e.bondOrders);
+    if(bondOrders.length)out.bondOrders=bondOrders;
     const deleted=normalizeDeletedSourceSerials(e.deletedSourceSerials);
     if(deleted.length)out.deletedSourceSerials=deleted;
     return out;
@@ -763,6 +791,7 @@ function boot(){
   function point(a){ return {x:a.x,y:a.y,z:a.z}; }
   function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z; return dx*dx+dy*dy+dz*dz; }
   function distance(a,b){ return Math.sqrt(dist2(a,b)); }
+  function vecAdd(a,b){ return {x:a.x+b.x,y:a.y+b.y,z:a.z+b.z}; }
   function vecSub(a,b){ return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z}; }
   function vecScale(a,s){ return {x:a.x*s,y:a.y*s,z:a.z*s}; }
   function vecDot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
@@ -1560,7 +1589,7 @@ function boot(){
   }
   function drawSelectionBond(shape,a,b,rep,o){
     const color=o.color||'#fdd835',opacity=o.opacity==null?1:Number(o.opacity);
-    if(rep==='line')shape.addLine({start:point(a),end:point(b),color,opacity,linewidth:o.linewidth||lineWidths.fallback});
+    if(rep==='line')bondOrderLineSegments(a,b).forEach(seg=>shape.addLine({start:seg.start,end:seg.end,color,opacity,linewidth:o.linewidth||lineWidths.fallback}));
     else shape.addCylinder({start:point(a),end:point(b),radius:rep==='tube'?(o.thickness||0.12):(o.radius||0.06),color,opacity,fromCap:1,toCap:1});
   }
   function selectionStyleSpec(rep,o){
@@ -1610,6 +1639,69 @@ function boot(){
     return {bonds,looseAtoms:selected.filter(a=>a.serial==null||!bondedSerials.has(a.serial))};
   }
   function midpoint(a,b){ return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2}; }
+  function atomForBondIndex(a,idx){
+    return atomByEntryIndex.get(atomEntryIndexKey(a&&a._entryName,idx))||atomByIndex.get(idx)||null;
+  }
+  function matchingBondIndex(a,b){
+    const bonds=a&&Array.isArray(a.bonds)?a.bonds:[];
+    for(let i=0;i<bonds.length;i++){
+      if(String(bonds[i])===String(b&&b.index))return i;
+    }
+    return -1;
+  }
+  function rawBondOrderBetween(a,b){
+    let i=matchingBondIndex(a,b);
+    if(i>=0&&Array.isArray(a.bondOrder)&&a.bondOrder[i]!=null)return Number(a.bondOrder[i]);
+    i=matchingBondIndex(b,a);
+    if(i>=0&&Array.isArray(b.bondOrder)&&b.bondOrder[i]!=null)return Number(b.bondOrder[i]);
+    return 1;
+  }
+  function bondOrderLineCount(a,b){
+    const order=rawBondOrderBetween(a,b);
+    if(!Number.isFinite(order))return 1;
+    if(order>=2.75&&order<3.5)return 3;
+    if(order>=1.5&&order<2.75)return 2;
+    return 1;
+  }
+  function projectedNeighborDirection(origin,exclude,axis){
+    const bonds=origin&&Array.isArray(origin.bonds)?origin.bonds:[];
+    for(let i=0;i<bonds.length;i++){
+      const n=atomForBondIndex(origin,bonds[i]);
+      if(!n||String(n.index)===String(exclude&&exclude.index))continue;
+      const raw=vecSub(point(n),point(origin));
+      const projected=vecSub(raw,vecScale(axis,vecDot(raw,axis)));
+      const unit=vecNormalize(projected);
+      if(unit)return unit;
+    }
+    return null;
+  }
+  function fallbackBondOffsetDirection(axis){
+    const candidates=[{x:1,y:0,z:0},{x:0,y:1,z:0},{x:0,y:0,z:1}];
+    let best=candidates[0],bestDot=Infinity;
+    candidates.forEach(c=>{
+      const d=Math.abs(vecDot(axis,c));
+      if(d<bestDot){ bestDot=d; best=c; }
+    });
+    return vecNormalize(vecSub(best,vecScale(axis,vecDot(best,axis))))||{x:0,y:1,z:0};
+  }
+  function bondOrderOffsetDirection(a,b,axis){
+    return projectedNeighborDirection(a,b,axis)||projectedNeighborDirection(b,a,axis)||fallbackBondOffsetDirection(axis);
+  }
+  function bondOrderLineSegments(a,b){
+    const count=bondOrderLineCount(a,b),pa=point(a),pb=point(b);
+    if(count<=1)return [{start:pa,end:pb}];
+    const axis=vecNormalize(vecSub(pb,pa));
+    if(!axis)return [{start:pa,end:pb}];
+    const offsetDir=bondOrderOffsetDirection(a,b,axis);
+    const offsets=count===2?[-0.5,0.5]:[-1,0,1];
+    return offsets.map(v=>{
+      const delta=vecScale(offsetDir,v*BOND_ORDER_LINE_SEPARATION);
+      return {start:vecAdd(pa,delta),end:vecAdd(pb,delta)};
+    });
+  }
+  function pushWideSegment(lines,start,end,color,width,opacity,dashed,key){
+    lines.push({start,end,color,width,opacity,dashed:!!dashed,key});
+  }
   function lineColorForAtom(a,o,defaultColorFn){
     if(o.color)return o.color;
     if(o.colorfunc){ try{ return o.colorfunc(a); }catch(e){} }
@@ -1621,13 +1713,15 @@ function boot(){
     if(skipBondKeys&&skipBondKeys.has(key))return;
     const opacity=o.opacity==null?1:Number(o.opacity),width=Math.max(1,Number(o.linewidth||widthDefault||lineWidths.fallback));
     const ca=lineColorForAtom(a,o,defaultColorFn),cb=lineColorForAtom(b,o,defaultColorFn);
-    if(ca===cb){
-      lines.push({start:point(a),end:point(b),color:ca,width,opacity,dashed:!!dashed,key});
-      return;
-    }
-    const mid=midpoint(a,b);
-    lines.push({start:point(a),end:mid,color:ca,width,opacity,dashed:!!dashed,key});
-    lines.push({start:mid,end:point(b),color:cb,width,opacity,dashed:!!dashed,key});
+    bondOrderLineSegments(a,b).forEach(seg=>{
+      if(ca===cb){
+        pushWideSegment(lines,seg.start,seg.end,ca,width,opacity,dashed,key);
+        return;
+      }
+      const mid=midpoint(seg.start,seg.end);
+      pushWideSegment(lines,seg.start,mid,ca,width,opacity,dashed,key);
+      pushWideSegment(lines,mid,seg.end,cb,width,opacity,dashed,key);
+    });
   }
   function appendWideAtomLines(lines,points,selected,o,defaultColorFn,widthDefault,dashed,skipBondKeys){
     const data=selectionBondData(selected);
@@ -1694,7 +1788,7 @@ function boot(){
       if(lineKeys.has(key))return;
       lineKeys.add(key);
       if(keysOut)keysOut.add(key);
-      lines.push({start:point(a),end:point(b),color,width,opacity,dashed:false});
+      bondOrderLineSegments(a,b).forEach(seg=>lines.push({start:seg.start,end:seg.end,color,width,opacity,dashed:false}));
       if(a.serial!=null)covered.add(a.serial);
       if(b&&b.serial!=null)covered.add(b.serial);
     }
@@ -3781,6 +3875,29 @@ function boot(){
     });
     return serialStart;
   }
+  function applyEntryBondOrders(entry,list){
+    const bondOrders=normalizeEntryBondOrders(entry&&entry.bondOrders);
+    if(!bondOrders.length)return;
+    const bySource=new Map();
+    (list||[]).forEach(a=>{
+      const serial=sourceSerialText(atomSourceSerial(a));
+      if(serial)bySource.set(serial,a);
+    });
+    function assign(a,b,order){
+      const idx=matchingBondIndex(a,b);
+      if(idx<0)return;
+      if(!Array.isArray(a.bondOrder))a.bondOrder=[];
+      const bonds=Array.isArray(a.bonds)?a.bonds:[];
+      while(a.bondOrder.length<bonds.length)a.bondOrder.push(1);
+      a.bondOrder[idx]=order;
+    }
+    bondOrders.forEach(item=>{
+      const a=bySource.get(sourceSerialText(item.a)),b=bySource.get(sourceSerialText(item.b));
+      if(!a||!b)return;
+      assign(a,b,item.order);
+      assign(b,a,item.order);
+    });
+  }
   function surfaceOpacity(value){
     const n=Number(value);
     if(!Number.isFinite(n))return 0.85;
@@ -3906,6 +4023,7 @@ function boot(){
       throw new Error('No atoms parsed from '+entry.name+'.');
     }
     nextAtomSerial=prepareDisplayedAtoms(entry,parsed,nextAtomSerial);
+    applyEntryBondOrders(entry,parsed);
     const split=splitEntryDeletedAtoms(entry,parsed);
     const list=split.visible;
     normalizeParsedAtoms(list);

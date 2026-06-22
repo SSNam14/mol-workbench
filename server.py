@@ -276,6 +276,46 @@ def normalize_deleted_source_serials(value):
     return sorted(out, key=sort_key)
 
 
+def normalize_bond_orders(value):
+    if not isinstance(value, list):
+        return []
+    by_pair = {}
+    for item in value:
+        if isinstance(item, dict):
+            a = item.get("a")
+            b = item.get("b")
+            order = item.get("order", 1)
+        elif isinstance(item, (list, tuple)) and len(item) >= 3:
+            a, b, order = item[:3]
+        else:
+            continue
+        if a is None or b is None:
+            continue
+        a_text = str(a).strip()
+        b_text = str(b).strip()
+        if not a_text or not b_text or a_text == b_text:
+            continue
+        try:
+            order_value = float(order)
+        except (TypeError, ValueError):
+            order_value = 1.0
+        if order_value <= 0:
+            order_value = 1.0
+        if order_value.is_integer():
+            order_value = int(order_value)
+        pair = tuple(sorted((a_text, b_text), key=lambda text: (0, float(text), text) if _is_float_text(text) else (1, text)))
+        by_pair[pair] = max(order_value, by_pair.get(pair, 1))
+    return [{"a": a, "b": b, "order": order} for (a, b), order in sorted(by_pair.items(), key=lambda item: item[0])]
+
+
+def _is_float_text(value):
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
+
+
 def normalize_entry(value):
     if not isinstance(value, dict):
         return None
@@ -287,6 +327,9 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    bond_orders = normalize_bond_orders(value.get("bondOrders"))
+    if bond_orders:
+        entry["bondOrders"] = bond_orders
     surfaces = normalize_entry_surfaces(value.get("surfaces"))
     if surfaces:
         entry["surfaces"] = surfaces
@@ -387,6 +430,7 @@ def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id="
         "pdbId": pdb_id,
         "data": pdb_data,
         "fmt": "pdb",
+        "bondOrders": meta.get("bondOrders"),
     })
     if not entry:
         raise MaestroConversionError("conversion_failed")
@@ -701,6 +745,7 @@ def psazip_bytes_to_entry(payload, filename="", title=None, pdb_id=""):
         "pdbId": pdb_id,
         "data": pdb_data,
         "fmt": converted_fmt,
+        "bondOrders": meta.get("bondOrders"),
         "surfaces": surfaces,
     })
     if not entry:

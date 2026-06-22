@@ -312,7 +312,7 @@ def _parse_atom_table(columns, rows, start_serial):
 
 def _parse_bond_table(columns, rows, mae_to_serial):
     col_map = {name: idx for idx, name in enumerate(columns)}
-    bonds = set()
+    bonds = {}
     for row in rows:
         source = _to_int(_row_value(row, columns, col_map, ("i_m_from", "i_m_from_atom", "i_m_from_atom_number")))
         target = _to_int(_row_value(row, columns, col_map, ("i_m_to", "i_m_to_atom", "i_m_to_atom_number")))
@@ -322,13 +322,19 @@ def _parse_bond_table(columns, rows, mae_to_serial):
         target_serial = mae_to_serial.get(target)
         if not source_serial or not target_serial or source_serial == target_serial:
             continue
-        bonds.add(tuple(sorted((source_serial, target_serial))))
+        order = _to_float(_row_value(row, columns, col_map, ("i_m_order", "i_m_bond_order")), 1.0)
+        if order is None or order <= 0:
+            order = 1.0
+        if float(order).is_integer():
+            order = int(order)
+        key = tuple(sorted((source_serial, target_serial)))
+        bonds[key] = max(order, bonds.get(key, 1))
     return bonds
 
 
 def maestro_text_to_pdb(text):
     atoms = []
-    bonds = set()
+    bonds = {}
     current_mae_to_serial = {}
     for table_name, columns, rows in iter_maestro_tables(text):
         if table_name == "m_atom":
@@ -350,7 +356,8 @@ def maestro_text_to_pdb(text):
             chunk = targets[idx:idx + 4]
             lines.append("CONECT" + f"{_display_serial(source):5d}" + "".join(f"{_display_serial(target):5d}" for target in chunk))
     lines.append("END")
-    return "\n".join(lines) + "\n", {"atomCount": len(atoms), "bondCount": len(bonds)}
+    bond_orders = [{"a": source, "b": target, "order": order} for (source, target), order in sorted(bonds.items())]
+    return "\n".join(lines) + "\n", {"atomCount": len(atoms), "bondCount": len(bonds), "bondOrders": bond_orders}
 
 
 def maestro_bytes_to_pdb(payload, filename="", fmt=None):
