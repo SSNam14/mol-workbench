@@ -354,6 +354,51 @@ molAgent.run({
 });
 ```
 
+## Interaction Query And Display Commands
+
+Use `queryInteractions` when the user asks for already-indexed nonbonded interactions rather than raw distance neighborhoods. The command is generic: `source` and `target` use the same selector/category spec shape as `queryWithin`, and `interaction` may be `hbond`, `halogen`, `salt`, `pipi`, `pication`, `good`, `bad`, `ugly`, or `contacts`.
+
+Show only hydrogen-bond interactions touching ligand `85C`, and display the involved residues:
+
+```js
+molAgent.showInteractions({
+  interaction: "hbond",
+  source: {selector: {resn: "85C"}},
+  level: "residue",
+  representation: "line"
+});
+```
+
+Show interactions between chain A and chain C in one entry:
+
+```js
+molAgent.showInteractions({
+  interaction: ["hbond", "salt", "pication"],
+  source: {selector: {_entryName: "5HXB.pdb", chain: "A"}},
+  target: {selector: {_entryName: "5HXB.pdb", chain: "C"}},
+  level: "residue",
+  representation: "line"
+});
+```
+
+Useful fields:
+
+- `interaction` / `interactions` / `interactionTypes`: one type, an array of types, `contacts`, or omitted for all indexed types.
+- `source` / `target`: same selector/category specs as `queryWithin`. With no `target`, interactions touching `source` match. With both sides present, matching is bidirectional by default.
+- `directed`: set `true` only when side A of the indexed interaction must match `source` and side B must match `target`.
+- `level`: `atom`, `residue`, `chain`, or `entry`; default is `residue`.
+- `sides`: `both` by default. Use `source`, `target`, `partners`, or `matched` for narrower display selectors.
+- `atoms` / `atomFilter` / `resultAtoms`: `all`, `heavyPolarH`, `heavy`, `polarH`, or `hydrogen`; default is `heavyPolarH`.
+- `maxDistance` / `cutoff`: optional extra distance cutoff. Without it, hydrogen bonds and salt bridges use the viewer cutoffs.
+- `filter`: defaults to `true`, so only matching interaction guide lines are drawn while the global Interactions toggle is on.
+- `representation`, `replace`, `select`, `focus`, `only`, and `hideOthers`: behave like `showWithin`.
+
+Clear the current interaction filter:
+
+```js
+molAgent.clearInteractionFilter();
+```
+
 ## Styling Commands
 
 Add a persistent style rule:

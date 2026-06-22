@@ -149,6 +149,12 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(action["type"], "queryWithin")
         self.assertIn("id", action)
         self.assertIn("expiresAt", action)
+        action = server.normalize_agent_action({
+            "type": "showInteractions",
+            "interaction": "hbond",
+            "source": {"selector": {"resn": "85C"}},
+        }, assign_id=True)
+        self.assertEqual(action["type"], "showInteractions")
 
     def test_append_agent_action_persists_small_action_log(self):
         originals = {

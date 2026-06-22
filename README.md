@@ -52,6 +52,7 @@ await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
 const hits = molAgent.queryWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}});
 molAgent.style(hits.selector, "line");
+molAgent.showInteractions({interaction: "hbond", source: {selector: {resn: "85C"}}});
 molAgent.focus();
 molAgent.setProteinAtomStyle("line");
 molAgent.getState();

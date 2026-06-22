@@ -1108,11 +1108,278 @@ function boot(){
     setStatus('Agent within: '+result.matched.length.toLocaleString()+' atoms');
     return result;
   }
+  function normalizeInteractionTypeName(value){
+    const key=normText(value).replace(/[-_\s]/g,'').toLowerCase();
+    if(!key||key==='all'||key==='any')return null;
+    if(key==='hbond'||key==='hbonds'||key==='hydrogenbond'||key==='hydrogenbonds')return 'hbond';
+    if(key==='halogen'||key==='halogenbond'||key==='halogenbonds')return 'halogen';
+    if(key==='salt'||key==='saltbridge'||key==='saltbridges')return 'salt';
+    if(key==='pipi'||key==='pistacking'||key==='pipistacking'||key==='aromaticstacking')return 'pipi';
+    if(key==='pication'||key==='picat'||key==='cationpi'||key==='cationpicontact')return 'pication';
+    if(key==='good'||key==='goodcontact'||key==='contactgood')return 'good';
+    if(key==='bad'||key==='badcontact'||key==='contactbad')return 'bad';
+    if(key==='ugly'||key==='uglycontact'||key==='clash'||key==='contactugly')return 'ugly';
+    if(key==='contact'||key==='contacts')return 'contact';
+    throw new Error('Unsupported interaction type: '+value);
+  }
+  function interactionTypesForCommand(command){
+    const raw=command.interactionTypes||command.interactions||command.interaction||command.kind||command.kinds;
+    if(raw==null||raw==='')return null;
+    const values=Array.isArray(raw)?raw:[raw],out=new Set();
+    values.forEach(v=>{
+      const t=normalizeInteractionTypeName(v);
+      if(!t)return;
+      if(t==='contact'){ out.add('good'); out.add('bad'); out.add('ugly'); }
+      else out.add(t);
+    });
+    return out.size?out:null;
+  }
+  function interactionTypeEntries(data,requestedTypes){
+    const out=[];
+    function add(type,items,group){
+      if(requestedTypes&& !requestedTypes.has(type))return;
+      out.push({type,items:items||[],group});
+    }
+    data=data||{};
+    add('hbond',data.hbond,'noncov');
+    add('halogen',data.halogen,'noncov');
+    add('salt',data.salt,'noncov');
+    add('pipi',data.pipi,'pi');
+    add('pication',data.pication,'pi');
+    const c=data.contacts||{};
+    add('good',c.good,'contact');
+    add('bad',c.bad,'contact');
+    add('ugly',c.ugly,'contact');
+    return out;
+  }
+  function interactionPassesDistance(type,item,command){
+    const raw=command&&(command.maxDistance!=null?command.maxDistance:(command.cutoff!=null?command.cutoff:command.distance));
+    if(raw!=null&&raw!==''){
+      const cutoff=Number(raw);
+      if(!Number.isFinite(cutoff)||cutoff<=0)throw new Error('Interaction cutoff must be a positive number.');
+      return Number(item&&item.distance)<=cutoff;
+    }
+    if(type==='hbond')return Number(item&&item.distance)<=state.hbondCutoff;
+    if(type==='salt')return Number(item&&item.distance)<=state.saltCutoff;
+    return true;
+  }
+  function interactionItemKey(type,item,record){
+    item=item||{};
+    return [
+      record&&record.entryName||'',
+      type||'',
+      item.a==null?'':item.a,
+      item.b==null?'':item.b,
+      item.h==null?'':item.h,
+      item.ringAtom==null?'':item.ringAtom,
+      item.cat==null?'':item.cat,
+      item.ringAtomA==null?'':item.ringAtomA,
+      item.ringAtomB==null?'':item.ringAtomB
+    ].join('\u0001');
+  }
+  function interactionAtomGroups(type,item,record){
+    function atom(serial){ return atomForInteractionSerial(serial,record); }
+    function clean(list){ return agentUniqueAtoms((list||[]).filter(Boolean)); }
+    let sideA=[],sideB=[];
+    if(type==='hbond'){
+      sideA=clean([atom(item&&item.a),atom(item&&item.h)]);
+      sideB=clean([atom(item&&item.b)]);
+    }else if(type==='pication'){
+      sideA=clean([atom(item&&item.ringAtom)]);
+      sideB=clean([atom(item&&item.cat)]);
+    }else if(type==='pipi'){
+      sideA=clean([atom(item&&item.ringAtomA)]);
+      sideB=clean([atom(item&&item.ringAtomB)]);
+    }else{
+      sideA=clean([atom(item&&item.a)]);
+      sideB=clean([atom(item&&item.b)]);
+    }
+    return {sideA,sideB,involved:agentUniqueAtoms(sideA.concat(sideB))};
+  }
+  function interactionGroupHits(group,set){
+    if(!set)return true;
+    return (group||[]).some(a=>set.has(agentAtomKey(a)));
+  }
+  function interactionMatchesAtomSets(groups,sourceKeys,targetKeys,directed){
+    if(sourceKeys&&targetKeys){
+      const direct=interactionGroupHits(groups.sideA,sourceKeys)&&interactionGroupHits(groups.sideB,targetKeys);
+      if(direct||directed)return direct;
+      return interactionGroupHits(groups.sideA,targetKeys)&&interactionGroupHits(groups.sideB,sourceKeys);
+    }
+    if(sourceKeys)return interactionGroupHits(groups.involved,sourceKeys);
+    if(targetKeys)return interactionGroupHits(groups.involved,targetKeys);
+    return true;
+  }
+  function interactionResultAtoms(groups,sourceKeys,targetKeys,sides){
+    const side=normText(sides||'both').replace(/[-_\s]/g,'').toLowerCase();
+    if(side==='source')return groups.sideA.slice();
+    if(side==='target')return groups.sideB.slice();
+    if(side==='partners'||side==='partner'){
+      if(!sourceKeys)return groups.involved.slice();
+      return groups.involved.filter(a=>!sourceKeys.has(agentAtomKey(a)));
+    }
+    if(side==='matched'){
+      const out=[];
+      if(sourceKeys)out.push.apply(out,groups.involved.filter(a=>sourceKeys.has(agentAtomKey(a))));
+      if(targetKeys)out.push.apply(out,groups.involved.filter(a=>targetKeys.has(agentAtomKey(a))));
+      return agentUniqueAtoms(out);
+    }
+    return groups.involved.slice();
+  }
+  function interactionDetail(type,item,record){
+    return {
+      type,
+      entryName:record&&record.entryName||'',
+      entryTitle:record&&record.entryTitle||'',
+      serials:{
+        a:item&&item.a,
+        b:item&&item.b,
+        h:item&&item.h,
+        ringAtom:item&&item.ringAtom,
+        cat:item&&item.cat,
+        ringAtomA:item&&item.ringAtomA,
+        ringAtomB:item&&item.ringAtomB
+      },
+      residueA:item&&item.ra,
+      residueB:item&&item.rb,
+      distance:item&&item.distance,
+      angle:item&&item.angle,
+      kind:item&&item.kind
+    };
+  }
+  function interactionQueryResult(command){
+    command=command||{};
+    startInteractionIndexBuild();
+    const slots=visibleInteractionSlots();
+    const pending=slots.some(slot=>!slot.record||/^(loading-cache|building)$/.test(slot.record.status||''));
+    if(pending&&command.allowPartial!==true){
+      updateInteractionAggregate();
+      return {retry:true,status:interactionIndex.status||'pending',readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||slots.length};
+    }
+    const ready=readyInteractionSlots();
+    const requestedTypes=interactionTypesForCommand(command);
+    const hasSource=command.source!=null||command.selector!=null||command.subject!=null;
+    const hasTarget=command.target!=null||command.object!=null;
+    const sourceAtoms=hasSource?agentAtomsForSpec(command.source||command.selector||command.subject,'all'):null;
+    const targetAtoms=hasTarget?agentAtomsForSpec(command.target||command.object,'all'):null;
+    const sourceKeys=sourceAtoms?new Set(sourceAtoms.map(agentAtomKey)):null;
+    const targetKeys=targetAtoms?new Set(targetAtoms.map(agentAtomKey)):null;
+    const directed=command.directed===true||normText(command.direction).toLowerCase()==='directed';
+    const resultSide=command.sides||command.side||command.resultSide||'both';
+    const atomFilter=command.resultAtoms||command.atoms||command.atomFilter||'heavyPolarH';
+    const expansionPool=atoms.filter(a=>agentAtomFilterMatches(a,atomFilter));
+    const level=command.level||'residue';
+    const matchedAtoms=[],details=[],filterKeys=new Set(),counts={};
+    const detailLimit=Math.max(0,Math.min(10000,Number(command.limit==null?500:command.limit)||0));
+    let interactionCount=0,omitted=0;
+    ready.forEach(slot=>{
+      const record=slot.record,data=record&&record.interactions||{};
+      interactionTypeEntries(data,requestedTypes).forEach(entry=>{
+        (entry.items||[]).forEach(item=>{
+          if(!interactionPassesDistance(entry.type,item,command))return;
+          const groups=interactionAtomGroups(entry.type,item,record);
+          if(!groups.involved.length)return;
+          if(!interactionMatchesAtomSets(groups,sourceKeys,targetKeys,directed))return;
+          filterKeys.add(interactionItemKey(entry.type,item,record));
+          counts[entry.type]=(counts[entry.type]||0)+1;
+          interactionCount++;
+          matchedAtoms.push.apply(matchedAtoms,interactionResultAtoms(groups,sourceKeys,targetKeys,resultSide));
+          if(details.length<detailLimit)details.push(interactionDetail(entry.type,item,record));
+          else omitted++;
+        });
+      });
+    });
+    const expanded=agentUniqueAtoms(agentExpandHits(agentUniqueAtoms(matchedAtoms),expansionPool,level));
+    const selector=serialSelectorForAtoms(expanded);
+    const result={
+      status:ready.length?'ready':(slots.length?'empty':'empty'),
+      interactionCount,
+      omittedInteractions:omitted,
+      counts,
+      atomCount:expanded.length,
+      residueCount:selectionInfo(selector,expanded).residueCount,
+      selector,
+      interactions:details,
+      level,
+      sides:resultSide,
+      atomFilter,
+      sourceAtomCount:sourceAtoms?sourceAtoms.length:null,
+      targetAtomCount:targetAtoms?targetAtoms.length:null,
+      readyEntries:ready.length,
+      totalEntries:slots.length
+    };
+    Object.defineProperty(result,'_filterKeys',{value:filterKeys,enumerable:false});
+    Object.defineProperty(result,'_matchedAtoms',{value:expanded,enumerable:false});
+    return result;
+  }
+  function queryInteractionsAction(command){
+    return interactionQueryResult(Object.assign({},command||{},{type:'queryInteractions'}));
+  }
+  function showInteractionsAction(command,opts){
+    opts=opts||{};
+    command=Object.assign({},command||{},{type:'showInteractions'});
+    const result=interactionQueryResult(command);
+    if(result.retry)return result;
+    const tag=normText(command.tag||'default')||'default';
+    const source='agent-showInteractions';
+    if(command.filter!==false){
+      interState.filter={keys:result._filterKeys||new Set(),tag,actionId:command.id||'',createdAt:Date.now()};
+      interState.enabled=true;
+      updateInterToggle();
+    }
+    let needsStyleApply=false;
+    if(opts.show!==false&&command.show!==false&&command.replace!==false){
+      agentRemoveRules(source,tag);
+      needsStyleApply=true;
+    }
+    if(result.selector&&opts.show!==false&&command.show!==false){
+      const rep=normText(command.representation||command.style||'line').toLowerCase();
+      const representation=ATOM_REPS.has(rep)?rep:'line';
+      state.hiddenRules=removeAtomsFromHideRules(state.hiddenRules,result._matchedAtoms||[]);
+      const ruleOptions=Object.assign({},command.options||{},{
+        source,
+        tag,
+        atomLevel:true,
+        interactionFilter:true,
+        level:result.level,
+        sides:result.sides
+      });
+      if(command.id)ruleOptions.agentActionId=command.id;
+      state.styleRules.push({selector:result.selector,representation,options:ruleOptions});
+      needsStyleApply=true;
+      if(command.only||command.hideOthers){
+        state.hiddenRules.push({
+          selector:{not:result.selector},
+          representation:'hide',
+          options:{source,tag,atomLevel:true,only:true}
+        });
+      }
+    }
+    if(command.select!==false&&result.selector)setSelection(result.selector,{source:'agent-showInteractions',representation:'line'});
+    if(needsStyleApply)applyStylesFull(true);
+    else redrawInteractions(true);
+    if(command.focus&&result.selector)focus(result.selector);
+    setStatus('Agent interactions: '+result.interactionCount.toLocaleString()+' interaction(s)');
+    return result;
+  }
+  function clearInteractionFilterAction(command){
+    command=command||{};
+    const tag=command.tag==null?null:normText(command.tag||'default');
+    interState.filter=null;
+    if(command.clearStyles)agentRemoveRules('agent-showInteractions',tag);
+    if(command.clearSelection)clearSelection();
+    applyStylesFull(true);
+    setStatus('Interaction filter cleared');
+    return true;
+  }
   function executeAgentAction(command){
     const type=agentActionType(command);
     if(type==='querywithin')return queryWithinAction(command);
     if(type==='showwithin')return showWithinAction(command);
     if(type==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
+    if(type==='queryinteractions')return queryInteractionsAction(command);
+    if(type==='showinteractions')return showInteractionsAction(command);
+    if(type==='clearinteractionfilter'||type==='clearinteractionsfilter')return clearInteractionFilterAction(command);
     if(type==='clearstyles'){ clearStyles(); return true; }
     return runCompat(command);
   }
@@ -1816,11 +2083,12 @@ function boot(){
     ugly:{label:'Ugly',color:'#ef5350',on:true}
   };
   function cloneInteractionTypes(){ return clonePlain(DEFAULT_INTER_TYPES); }
-  const interState={ enabled:true, scope:Object.assign({},DEFAULT_INTER_SCOPE), types:cloneInteractionTypes() };
+  const interState={ enabled:true, scope:Object.assign({},DEFAULT_INTER_SCOPE), types:cloneInteractionTypes(), filter:null };
   function resetInteractionSettings(){
     interState.enabled=true;
     interState.scope=Object.assign({},DEFAULT_INTER_SCOPE);
     interState.types=cloneInteractionTypes();
+    interState.filter=null;
     state.hbondCutoff=2.8;
     state.saltCutoff=5.0;
     updateInterToggle();
@@ -2052,6 +2320,17 @@ function boot(){
     if(scope==='pp')return categoryIsProtein(item.ca)&&categoryIsProtein(item.cb);
     return true;
   }
+  function interactionUiScopeForGroup(group){
+    if(group==='pi')return interState.scope.pi;
+    if(group==='contact')return interState.scope.contact;
+    return interState.scope.noncov;
+  }
+  function shouldDrawIndexedInteraction(type,item,group,record){
+    if(!interactionPassesDistance(type,item,null))return false;
+    if(interState.filter)return !!(interState.filter.keys&&interState.filter.keys.has(interactionItemKey(type,item,record)));
+    const t=interState.types[type];
+    return !!(t&&t.on&&interactionInScope(item,interactionUiScopeForGroup(group)));
+  }
   function atomForInteractionSerial(serial,record){
     if(record&&record.entryName){
       const direct=atomByEntrySourceSerial.get(atomEntryIndexKey(record.entryName,serial));
@@ -2130,16 +2409,16 @@ function boot(){
     try{
       slots.forEach(slot=>{
         const record=slot.record,data=record.interactions||{},sourceAtoms=entryAtomsForInteractionIndex(slot.entry);
-        if(T.hbond.on)(data.hbond||[]).forEach(item=>{ if(item.distance<=state.hbondCutoff&&interactionInScope(item,S.noncov))drawIndexedHbond(item,T.hbond.color,record); });
-        if(T.halogen.on)(data.halogen||[]).forEach(item=>{ if(interactionInScope(item,S.noncov))drawIndexedPair(item,T.halogen.color,record); });
-        if(T.salt.on)(data.salt||[]).forEach(item=>{ if(item.distance<=state.saltCutoff&&interactionInScope(item,S.noncov))drawIndexedPair(item,T.salt.color,record); });
-        if(T.aromhb.on)detectAromHB(S.noncov,sourceAtoms).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
-        if(T.pipi.on)(data.pipi||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiPi(item,T.pipi.color,record); });
-        if(T.pication.on)(data.pication||[]).forEach(item=>{ if(interactionInScope(item,S.pi))drawIndexedPiCation(item,T.pication.color,record); });
-        if(T.good.on||T.bad.on||T.ugly.on){ const c=data.contacts||{};
-          if(T.good.on)(c.good||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.good.color,record); });
-          if(T.bad.on)(c.bad||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.bad.color,record); });
-          if(T.ugly.on)(c.ugly||[]).forEach(item=>{ if(interactionInScope(item,S.contact))drawIndexedPair(item,T.ugly.color,record); });
+        (data.hbond||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('hbond',item,'noncov',record))drawIndexedHbond(item,T.hbond.color,record); });
+        (data.halogen||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('halogen',item,'noncov',record))drawIndexedPair(item,T.halogen.color,record); });
+        (data.salt||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('salt',item,'noncov',record))drawIndexedPair(item,T.salt.color,record); });
+        if(!interState.filter&&T.aromhb.on)detectAromHB(S.noncov,sourceAtoms).forEach(p=>drawDashAP(p.don,p.center,T.aromhb.color));
+        (data.pipi||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('pipi',item,'pi',record))drawIndexedPiPi(item,T.pipi.color,record); });
+        (data.pication||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('pication',item,'pi',record))drawIndexedPiCation(item,T.pication.color,record); });
+        { const c=data.contacts||{};
+          (c.good||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('good',item,'contact',record))drawIndexedPair(item,T.good.color,record); });
+          (c.bad||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('bad',item,'contact',record))drawIndexedPair(item,T.bad.color,record); });
+          (c.ugly||[]).forEach(item=>{ if(shouldDrawIndexedInteraction('ugly',item,'contact',record))drawIndexedPair(item,T.ugly.color,record); });
         }
       });
     }catch(e){ console.warn('Interaction redraw failed',e); }
@@ -4198,6 +4477,9 @@ function installFrameSyncedMotion(targetViewer){
     if(type.replace(/[-_\s]/g,'')==='querywithin')return queryWithinAction(command);
     if(type.replace(/[-_\s]/g,'')==='showwithin')return showWithinAction(command);
     if(type.replace(/[-_\s]/g,'')==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
+    if(type.replace(/[-_\s]/g,'')==='queryinteractions')return queryInteractionsAction(command);
+    if(type.replace(/[-_\s]/g,'')==='showinteractions')return showInteractionsAction(command);
+    if(type.replace(/[-_\s]/g,'')==='clearinteractionfilter'||type.replace(/[-_\s]/g,'')==='clearinteractionsfilter')return clearInteractionFilterAction(command);
     if(type==='selection'||type==='setselection')return setSelection(command.selector||command.target||{},command.options||command);
     if(type==='clearselection')return clearSelection();
     if(type==='clearstyles')return clearStyles();
@@ -4220,6 +4502,9 @@ function installFrameSyncedMotion(targetViewer){
     queryWithin:function(command){ return queryWithinAction(Object.assign({},command||{},{type:'queryWithin'})); },
     showWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'showWithin'})); },
     selectWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'selectWithin',select:true}),{show:false}); },
+    queryInteractions:function(command){ return queryInteractionsAction(Object.assign({},command||{},{type:'queryInteractions'})); },
+    showInteractions:function(command){ return showInteractionsAction(Object.assign({},command||{},{type:'showInteractions'})); },
+    clearInteractionFilter:function(command){ return clearInteractionFilterAction(Object.assign({},command||{})); },
     getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
