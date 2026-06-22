@@ -154,7 +154,7 @@ class MolWideLineLayer{
     if(!viewer||viewer._wideLineLayerBound)return;
     viewer._wideLineLayerBound=true;
     const layer=this;
-    const hookNames=(typeof viewer.show==='function')?['show']:['render'];
+    const hookNames=['show','render'];
     hookNames.forEach(function(name){
       if(typeof viewer[name]!=='function')return;
       const native=viewer[name].bind(viewer);
