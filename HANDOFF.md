@@ -87,6 +87,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - `chain`: whole touched chains
   - `model`: all atoms in touched entries
 - Keyboard workspace actions: `L` cycles selection through ligands in the currently displayed workspace, `C` cycles through displayed protein chains, and `Z` refits the camera. `Z` fits the current workspace when nothing is selected and fits selected atoms when a selection exists.
+- `N` expands the current selection to nearby atoms within 5A of the selected atoms, scoped entry-locally. Expansion follows the current top-left selection level (`Atoms`, `Residues`, `Chains`, or `Molecules`) and adds to the existing selection.
 - `Delete` removes the currently selected atoms from the session, whether the selection came from direct viewer selection or the Hierarchy panel. The source structure file is not modified.
 - `Ctrl+Z`/`Cmd+Z` undoes the most recent selected-atom deletion in the current browser session. It restores the atoms to the session and reselects the restored atoms; it is not a general-purpose undo stack for every UI setting.
 - Camera refit should use the current screen/camera X/Y bounding box rather than raw coordinate-average centering, with a tight fit that does not leave excessive top/bottom margin. Very small selections must use a minimum visual frame size so ligand/single-residue focus does not become an extreme close-up.

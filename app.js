@@ -67,6 +67,7 @@ function boot(){
   const MIN_SELECTION_VISUAL_SPAN = 12;
   const MIN_SELECTION_WORKSPACE_FRACTION = 0.08;
   const MAX_SELECTION_MIN_VISUAL_SPAN = 40;
+  const NEARBY_SELECTION_RADIUS = 5;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
   const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
@@ -2184,6 +2185,29 @@ function boot(){
     workspaceCycleState[kind]=next.key;
     setSelection(serialSelectorForAtoms(next.atoms),{source:'workspace-cycle'});
     setStatus((kind==='ligand'?'Ligand':'Chain')+' '+(groups.indexOf(next)+1)+'/'+groups.length+': '+next.label);
+    return true;
+  }
+  function selectionExpansionLevel(){
+    return state.selectionMode==='model'?'model':(state.selectionMode==='chain'?'chain':(state.selectionMode==='atom'?'atom':'residue'));
+  }
+  function addNearbySelection(){
+    const source=agentUniqueAtoms(selectionAtoms);
+    if(!source.length){ setStatus('Nearby: no selected atoms'); return false; }
+    const targetPool=atoms.filter(isAtomSelectableNow);
+    if(!targetPool.length){ setStatus('Nearby: no selectable atoms'); return false; }
+    const bySource=agentGroupByEntry(source), byTarget=agentGroupByEntry(targetPool), hits=[];
+    bySource.forEach((sourceList,entryName)=>{
+      const targetList=byTarget.get(entryName)||[];
+      if(!targetList.length)return;
+      hits.push.apply(hits,agentAtomsWithin(sourceList,targetList,NEARBY_SELECTION_RADIUS));
+    });
+    const expanded=agentUniqueAtoms(agentExpandHits(agentUniqueAtoms(hits),targetPool,selectionExpansionLevel()));
+    const selectedBefore=new Set(serialsForAtoms(selectionAtoms));
+    const added=expanded.filter(a=>a&&a.serial!=null&&!selectedBefore.has(a.serial));
+    const sel=serialSelectorForAtoms(expanded);
+    if(!sel||!added.length){ setStatus('Nearby '+NEARBY_SELECTION_RADIUS+'A: no additional '+selectionExpansionLevel()+' selection'); return false; }
+    setSelection(sel,{additive:true,source:'nearby-hotkey'});
+    setStatus('Nearby '+NEARBY_SELECTION_RADIUS+'A added: '+added.length.toLocaleString()+' atoms ('+selectionExpansionLevel()+')');
     return true;
   }
   function isPlainWorkspaceHotkey(e,key){
@@ -4873,6 +4897,7 @@ function installFrameSyncedMotion(targetViewer){
     }
     if(isPlainWorkspaceHotkey(e,'l')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
     if(isPlainWorkspaceHotkey(e,'c')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
+    if(isPlainWorkspaceHotkey(e,'n')){ e.preventDefault(); if(!e.repeat)addNearbySelection(); return; }
     if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
   document.addEventListener('pointerdown',function(e){
