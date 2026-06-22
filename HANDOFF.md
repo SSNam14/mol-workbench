@@ -85,7 +85,8 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - `residue`: whole touched residues
   - `chain`: whole touched chains
   - `model`: all atoms in touched entries
-- Pressing `z` toggles between focusing the current selection and overview.
+- Keyboard workspace actions: `L` cycles selection through ligands in the currently displayed workspace, `C` cycles through displayed protein chains, and `Z` refits the camera. `Z` fits the current workspace when nothing is selected and fits selected atoms when a selection exists.
+- Camera refit should use the current screen/camera X/Y bounding box rather than raw coordinate-average centering. Very small selections must use a minimum visual frame size so ligand/single-residue focus does not become an extreme close-up.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z` or `molAgent.focus(...)`.
 - Selection and focus operate on loaded atoms, not only currently atom-level-rendered atoms. Representation `off` or hide rules must not make atoms permanently unselectable; selection highlight and selection-toolbar show/style actions should be able to recover hidden/off atoms while entry/chain/group inclusion still controls whether atoms are in scope.
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.

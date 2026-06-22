@@ -63,6 +63,10 @@ function boot(){
   const LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT = 1500;
   const LARGE_SELECTION_REPRESENTATIVE_ATOM_LIMIT = 600;
   const HUGE_FIT_ATOM_LIMIT = 100000;
+  const VISUAL_FIT_PADDING = 1.18;
+  const MIN_SELECTION_VISUAL_SPAN = 12;
+  const MIN_SELECTION_WORKSPACE_FRACTION = 0.08;
+  const MAX_SELECTION_MIN_VISUAL_SPAN = 40;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
   const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
@@ -1873,6 +1877,10 @@ function boot(){
     catch(e){ try{ viewerEl.focus(); }catch(_){} }
   }
   function visibleAtomSelector(){ const serials=serialsForAtoms(atoms); return serials.length?{serial:serials}:{}; }
+  function workspaceFitAtoms(){
+    const visible=atoms.filter(isAtomVisibleNow);
+    return visible.length?visible:atoms;
+  }
   function hiddenCachedAtomCount(){
     let n=0;
     entryModelCache.forEach((record,name)=>{ if(entryChecked[name]===false&&record&&record.atoms)n+=record.atoms.length; });
@@ -1956,6 +1964,116 @@ function boot(){
     if(typeof p.set==='function')p.set(x,y,z);
     else{ p.x=x; p.y=y; p.z=z; }
   }
+  function viewerRotationQuaternion(){
+    const q=viewer&&viewer.rotationGroup&&viewer.rotationGroup.quaternion;
+    return q||{x:0,y:0,z:0,w:1};
+  }
+  function rotateVectorByQuaternion(v,q){
+    q=q||viewerRotationQuaternion();
+    const x=Number(v&&v.x)||0,y=Number(v&&v.y)||0,z=Number(v&&v.z)||0;
+    const qx=Number(q.x)||0,qy=Number(q.y)||0,qz=Number(q.z)||0,qw=q.w==null?1:Number(q.w)||0;
+    const tx=2*(qy*z-qz*y),ty=2*(qz*x-qx*z),tz=2*(qx*y-qy*x);
+    return {
+      x:x+qw*tx+(qy*tz-qz*ty),
+      y:y+qw*ty+(qz*tx-qx*tz),
+      z:z+qw*tz+(qx*ty-qy*tx)
+    };
+  }
+  function inverseRotateVectorByQuaternion(v,q){
+    q=q||viewerRotationQuaternion();
+    return rotateVectorByQuaternion(v,{x:-(Number(q.x)||0),y:-(Number(q.y)||0),z:-(Number(q.z)||0),w:q.w==null?1:Number(q.w)||0});
+  }
+  function emptyVisualBounds(){
+    return {minX:Infinity,minY:Infinity,minZ:Infinity,maxX:-Infinity,maxY:-Infinity,maxZ:-Infinity,count:0};
+  }
+  function addVisualPoint(bounds,p){
+    const x=Number(p&&p.x),y=Number(p&&p.y),z=Number(p&&p.z);
+    if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z))return;
+    if(x<bounds.minX)bounds.minX=x; if(y<bounds.minY)bounds.minY=y; if(z<bounds.minZ)bounds.minZ=z;
+    if(x>bounds.maxX)bounds.maxX=x; if(y>bounds.maxY)bounds.maxY=y; if(z>bounds.maxZ)bounds.maxZ=z;
+    bounds.count++;
+  }
+  function finishVisualBounds(bounds){
+    if(!bounds||!bounds.count)return null;
+    bounds.center={x:(bounds.minX+bounds.maxX)/2,y:(bounds.minY+bounds.maxY)/2,z:(bounds.minZ+bounds.maxZ)/2};
+    bounds.spanX=Math.max(0,bounds.maxX-bounds.minX);
+    bounds.spanY=Math.max(0,bounds.maxY-bounds.minY);
+    bounds.spanZ=Math.max(0,bounds.maxZ-bounds.minZ);
+    return bounds;
+  }
+  function extentCorners(box){
+    if(!box)return [];
+    return [
+      {x:box.minX,y:box.minY,z:box.minZ},{x:box.minX,y:box.minY,z:box.maxZ},
+      {x:box.minX,y:box.maxY,z:box.minZ},{x:box.minX,y:box.maxY,z:box.maxZ},
+      {x:box.maxX,y:box.minY,z:box.minZ},{x:box.maxX,y:box.minY,z:box.maxZ},
+      {x:box.maxX,y:box.maxY,z:box.minZ},{x:box.maxX,y:box.maxY,z:box.maxZ}
+    ];
+  }
+  function visualExtentForAtoms(list){
+    const q=viewerRotationQuaternion(),bounds=emptyVisualBounds();
+    (list||[]).forEach(a=>addVisualPoint(bounds,rotateVectorByQuaternion(a,q)));
+    return finishVisualBounds(bounds);
+  }
+  function visualExtentForBoxes(boxes){
+    const q=viewerRotationQuaternion(),bounds=emptyVisualBounds();
+    (boxes||[]).forEach(box=>extentCorners(box).forEach(p=>addVisualPoint(bounds,rotateVectorByQuaternion(p,q))));
+    return finishVisualBounds(bounds);
+  }
+  function workspaceVisualExtent(targetAtoms){
+    if(!displayStateHasFitVisibilityOverrides()){
+      const box=visualExtentForBoxes(visibleEntryRecords().map(record=>record.extent));
+      if(box)return box;
+    }
+    return visualExtentForAtoms(targetAtoms||workspaceFitAtoms());
+  }
+  function viewerAspectRatio(){
+    const w=Number(viewer&&viewer.WIDTH)||viewerEl.clientWidth||1;
+    const h=Number(viewer&&viewer.HEIGHT)||viewerEl.clientHeight||1;
+    return Math.max(0.1,w/Math.max(1,h));
+  }
+  function visualFitSpan(box){
+    if(!box)return 0;
+    return Math.max(Number(box.spanY)||0,(Number(box.spanX)||0)/viewerAspectRatio(),1);
+  }
+  function minimumSelectionVisualSpan(workspaceBox){
+    const workspaceSpan=visualFitSpan(workspaceBox);
+    const relative=workspaceSpan?workspaceSpan*MIN_SELECTION_WORKSPACE_FRACTION:0;
+    return Math.min(MAX_SELECTION_MIN_VISUAL_SPAN,Math.max(MIN_SELECTION_VISUAL_SPAN,relative));
+  }
+  function setViewerPositionFromVisualCenter(center){
+    const modelPos=inverseRotateVectorByQuaternion({x:-(center&&center.x||0),y:-(center&&center.y||0),z:-(center&&center.z||0)});
+    setViewerModelPosition(modelPos.x,modelPos.y,modelPos.z);
+  }
+  function fitVisualAtoms(targetAtoms,opts){
+    opts=opts||{};
+    if(!viewer||!targetAtoms||!targetAtoms.length)return false;
+    const targetBox=opts.visualBox||visualExtentForAtoms(targetAtoms);
+    if(!targetBox)return false;
+    const workspaceBox=opts.workspaceVisualBox||workspaceVisualExtent();
+    const fov=Number(viewer.camera&&viewer.camera.fov)||20;
+    const cameraZ=Number(viewer.CAMERA_Z)||0;
+    const minZoom=Number(viewer.config&&viewer.config.minimumZoomToDistance)||5;
+    let span=visualFitSpan(targetBox);
+    if(!opts.overview)span=Math.max(span,minimumSelectionVisualSpan(workspaceBox));
+    const fitSpan=Math.max(span*VISUAL_FIT_PADDING,minZoom);
+    let finalz=-(fitSpan*0.5/Math.tan(Math.PI/180*fov/2)-cameraZ);
+    if(typeof viewer.adjustZoomToLimits==='function')finalz=viewer.adjustZoomToLimits(finalz);
+    setViewerPositionFromVisualCenter(targetBox.center);
+    if(viewer.rotationGroup&&viewer.rotationGroup.position)viewer.rotationGroup.position.z=finalz;
+    const allBox=opts.allBox||visibleAtomExtent()||extentForAtoms(targetAtoms);
+    const allD=Math.max(allBox&&allBox.diag||targetBox.spanZ||span,5);
+    if(opts.overview){
+      viewer.slabNear=Math.min(-allD*2,-50);
+      viewer.slabFar=Math.max(allD*2,50);
+    }else{
+      viewer.slabNear=-allD/1.9;
+      viewer.slabFar=allD/2;
+    }
+    if(opts.focusTarget)state.focusTarget=opts.focusTarget;
+    if(opts.render!==false)presentViewer(null,false);
+    return true;
+  }
   function fastFitAtoms(targetAtoms,opts){
     opts=opts||{};
     if(!viewer||!targetAtoms||!targetAtoms.length)return false;
@@ -1986,9 +2104,12 @@ function boot(){
     opts=opts||{};
     if(!viewer||!model)return false;
     if(!atoms.length)return false;
-    if(shouldUseFastFit(atoms)){
+    const target=workspaceFitAtoms();
+    const visualBox=workspaceVisualExtent(target);
+    if(visualBox)return fitVisualAtoms(target,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},visualBox,workspaceVisualBox:visualBox,allBox:visibleAtomExtent()});
+    if(shouldUseFastFit(target)){
       const box=visibleAtomExtent();
-      return fastFitAtoms(atoms,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
+      return fastFitAtoms(target,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
     }
     viewer.zoomTo(visibleAtomSelector(),opts.duration==null?0:opts.duration);
     if(opts.render!==false)presentViewer(null,true);
@@ -2001,15 +2122,65 @@ function boot(){
     const t=sel||state.selectionSel;
     if(!t){ focusOverview(); return false; }
     const target=filterAtoms(t).filter(isAtomSelectableNow);
-    if(shouldUseFastFit(target))return fastFitAtoms(target.length?target:atoms,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
+    if(!target.length){ focusOverview(); return false; }
+    const fitTarget=target.length?target:workspaceFitAtoms();
+    const visualBox=visualExtentForAtoms(fitTarget);
+    if(visualBox)return fitVisualAtoms(fitTarget,{overview:false,render:true,focusTarget:{mode:'selection'},visualBox,workspaceVisualBox:workspaceVisualExtent(),allBox:visibleAtomExtent()});
+    if(shouldUseFastFit(fitTarget))return fastFitAtoms(fitTarget,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
     let s=styleSelection(t,{});
     if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector();
     viewer.zoomTo(s,450);
     state.focusTarget={mode:'selection'};
     return true;
   }
-  function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
+  function toggleFocus(){ if(!state.selectionSel)return focusOverview(); return focus(state.selectionSel); }
   function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  const workspaceCycleState={ligand:'',chain:''};
+  function workspaceCycleGroups(kind){
+    const out=[],shown=includedEntries();
+    shown.forEach(entry=>{
+      const record=entryModelCache.get(entry.name);
+      const entryAtoms=record&&record.atoms?record.atoms:atomsForEntry(entry);
+      const hierarchy=record&&record.hierarchy?record.hierarchy:buildEntryHierarchyCache(entry,entryAtoms);
+      const multi=shown.length>1;
+      if(kind==='ligand'){
+        (hierarchy.ligands||[]).forEach(g=>{
+          const selectable=(g.atoms||[]).filter(isAtomSelectableNow);
+          if(!selectable.length)return;
+          const label=moleculeLabel(g,multi);
+          out.push({key:'ligand\u0001'+groupVisibilityKeyFromGroup(g),label,atoms:selectable});
+        });
+      }else if(kind==='chain'){
+        (hierarchy.proteinChains||[]).forEach(g=>{
+          const selectable=(g.atoms||[]).filter(isAtomSelectableNow);
+          if(!selectable.length)return;
+          const label=hierarchyPrefix(g,multi)+'Chain '+g.chain;
+          out.push({key:'chain\u0001'+chainVisibilityKey(g.entry,g.chain),label,atoms:selectable});
+        });
+      }
+    });
+    return out;
+  }
+  function selectionExactlyAtoms(list){
+    const selected=serialsForAtoms(selectionAtoms),target=serialsForAtoms(list);
+    if(!selected.length||selected.length!==target.length)return false;
+    const seen=new Set(selected);
+    return target.every(s=>seen.has(s));
+  }
+  function cycleWorkspaceGroup(kind){
+    const groups=workspaceCycleGroups(kind);
+    if(!groups.length){ setStatus(kind==='ligand'?'No ligands in current workspace':'No protein chains in current workspace'); return false; }
+    let idx=groups.findIndex(g=>selectionExactlyAtoms(g.atoms));
+    if(idx<0)idx=groups.findIndex(g=>g.key===workspaceCycleState[kind]);
+    const next=groups[(idx+1+groups.length)%groups.length];
+    workspaceCycleState[kind]=next.key;
+    setSelection(serialSelectorForAtoms(next.atoms),{source:'workspace-cycle'});
+    setStatus((kind==='ligand'?'Ligand':'Chain')+' '+(groups.indexOf(next)+1)+'/'+groups.length+': '+next.label);
+    return true;
+  }
+  function isPlainWorkspaceHotkey(e,key){
+    return !!(e&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&normText(e.key).toLowerCase()===key);
+  }
 
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
@@ -3237,6 +3408,17 @@ function boot(){
     state.hierarchyCollapsed={};
   }
   function hasObjectKeys(o){ return !!(o&&Object.keys(o).length); }
+  function displayStateHasFitVisibilityOverrides(){
+    return !!(
+      state.hiddenRules.length||
+      hasObjectKeys(state.chainVisible)||
+      hasObjectKeys(state.groupVisible)||
+      state.visibility.protein!==true||
+      state.visibility.ligands!==true||
+      state.visibility.solvents!==true||
+      state.visibility.other!==true
+    );
+  }
   function displayStateHasOverrides(){
     return !!(
       state.styleRules.length||
@@ -4576,6 +4758,8 @@ function installFrameSyncedMotion(targetViewer){
       return;
     }
     if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(isPlainWorkspaceHotkey(e,'l')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
+    if(isPlainWorkspaceHotkey(e,'c')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
     if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
   document.addEventListener('pointerdown',function(e){
