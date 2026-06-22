@@ -866,7 +866,7 @@ function boot(){
     const r=state.baseProtein;
     if(r==='off'||r==='hide')return {};
     if(r==='tube')return {cartoon:{style:'trace',ribbon:true,thickness:0.45,colorfunc:chainRibbonColor}};
-    return {cartoon:{colorfunc:chainRibbonColor,thickness:0.15,loopWidth:0.25,backboneSmooth:0.55}};
+    return {cartoon:{colorfunc:chainRibbonColor,thickness:0.15,loopWidth:0.25}};
   }
   function atomRepSpec(rep,colorfunc,ctx,sizes){
     rep=normText(rep||'off').toLowerCase(); sizes=sizes||{};
