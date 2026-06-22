@@ -41,6 +41,22 @@ BLOCKED_STATIC_SUFFIXES = {".log", ".pid", ".pyc"}
 MOUSE_BUTTON_ACTIONS = {"rotate", "pan", "zoom", "select", "none"}
 MOUSE_WHEEL_ACTIONS = {"zoom", "none"}
 MOUSE_PRESETS = {"select-left", "custom", "default"}
+ROTATION_MODIFIERS = ("ctrl", "shift", "alt")
+ROTATION_AXES = {"none", "x", "y", "z"}
+KEY_BINDING_ACTIONS = ("focus", "cycleLigand", "cycleChain", "nearby")
+KEY_BINDING_ALIASES = {
+    "space": "Space",
+    "spacebar": "Space",
+    "del": "Delete",
+    "delete": "Delete",
+    "backspace": "Backspace",
+    "enter": "Enter",
+    "return": "Enter",
+    "esc": "Escape",
+    "escape": "Escape",
+    "tab": "Tab",
+}
+RESERVED_KEY_BINDINGS = {"delete", "control", "ctrl", "shift", "alt", "meta", "cmd", "command"}
 BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
@@ -74,6 +90,22 @@ ELEMENT_IDS = (
     "AC", "TH", "PA", "U", "NP", "PU", "AM", "CM", "BK", "CF", "ES", "FM", "MD", "NO", "LR",
     "RF", "DB", "SG",
 )
+
+
+def normalize_key_binding_value(value):
+    key = str(value or "").strip()
+    if len(key) > 32:
+        return None
+    if not key:
+        return ""
+    if len(key) == 1:
+        return key.lower()
+    key = KEY_BINDING_ALIASES.get(key.lower(), key)
+    if key.lower() in RESERVED_KEY_BINDINGS:
+        return None
+    if "+" in key:
+        return None
+    return key
 
 
 def normalize_deleted_source_serials(value):
@@ -236,6 +268,56 @@ def normalize_preferences(value):
         if wheel not in MOUSE_WHEEL_ACTIONS:
             return None
         out["mouse"] = {"buttons": normalized_buttons, "wheel": wheel}
+
+    actions = value.get("actions")
+    if actions is not None:
+        if not isinstance(actions, dict):
+            return None
+        normalized_actions = {}
+        rotation_modifiers = actions.get("rotationModifiers")
+        if rotation_modifiers is not None:
+            if not isinstance(rotation_modifiers, dict):
+                return None
+            normalized_modifiers = {}
+            for modifier in ROTATION_MODIFIERS:
+                raw = rotation_modifiers.get(modifier)
+                if raw is None:
+                    continue
+                if not isinstance(raw, dict):
+                    return None
+                axis = str(raw.get("axis", "")).strip().lower()
+                if axis not in ROTATION_AXES:
+                    return None
+                try:
+                    direction = int(raw.get("direction", 1))
+                except (TypeError, ValueError):
+                    return None
+                if direction not in (-1, 1):
+                    return None
+                normalized_modifiers[modifier] = {"axis": axis, "direction": direction}
+            if normalized_modifiers:
+                normalized_actions["rotationModifiers"] = normalized_modifiers
+        key_bindings = actions.get("keyBindings")
+        if key_bindings is not None:
+            if not isinstance(key_bindings, dict):
+                return None
+            normalized_keys = {}
+            seen_keys = set()
+            for action in KEY_BINDING_ACTIONS:
+                if action not in key_bindings:
+                    continue
+                key = normalize_key_binding_value(key_bindings.get(action))
+                if key is None:
+                    continue
+                if key and key in seen_keys:
+                    key = ""
+                normalized_keys[action] = key
+                if key:
+                    seen_keys.add(key)
+            if normalized_keys:
+                normalized_actions["keyBindings"] = normalized_keys
+        if normalized_actions:
+            out["actions"] = normalized_actions
 
     representations = value.get("representations")
     if representations is not None:

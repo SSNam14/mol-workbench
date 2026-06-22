@@ -83,6 +83,10 @@ function boot(){
   const defaultChainColors = Object.assign({}, chainColors);
   const defaultElementColors = Object.assign({}, elemColors);
   const settings = {mouse:{buttons:Object.assign({},mousePresets['select-left'].buttons), wheel:mousePresets['select-left'].wheel}};
+  const DEFAULT_ROTATION_MODIFIERS = {ctrl:{axis:'z',direction:-1},shift:{axis:'y',direction:1},alt:{axis:'none',direction:1}};
+  const DEFAULT_KEY_BINDINGS = {focus:'z',cycleLigand:'l',cycleChain:'c',nearby:'n'};
+  settings.rotateModifiers=clonePlain(DEFAULT_ROTATION_MODIFIERS);
+  settings.keyBindings=Object.assign({},DEFAULT_KEY_BINDINGS);
   let visualConfig = clonePlain(DEFAULT_VISUAL_CONFIG);
   let findMatches = [], findIndex = -1;
   let selectionAtoms = [];
@@ -111,6 +115,7 @@ function boot(){
   let preferencesSaveTimer = null;
   let panelRefreshTimer = null;
   let interactionStartTimer = null;
+  let pendingKeyBindingAction = null;
   let busyToken = 0;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -212,11 +217,23 @@ function boot(){
     applyVdwRadiiConfig();
     return clonePlain(visualConfig);
   }
+  function cloneRotationModifierSettings(){
+    return {
+      ctrl:Object.assign({},settings.rotateModifiers.ctrl),
+      shift:Object.assign({},settings.rotateModifiers.shift),
+      alt:Object.assign({},settings.rotateModifiers.alt)
+    };
+  }
+  function cloneKeyBindings(){ return Object.assign({},settings.keyBindings); }
   function preferencesPayload(){
     return {
       schema:'viewer-preferences-v1',
       mousePreset:state.mousePreset,
       mouse:cloneMouseSettings(),
+      actions:{
+        rotationModifiers:cloneRotationModifierSettings(),
+        keyBindings:cloneKeyBindings()
+      },
       representations:{
         proteinBackbone:state.baseProtein,
         proteinAtoms:state.proteinAtoms,
@@ -274,9 +291,77 @@ function boot(){
     state.other=normalizedAtomRepresentation(reps.other,state.other);
     syncRepresentationControls();
   }
+  function normalizeRotationAxis(value,fallback){
+    const axis=normText(value||fallback).toLowerCase();
+    return /^(none|x|y|z)$/.test(axis)?axis:fallback;
+  }
+  function normalizeRotationDirection(value,fallback){
+    const n=Number(value);
+    if(n===1||n===-1)return n;
+    const text=normText(value).toLowerCase();
+    if(text==='reverse'||text==='reversed'||text==='-')return -1;
+    if(text==='normal'||text==='forward'||text==='+')return 1;
+    return fallback;
+  }
+  function normalizeKeyBinding(value,fallback){
+    if(value==null)return fallback;
+    let key=normText(value);
+    if(!key)return '';
+    if(key.length===1)return key.toLowerCase();
+    const aliases={space:'Space',spacebar:'Space',del:'Delete',delete:'Delete',backspace:'Backspace',enter:'Enter',return:'Enter',esc:'Escape',escape:'Escape',tab:'Tab'};
+    return aliases[key.toLowerCase()]||key;
+  }
+  function isAssignableKeyBinding(key){
+    if(!key)return true;
+    if(key==='Delete')return false;
+    if(/^(Control|Ctrl|Shift|Alt|Meta|Cmd|Command)$/i.test(key))return false;
+    if(/\+/.test(key))return false;
+    return true;
+  }
+  function normalizeAssignableKeyBinding(value){
+    const key=normalizeKeyBinding(value,'');
+    return isAssignableKeyBinding(key)?key:null;
+  }
+  function normalizeKeyBindingSet(raw,fallback){
+    const next=Object.assign({},fallback||DEFAULT_KEY_BINDINGS);
+    Object.keys(DEFAULT_KEY_BINDINGS).forEach(action=>{
+      if(raw&&raw[action]!=null){
+        const key=normalizeAssignableKeyBinding(raw[action]);
+        next[action]=key==null?'':key;
+      }
+    });
+    const seen=new Set();
+    Object.keys(DEFAULT_KEY_BINDINGS).forEach(action=>{
+      const key=normalizeAssignableKeyBinding(next[action]);
+      if(key==null||key&&seen.has(key))next[action]='';
+      else{
+        next[action]=key;
+        if(key)seen.add(key);
+      }
+    });
+    return next;
+  }
+  function applyActionPreferences(payload){
+    const actions=payload&&payload.actions||{};
+    const mods=actions.rotationModifiers||payload.rotationModifiers;
+    if(mods&&typeof mods==='object'){
+      ['ctrl','shift','alt'].forEach(mod=>{
+        const fallback=DEFAULT_ROTATION_MODIFIERS[mod], src=mods[mod]||{};
+        settings.rotateModifiers[mod]={
+          axis:normalizeRotationAxis(src.axis,fallback.axis),
+          direction:normalizeRotationDirection(src.direction,fallback.direction)
+        };
+      });
+    }
+    const keys=actions.keyBindings||payload.keyBindings;
+    if(keys&&typeof keys==='object'){
+      settings.keyBindings=normalizeKeyBindingSet(keys,settings.keyBindings);
+    }
+  }
   function applyPreferences(payload){
     if(!payload||typeof payload!=='object')return null;
     applyRepresentationPreferences(payload);
+    applyActionPreferences(payload);
     if(payload.chainColors&&typeof payload.chainColors==='object'){
       Object.keys(chainColors).forEach(k=>delete chainColors[k]);
       Object.assign(chainColors,defaultChainColors);
@@ -302,6 +387,7 @@ function boot(){
   }
   function loadPreferences(){
     return fetch(PREFERENCES_API,{cache:'no-store'}).then(res=>{
+      if(res.status===404)return savePreferencesNow().then(()=>null);
       if(!res.ok)return null;
       return res.json();
     }).then(payload=>applyPreferences(payload)).catch(()=>null);
@@ -2142,7 +2228,14 @@ function boot(){
     return true;
   }
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); return focus(state.selectionSel); }
-  function isFocusHotkey(e){ return !!(e&&!(e.ctrlKey||e.metaKey||e.altKey)&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  function hotkeyEventKey(e){ return normalizeKeyBinding(e&&e.key,''); }
+  function isActionHotkey(e,action){
+    if(!e||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return false;
+    const key=settings.keyBindings[action];
+    const eventKey=hotkeyEventKey(e);
+    return !!(key&&eventKey!=='Delete'&&eventKey===key);
+  }
+  function isFocusHotkey(e){ return isActionHotkey(e,'focus'); }
   function isUndoHotkey(e){ return !!(e&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
   const workspaceCycleState={ligand:'',chain:''};
   function workspaceCycleGroups(kind){
@@ -2210,10 +2303,6 @@ function boot(){
     setStatus('Nearby '+NEARBY_SELECTION_RADIUS+'A added: '+added.length.toLocaleString()+' atoms ('+selectionExpansionLevel()+')');
     return true;
   }
-  function isPlainWorkspaceHotkey(e,key){
-    return !!(e&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&normText(e.key).toLowerCase()===key);
-  }
-
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
   const ATOM_REPS=new Set(ATOM_REP_VALUES);
@@ -4490,15 +4579,16 @@ function installFrameSyncedMotion(targetViewer){
     const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e);
   }
   function bindCustomMouseActions(){
-    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0,rotateAxis:null}; const tol=3;
-    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0;drag.rotateAxis=null; hideDragSelectBox(); }
+    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0,rotateAxis:null,rotateDirection:1}; const tol=3;
+    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0;drag.rotateAxis=null;drag.rotateDirection=1; hideDragSelectBox(); }
     resetMouseDrag=resetDrag;
-    function rotateAxisForEvent(e){ if(e.ctrlKey)return 'z'; if(e.shiftKey)return 'y'; return null; }
-    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.rotateAxis=action==='rotate'?rotateAxisForEvent(e):null; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
+    function rotateRuleForEvent(e){ const mod=e.ctrlKey?'ctrl':(e.shiftKey?'shift':(e.altKey?'alt':'')); return mod?(settings.rotateModifiers[mod]||DEFAULT_ROTATION_MODIFIERS[mod]):null; }
+    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; const rotateRule=action==='rotate'?rotateRuleForEvent(e):null; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.rotateAxis=rotateRule?rotateRule.axis:null; drag.rotateDirection=rotateRule?rotateRule.direction:1; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
     function rotateAxisFromDrag(d){
-      if(!drag.rotateAxis||!viewer||!drag.startQuaternion||!viewer.rotationGroup)return false;
-      const angle=(drag.rotateAxis==='z'?-d.x:d.x)*Math.PI*2, s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
+      if(!drag.rotateAxis||drag.rotateAxis==='none'||!viewer||!drag.startQuaternion||!viewer.rotationGroup)return false;
+      const angle=d.x*Math.PI*2*(drag.rotateDirection||1), s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
       if(drag.rotateAxis==='z')q.set(0,0,s,c);
+      else if(drag.rotateAxis==='x')q.set(s,0,0,c);
       else q.set(0,s,0,c);
       q.multiply(drag.startQuaternion);
       showViewer();
@@ -4648,6 +4738,15 @@ function installFrameSyncedMotion(targetViewer){
   const MOUSE_BTNS=[['left','Left'],['right','Right'],['middle','Middle']];
   const MOUSE_ACTION_VALUES=new Set(MOUSE_ACTIONS.map(a=>a[0]).concat(['none']));
   const WHEEL_ACTION_VALUES=new Set(['zoom','none']);
+  const MODIFIER_ROTATION_ROWS=[['ctrl','Ctrl'],['shift','Shift'],['alt','Alt']];
+  const ROTATION_AXIS_OPTIONS=[['none','None'],['x','X axis'],['y','Y axis'],['z','Z axis']];
+  const ROTATION_DIRECTION_OPTIONS=[[1,'Normal'],[-1,'Reverse']];
+  const KEY_BINDING_ACTIONS=[
+    ['focus','Refit view'],
+    ['cycleLigand','Cycle ligands'],
+    ['cycleChain','Cycle chains'],
+    ['nearby','Nearby selection']
+  ];
   function setMouseAction(btn,action){
     const cur=settings.mouse.buttons; if(cur[btn]===action){ buildMouseMatrix(); return; }
     const prev=cur[btn];
@@ -4678,13 +4777,99 @@ function installFrameSyncedMotion(targetViewer){
     });
     wrap.appendChild(grid);
   }
-  function openSettings(){
+  function setRotationModifier(mod,axis,direction,opts){
+    opts=opts||{};
+    const fallback=DEFAULT_ROTATION_MODIFIERS[mod]||{axis:'none',direction:1};
+    settings.rotateModifiers[mod]={
+      axis:normalizeRotationAxis(axis,fallback.axis),
+      direction:normalizeRotationDirection(direction,fallback.direction)
+    };
+    buildModifierRotationList();
+    if(opts.persist!==false)savePreferencesNow();
+    if(opts.status!==false)setStatus(mod.toUpperCase()+' rotate: '+settings.rotateModifiers[mod].axis+' / '+(settings.rotateModifiers[mod].direction<0?'reverse':'normal'));
+  }
+  function buildModifierRotationList(){
+    const wrap=$('modifierRotationList'); if(!wrap)return; wrap.innerHTML='';
+    MODIFIER_ROTATION_ROWS.forEach(rowInfo=>{
+      const mod=rowInfo[0], label=rowInfo[1], rule=settings.rotateModifiers[mod]||DEFAULT_ROTATION_MODIFIERS[mod];
+      const row=document.createElement('div'); row.className='pref-action-row';
+      const lab=document.createElement('span'); lab.className='pref-action-label'; lab.textContent=label+' + rotate';
+      const axis=document.createElement('select'); axis.className='pref-select';
+      ROTATION_AXIS_OPTIONS.forEach(opt=>{ const o=document.createElement('option'); o.value=opt[0]; o.textContent=opt[1]; axis.appendChild(o); });
+      axis.value=normalizeRotationAxis(rule.axis,DEFAULT_ROTATION_MODIFIERS[mod].axis);
+      const dir=document.createElement('select'); dir.className='pref-select';
+      ROTATION_DIRECTION_OPTIONS.forEach(opt=>{ const o=document.createElement('option'); o.value=String(opt[0]); o.textContent=opt[1]; dir.appendChild(o); });
+      dir.value=String(normalizeRotationDirection(rule.direction,DEFAULT_ROTATION_MODIFIERS[mod].direction));
+      axis.onchange=function(){ setRotationModifier(mod,axis.value,dir.value); };
+      dir.onchange=function(){ setRotationModifier(mod,axis.value,dir.value); };
+      row.appendChild(lab); row.appendChild(axis); row.appendChild(dir);
+      wrap.appendChild(row);
+    });
+  }
+  function keyBindingLabel(key){ return key?key:'Unassigned'; }
+  function bindingKeyFromEvent(e){
+    if(!e)return '';
+    if(e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return '';
+    const key=normalizeKeyBinding(e.key,'');
+    if(!isAssignableKeyBinding(key))return '';
+    return key;
+  }
+  function setKeyBinding(action,key,opts){
+    opts=opts||{};
+    if(!Object.prototype.hasOwnProperty.call(DEFAULT_KEY_BINDINGS,action))return;
+    const next=normalizeAssignableKeyBinding(key);
+    if(next==null){ if(opts.status!==false)setStatus('Key binding is reserved.'); return; }
+    Object.keys(settings.keyBindings).forEach(k=>{ if(k!==action&&next&&settings.keyBindings[k]===next)settings.keyBindings[k]=''; });
+    settings.keyBindings[action]=next;
+    pendingKeyBindingAction=null;
+    buildKeyBindingList();
+    if(opts.persist!==false)savePreferencesNow();
+    if(opts.status!==false)setStatus('Key binding: '+action+' = '+keyBindingLabel(next));
+  }
+  function startKeyBindingCapture(action){
+    pendingKeyBindingAction=action;
+    buildKeyBindingList();
+    setStatus('Press a key for '+action+'. Escape cancels.');
+  }
+  function cancelKeyBindingCapture(){
+    if(!pendingKeyBindingAction)return false;
+    pendingKeyBindingAction=null;
+    buildKeyBindingList();
+    setStatus('Key binding unchanged.');
+    return true;
+  }
+  function buildKeyBindingList(){
+    const wrap=$('keyBindingList'); if(!wrap)return; wrap.innerHTML='';
+    KEY_BINDING_ACTIONS.forEach(rowInfo=>{
+      const action=rowInfo[0], label=rowInfo[1], current=settings.keyBindings[action]||'';
+      const row=document.createElement('div'); row.className='pref-action-row key-row';
+      const lab=document.createElement('span'); lab.className='pref-action-label'; lab.textContent=label;
+      const key=document.createElement('button'); key.type='button'; key.className='pref-key-btn'+(pendingKeyBindingAction===action?' is-capturing':''); key.textContent=pendingKeyBindingAction===action?'Press key...':keyBindingLabel(current);
+      const clear=document.createElement('button'); clear.type='button'; clear.className='pref-clear-btn'; clear.textContent='Clear';
+      key.onclick=function(e){ e.preventDefault(); e.stopPropagation(); startKeyBindingCapture(action); };
+      clear.onclick=function(e){ e.preventDefault(); e.stopPropagation(); setKeyBinding(action,''); };
+      row.appendChild(lab); row.appendChild(key); row.appendChild(clear);
+      wrap.appendChild(row);
+    });
+  }
+  function buildActionPreferenceControls(){
     buildMouseMatrix();
+    buildModifierRotationList();
+    buildKeyBindingList();
+  }
+  function setPreferenceTab(tab){
+    tab=tab==='color'?'color':'action';
+    document.querySelectorAll('[data-pref-tab]').forEach(btn=>btn.classList.toggle('is-active',btn.getAttribute('data-pref-tab')===tab));
+    if($('prefPanelAction'))$('prefPanelAction').classList.toggle('is-active',tab==='action');
+    if($('prefPanelColor'))$('prefPanelColor').classList.toggle('is-active',tab==='color');
+  }
+  function openSettings(){
+    buildActionPreferenceControls();
     $('setCarbonByChain').checked=state.carbonByChain;
     setBackground(state.bgColor,{persist:false}); buildChainColorList(); buildAtomColorList();
     $('settingsOverlay').style.display='flex'; setBtnActive($('settingsBtn'),true);
   }
-  function closeSettings(){ $('settingsOverlay').style.display='none'; setBtnActive($('settingsBtn'),false); }
+  function closeSettings(){ pendingKeyBindingAction=null; $('settingsOverlay').style.display='none'; setBtnActive($('settingsBtn'),false); }
 
   function cloneSelector(sel){
     if(sel==null)return {};
@@ -4845,12 +5030,13 @@ function installFrameSyncedMotion(targetViewer){
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
+  document.querySelectorAll('[data-pref-tab]').forEach(btn=>{ btn.onclick=function(){ setPreferenceTab(btn.getAttribute('data-pref-tab')); }; });
   $('settingsOverlay').addEventListener('mousedown',function(e){ if(e.target===$('settingsOverlay'))closeSettings(); });
   $('setCarbonByChain').onchange=function(){ state.carbonByChain=$('setCarbonByChain').checked; applyStylesFull(true); savePreferencesNow(); };
   document.querySelectorAll('#bgSwatches [data-bg]').forEach(b=>{ b.onclick=function(){ setBackground(b.getAttribute('data-bg'),{persist:true}); }; });
   $('bgCustom').oninput=function(){ setBackground($('bgCustom').value,{persist:true}); };
   $('resetColorSchemes').onclick=function(){ resetColorSchemes(); };
-  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; resetMouseDrag(); setBackground('#000000',{persist:false}); applyStylesFull(true); buildHierarchy(); savePreferencesNow(); openSettings(); };
+  $('settingsReset').onclick=function(){ resetColorSchemes({persist:false}); state.baseProtein='cartoon'; state.proteinAtoms='off'; state.ligand='stick'; state.solvent='off'; state.other='stick'; if($('repBackbone'))$('repBackbone').value=state.baseProtein; if($('repProtein'))$('repProtein').value=state.proteinAtoms; if($('repLigand'))$('repLigand').value=state.ligand; if($('repSolvent'))$('repSolvent').value=state.solvent; if($('repOther'))$('repOther').value=state.other; state.carbonByChain=true; state.hbondCutoff=2.8; state.saltCutoff=5.0; resetInteractionSettings(); state.selectionRepresentation='line'; state.selectionOptions=defaultSelectionOptions(); settings.mouse.buttons=Object.assign({},mousePresets['select-left'].buttons); settings.mouse.wheel='zoom'; state.mousePreset='select-left'; settings.rotateModifiers=clonePlain(DEFAULT_ROTATION_MODIFIERS); settings.keyBindings=Object.assign({},DEFAULT_KEY_BINDINGS); pendingKeyBindingAction=null; resetMouseDrag(); setBackground('#000000',{persist:false}); applyStylesFull(true); buildHierarchy(); savePreferencesNow(); openSettings(); };
   $('saveView').onclick=function(){ if(viewer){ savedView=viewer.getView(); setStatus('View saved'); } };
   $('restoreView').onclick=function(){ if(viewer&&savedView){ viewer.setView(savedView); viewer.render(); setStatus('View restored'); } };
   $('lockView').onclick=function(){ state.locked=!state.locked; setBtnActive($('lockView'),state.locked); setStatus(state.locked?'View locked':'View unlocked'); };
@@ -4874,6 +5060,15 @@ function installFrameSyncedMotion(targetViewer){
     const ae=document.activeElement;
     const tag=ae&&ae.tagName;
     const isEditable=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||!!(ae&&ae.isContentEditable);
+    if(pendingKeyBindingAction){
+      e.preventDefault();
+      e.stopPropagation();
+      if(e.key==='Escape'){ cancelKeyBindingCapture(); return; }
+      const key=bindingKeyFromEvent(e);
+      if(!key){ setStatus('Key binding must be a single key without Ctrl/Alt/Meta.'); return; }
+      setKeyBinding(pendingKeyBindingAction,key);
+      return;
+    }
     if(isUndoHotkey(e)){
       if(isEditable)return;
       if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
@@ -4895,9 +5090,9 @@ function installFrameSyncedMotion(targetViewer){
       if(!e.repeat)deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
       return;
     }
-    if(isPlainWorkspaceHotkey(e,'l')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
-    if(isPlainWorkspaceHotkey(e,'c')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
-    if(isPlainWorkspaceHotkey(e,'n')){ e.preventDefault(); if(!e.repeat)addNearbySelection(); return; }
+    if(isActionHotkey(e,'cycleLigand')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
+    if(isActionHotkey(e,'cycleChain')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
+    if(isActionHotkey(e,'nearby')){ e.preventDefault(); if(!e.repeat)addNearbySelection(); return; }
     if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
   document.addEventListener('pointerdown',function(e){
