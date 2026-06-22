@@ -3213,7 +3213,7 @@ function boot(){
     row.setAttribute('data-entry-name',e.name);
     row.classList.toggle('is-selected',selectedEntryNames.has(e.name));
     row.style.cssText=entryRowGridStyle(child);
-    const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.cssText='color:#8f8f8f;text-align:right;padding-right:2px';
+    const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.cssText='color:#8f8f8f;text-align:left;padding-left:2px';
     const chk=makeEntryIncludeControl(entryIsIncluded(e),locked,locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.',function(click){ setEntriesIncludedFromClick(i,click); },function(){ toggleEntryLock(i); });
     const ttl=document.createElement('span');
     const displayTitle=child?entryChildDisplayTitle(e):(e.title||e.name||'');
