@@ -782,11 +782,17 @@ function boot(){
   function isProtein(a){
     const r=normUpper(a&&a.resn);
     if(waterNames.has(r)||ionNames.has(r))return false;
+    if(isSmallMoleculeEntryAtom(a)&&!isProteinLikeResidue(a))return false;
     return !a.hetflag||isProteinLikeResidue(a);
   }
   function isLigand(a){
     const r=normUpper(a&&a.resn);
+    if(isSmallMoleculeEntryAtom(a)&&!waterNames.has(r)&&!ionNames.has(r)&&!isProteinLikeResidue(a))return true;
     return !!a.hetflag&&!isProtein(a)&&!waterNames.has(r)&&!ionNames.has(r);
+  }
+  function isSmallMoleculeEntryAtom(a){
+    const fmt=normText(a&&a._entryFmt).toLowerCase();
+    return fmt==='sdf'||fmt==='mol'||fmt==='mol2'||fmt==='xyz';
   }
   function isPolar(a){ return ['N','O','S'].includes(atomElem(a)); }
   function isHydrogenAtom(a){ return atomElem(a)==='H'; }
@@ -3927,6 +3933,7 @@ function boot(){
       a._entryName=entry.name;
       a._entryTitle=entry.title;
       a._entryPdbId=entry.pdbId||'';
+      a._entryFmt=entry.fmt||'';
       a._sourceSerial=a.serial==null?a.index:a.serial;
       a.serial=serialStart++;
     });
