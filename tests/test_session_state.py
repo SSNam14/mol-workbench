@@ -65,6 +65,21 @@ class SessionStateTests(unittest.TestCase):
         state = server.normalize_stored_session_meta(meta)
         self.assertEqual(state["includedEntries"], [])
 
+    def test_normalize_preferences_preserves_action_preferences(self):
+        prefs = server.normalize_preferences({
+            "mousePreset": "custom",
+            "mouse": {"buttons": {"left": "select", "right": "rotate", "middle": "pan"}, "wheel": "zoom"},
+            "actions": {
+                "rotationModifiers": {
+                    "ctrl": {"axis": "z", "direction": -1},
+                    "shift": {"axis": "y", "direction": 1},
+                },
+                "keyBindings": {"focus": "z", "cycleLigand": "l", "cycleChain": "c", "nearby": "n"},
+            },
+        })
+        self.assertEqual(prefs["actions"]["rotationModifiers"]["ctrl"], {"axis": "z", "direction": -1})
+        self.assertEqual(prefs["actions"]["keyBindings"]["nearby"], "n")
+
     def test_get_last_structure_returns_not_found_without_session(self):
         original = server.load_session_or_legacy
         server.load_session_or_legacy = lambda: None

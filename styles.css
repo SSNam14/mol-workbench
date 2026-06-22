@@ -101,6 +101,20 @@ select:focus,input:focus{outline:1px solid #3a7bd5}
 .u-097{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}
 .u-098{height:30px;padding:0 14px;border:1px solid #555;border-radius:6px;background:#2d2d2d;color:#d4d4d4;cursor:pointer;font-size:12px}
 .u-099{height:30px;padding:0 18px;border:1px solid #3a7bd5;border-radius:6px;background:#1a4f7a;color:#fff;cursor:pointer;font-size:12px;font-weight:500}
+.pref-tabs{display:flex;gap:4px;height:26px;border-bottom:1px solid #242424}
+.pref-tab{height:24px;padding:0 12px;border:1px solid #555;border-bottom-color:#242424;border-radius:5px 5px 0 0;background:#252525;color:#bdbdbd;font-size:12px;font-family:inherit;cursor:pointer}
+.pref-tab.is-active{background:#1a4f7a;border-color:#3a7bd5;color:#fff}
+.pref-panel{display:none;gap:12px}
+.pref-panel.is-active{display:grid}
+.pref-action-list{display:grid;gap:7px}
+.pref-action-row{display:grid;grid-template-columns:118px 1fr 1fr;gap:8px;align-items:center;min-height:26px}
+.pref-action-row.key-row{grid-template-columns:154px 1fr 54px}
+.pref-action-label{font-size:12px;color:#d4d4d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pref-select,.pref-key-btn,.pref-clear-btn{height:24px;border:1px solid #555;border-radius:4px;background:#1f1f1f;color:#d4d4d4;font-size:12px;font-family:inherit;padding:0 6px}
+.pref-select{cursor:pointer}
+.pref-key-btn,.pref-clear-btn{background:#2d2d2d;cursor:pointer;text-align:center}
+.pref-key-btn.is-capturing{border-color:#3a7bd5;background:#1a4f7a;color:#fff}
+.pref-clear-btn{font-size:11px;color:#aaa}
 /* Compact editable color scheme grids inside Preferences. */
 .color-scheme-block{display:grid;gap:6px}
 .color-scheme-head{font-size:11px;color:#aaa;font-weight:600}

@@ -1,6 +1,6 @@
 # Molecular Viewer Project Memory
 
-Last updated: 2026-06-21 KST
+Last updated: 2026-06-22 KST
 
 ## Purpose
 
@@ -34,7 +34,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Keep markup, static styling, and application logic split by role.
 - Prefer dense, work-focused molecular-viewer UI over landing-page or explanatory UI.
 - Preserve fast interactive camera behavior. Do not change camera semantics to hide performance problems.
-- Keep settings extensible; the settings panel should be able to host future visual/input preferences without restructuring.
+- Keep settings extensible; the Preference panel is split into Action and Color tabs so future visual/input preferences can be added without restructuring.
 - The project server may be bound to a shared network address for workstation access, so it must not statically expose dot-directories, `.viewer_state`, git metadata, logs, server source, or project memory/docs.
 - Keep control surfaces explicit. Empty select clicks and empty range-select drags in the viewer clear the current selection.
 - Find/search misses should not clear the current selection; they should report no match and leave selection state unchanged.
@@ -44,7 +44,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 ## Must-Have Behavior
 
 - Initial load restores the full viewer session from server storage when available; otherwise it starts with an empty viewer and waits for `Open file`, `molAgent.loadUrl(...)`, or `/api/session-entry`.
-- Global representation choices, mouse actions, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed.
+- Global representation choices, mouse actions, modifier rotation rules, configurable workspace key bindings, chain/atom colors, carbon-by-chain coloring, and background color are stored in server-side preferences and restored before the initial structure is displayed. If the preference file is missing, the app must use the built-in defaults and create a new server-side preferences file.
 - Loading a structure from the UI or `molAgent.loadUrl(...)` updates the server-side session without dropping existing entries, so browser refresh keeps the entry list and included-entry state.
 - Each load must create a unique internal entry id (`entry.name`) while preserving the original filename or requested display name as `entry.title`. Loading the same filename again later must add another entry, not replace the existing one.
 - Entry titles are user-editable display labels. Double-clicking an Entries title edits `entry.title` only; it must not change `entry.name`, cached model identity, selection scopes, or included-entry state. Agents can call `molAgent.renameEntry(...)` / `molAgent.setEntryTitle(...)`.
@@ -77,8 +77,8 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - right drag rotates
   - middle-button drag pans
   - wheel zooms
-- Modifier rotation applies to whichever mouse button is currently assigned to `rotate`: `Ctrl` + left/right drag rolls around the screen Z axis, and `Shift` + left/right drag rotates around the screen Y axis.
-- Custom mouse actions are configurable from the Preference panel and through `molAgent.setMouseActions(...)`.
+- Modifier rotation applies to whichever mouse button is currently assigned to `rotate`. Defaults are `Ctrl` + drag for screen Z-axis roll, `Shift` + drag for screen Y-axis rotation, and `Alt` disabled. These modifier-axis/direction rules are configurable from the Preference Action tab and persist server-side.
+- Custom mouse actions are configurable from the Preference Action tab and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
 - Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.
 - Box selection respects selection mode:
@@ -86,10 +86,11 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - `residue`: whole touched residues
   - `chain`: whole touched chains
   - `model`: all atoms in touched entries
-- Keyboard workspace actions: `L` cycles selection through ligands in the currently displayed workspace, `C` cycles through displayed protein chains, and `Z` refits the camera. `Z` fits the current workspace when nothing is selected and fits selected atoms when a selection exists.
+- Default keyboard workspace actions: `L` cycles selection through ligands in the currently displayed workspace, `C` cycles through displayed protein chains, and `Z` refits the camera. `Z` fits the current workspace when nothing is selected and fits selected atoms when a selection exists.
 - `N` expands the current selection to nearby atoms within 5A of the selected atoms, scoped entry-locally. Expansion follows the current top-left selection level (`Atoms`, `Residues`, `Chains`, or `Molecules`) and adds to the existing selection.
-- `Delete` removes the currently selected atoms from the session, whether the selection came from direct viewer selection or the Hierarchy panel. The source structure file is not modified.
-- `Ctrl+Z`/`Cmd+Z` undoes the most recent selected-atom deletion in the current browser session. It restores the atoms to the session and reselects the restored atoms; it is not a general-purpose undo stack for every UI setting.
+- The `Z`/`L`/`C`/`N` workspace action bindings are configurable from the Preference Action tab and persist server-side. Modifier chords are intentionally not used for these configurable bindings.
+- `Delete` removes the currently selected atoms from the session, whether the selection came from direct viewer selection or the Hierarchy panel. The source structure file is not modified. This key is fixed and intentionally not exposed as a configurable key binding.
+- `Ctrl+Z`/`Cmd+Z` undoes the most recent selected-atom deletion in the current browser session. It restores the atoms to the session and reselects the restored atoms; it is not a general-purpose undo stack for every UI setting. This chord is fixed and intentionally not exposed as a configurable key binding.
 - Camera refit should use the current screen/camera X/Y bounding box rather than raw coordinate-average centering, with a tight fit that does not leave excessive top/bottom margin. Very small selections must use a minimum visual frame size so ligand/single-residue focus does not become an extreme close-up.
 - Workspace `Z` fitting should use atoms that correspond to the currently rendered representations: protein cartoon/tube fits on backbone atoms unless protein atom-level display is enabled, and visible ligand/solvent/other atoms remain part of the fit when their representation is not `off`.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z` or `molAgent.focus(...)`.

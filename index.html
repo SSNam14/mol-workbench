@@ -174,41 +174,60 @@
         <button id="settingsClose" data-btn class="u-077">&#10005;</button>
       </div>
       <div class="u-078">
+        <div class="pref-tabs">
+          <button id="prefTabAction" type="button" class="pref-tab is-active" data-pref-tab="action">Action</button>
+          <button id="prefTabColor" type="button" class="pref-tab" data-pref-tab="color">Color</button>
+        </div>
 
-        <section class="u-079">
-          <h3 class="u-080">Mouse actions</h3>
-          <div id="mouseMatrix"></div>
-        </section>
+        <div id="prefPanelAction" class="pref-panel is-active">
+          <section class="u-079">
+            <h3 class="u-080">Mouse actions</h3>
+            <div id="mouseMatrix"></div>
+          </section>
 
-        <div class="u-057"></div>
-        <section class="u-079">
-          <h3 class="u-080">Background</h3>
-          <div id="bgSwatches" class="u-081">
-            <button data-bg="#000000" title="Black" class="u-082"></button>
-            <button data-bg="#0d1117" title="Slate" class="u-083"></button>
-            <button data-bg="#21303f" title="Steel" class="u-084"></button>
-            <button data-bg="#e8eaed" title="Light" class="u-085"></button>
-            <span class="u-086">custom</span>
-            <input id="bgCustom" type="color" value="#000000" class="u-087">
-          </div>
-        </section>
+          <div class="u-057"></div>
+          <section class="u-079">
+            <h3 class="u-080">Modifier rotation</h3>
+            <div id="modifierRotationList" class="pref-action-list"></div>
+          </section>
 
-        <div class="u-057"></div>
-        <section class="u-079">
-          <div class="u-088">
-            <h3 class="u-080">Color schemes</h3>
-            <button id="resetColorSchemes" data-btn class="u-089">Reset</button>
-          </div>
-          <div class="color-scheme-block">
-            <div class="color-scheme-head">Chain</div>
-            <div id="chainColorList" class="u-090 color-scheme-grid chain-color-grid"></div>
-          </div>
-          <div class="color-scheme-block">
-            <div class="color-scheme-head">Atom</div>
-            <div id="atomColorList" class="color-scheme-grid atom-color-grid"></div>
-          </div>
-          <label class="u-091"><input id="setCarbonByChain" type="checkbox" checked class="u-092">Color protein carbons by chain</label>
-        </section>
+          <div class="u-057"></div>
+          <section class="u-079">
+            <h3 class="u-080">Key bindings</h3>
+            <div id="keyBindingList" class="pref-action-list"></div>
+          </section>
+        </div>
+
+        <div id="prefPanelColor" class="pref-panel">
+          <section class="u-079">
+            <h3 class="u-080">Background</h3>
+            <div id="bgSwatches" class="u-081">
+              <button data-bg="#000000" title="Black" class="u-082"></button>
+              <button data-bg="#0d1117" title="Slate" class="u-083"></button>
+              <button data-bg="#21303f" title="Steel" class="u-084"></button>
+              <button data-bg="#e8eaed" title="Light" class="u-085"></button>
+              <span class="u-086">custom</span>
+              <input id="bgCustom" type="color" value="#000000" class="u-087">
+            </div>
+          </section>
+
+          <div class="u-057"></div>
+          <section class="u-079">
+            <div class="u-088">
+              <h3 class="u-080">Color schemes</h3>
+              <button id="resetColorSchemes" data-btn class="u-089">Reset</button>
+            </div>
+            <div class="color-scheme-block">
+              <div class="color-scheme-head">Chain</div>
+              <div id="chainColorList" class="u-090 color-scheme-grid chain-color-grid"></div>
+            </div>
+            <div class="color-scheme-block">
+              <div class="color-scheme-head">Atom</div>
+              <div id="atomColorList" class="color-scheme-grid atom-color-grid"></div>
+            </div>
+            <label class="u-091"><input id="setCarbonByChain" type="checkbox" checked class="u-092">Color protein carbons by chain</label>
+          </section>
+        </div>
 
         <div class="u-097">
           <button id="settingsReset" data-btn class="u-098">Reset all</button>
