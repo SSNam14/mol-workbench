@@ -44,6 +44,19 @@ MOUSE_PRESETS = {"select-left", "custom", "default"}
 ROTATION_MODIFIERS = ("ctrl", "shift", "alt")
 ROTATION_AXES = {"none", "x", "y", "z"}
 KEY_BINDING_ACTIONS = ("focus", "cycleLigand", "cycleChain", "nearby")
+KEY_BINDING_ALIASES = {
+    "space": "Space",
+    "spacebar": "Space",
+    "del": "Delete",
+    "delete": "Delete",
+    "backspace": "Backspace",
+    "enter": "Enter",
+    "return": "Enter",
+    "esc": "Escape",
+    "escape": "Escape",
+    "tab": "Tab",
+}
+RESERVED_KEY_BINDINGS = {"delete", "control", "ctrl", "shift", "alt", "meta", "cmd", "command"}
 BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
@@ -77,6 +90,22 @@ ELEMENT_IDS = (
     "AC", "TH", "PA", "U", "NP", "PU", "AM", "CM", "BK", "CF", "ES", "FM", "MD", "NO", "LR",
     "RF", "DB", "SG",
 )
+
+
+def normalize_key_binding_value(value):
+    key = str(value or "").strip()
+    if len(key) > 32:
+        return None
+    if not key:
+        return ""
+    if len(key) == 1:
+        return key.lower()
+    key = KEY_BINDING_ALIASES.get(key.lower(), key)
+    if key.lower() in RESERVED_KEY_BINDINGS:
+        return None
+    if "+" in key:
+        return None
+    return key
 
 
 def normalize_deleted_source_serials(value):
@@ -273,13 +302,18 @@ def normalize_preferences(value):
             if not isinstance(key_bindings, dict):
                 return None
             normalized_keys = {}
+            seen_keys = set()
             for action in KEY_BINDING_ACTIONS:
                 if action not in key_bindings:
                     continue
-                key = str(key_bindings.get(action) or "").strip()
-                if len(key) > 32:
-                    return None
+                key = normalize_key_binding_value(key_bindings.get(action))
+                if key is None:
+                    continue
+                if key and key in seen_keys:
+                    key = ""
                 normalized_keys[action] = key
+                if key:
+                    seen_keys.add(key)
             if normalized_keys:
                 normalized_actions["keyBindings"] = normalized_keys
         if normalized_actions:

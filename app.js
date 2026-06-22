@@ -311,6 +311,36 @@ function boot(){
     const aliases={space:'Space',spacebar:'Space',del:'Delete',delete:'Delete',backspace:'Backspace',enter:'Enter',return:'Enter',esc:'Escape',escape:'Escape',tab:'Tab'};
     return aliases[key.toLowerCase()]||key;
   }
+  function isAssignableKeyBinding(key){
+    if(!key)return true;
+    if(key==='Delete')return false;
+    if(/^(Control|Ctrl|Shift|Alt|Meta|Cmd|Command)$/i.test(key))return false;
+    if(/\+/.test(key))return false;
+    return true;
+  }
+  function normalizeAssignableKeyBinding(value){
+    const key=normalizeKeyBinding(value,'');
+    return isAssignableKeyBinding(key)?key:null;
+  }
+  function normalizeKeyBindingSet(raw,fallback){
+    const next=Object.assign({},fallback||DEFAULT_KEY_BINDINGS);
+    Object.keys(DEFAULT_KEY_BINDINGS).forEach(action=>{
+      if(raw&&raw[action]!=null){
+        const key=normalizeAssignableKeyBinding(raw[action]);
+        next[action]=key==null?'':key;
+      }
+    });
+    const seen=new Set();
+    Object.keys(DEFAULT_KEY_BINDINGS).forEach(action=>{
+      const key=normalizeAssignableKeyBinding(next[action]);
+      if(key==null||key&&seen.has(key))next[action]='';
+      else{
+        next[action]=key;
+        if(key)seen.add(key);
+      }
+    });
+    return next;
+  }
   function applyActionPreferences(payload){
     const actions=payload&&payload.actions||{};
     const mods=actions.rotationModifiers||payload.rotationModifiers;
@@ -325,11 +355,7 @@ function boot(){
     }
     const keys=actions.keyBindings||payload.keyBindings;
     if(keys&&typeof keys==='object'){
-      const next=Object.assign({},settings.keyBindings);
-      Object.keys(DEFAULT_KEY_BINDINGS).forEach(action=>{
-        if(keys[action]!=null)next[action]=normalizeKeyBinding(keys[action],DEFAULT_KEY_BINDINGS[action]);
-      });
-      settings.keyBindings=next;
+      settings.keyBindings=normalizeKeyBindingSet(keys,settings.keyBindings);
     }
   }
   function applyPreferences(payload){
@@ -2204,9 +2230,10 @@ function boot(){
   function toggleFocus(){ if(!state.selectionSel)return focusOverview(); return focus(state.selectionSel); }
   function hotkeyEventKey(e){ return normalizeKeyBinding(e&&e.key,''); }
   function isActionHotkey(e,action){
-    if(!e||e.ctrlKey||e.metaKey||e.altKey)return false;
+    if(!e||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return false;
     const key=settings.keyBindings[action];
-    return !!(key&&hotkeyEventKey(e)===key);
+    const eventKey=hotkeyEventKey(e);
+    return !!(key&&eventKey!=='Delete'&&eventKey===key);
   }
   function isFocusHotkey(e){ return isActionHotkey(e,'focus'); }
   function isUndoHotkey(e){ return !!(e&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
@@ -4782,16 +4809,16 @@ function installFrameSyncedMotion(targetViewer){
   function keyBindingLabel(key){ return key?key:'Unassigned'; }
   function bindingKeyFromEvent(e){
     if(!e)return '';
-    if(e.ctrlKey||e.metaKey||e.altKey)return '';
+    if(e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return '';
     const key=normalizeKeyBinding(e.key,'');
-    if(!key||/^(Control|Shift|Alt|Meta)$/i.test(key))return '';
-    if(key==='Delete')return '';
+    if(!isAssignableKeyBinding(key))return '';
     return key;
   }
   function setKeyBinding(action,key,opts){
     opts=opts||{};
     if(!Object.prototype.hasOwnProperty.call(DEFAULT_KEY_BINDINGS,action))return;
-    const next=normalizeKeyBinding(key,'');
+    const next=normalizeAssignableKeyBinding(key);
+    if(next==null){ if(opts.status!==false)setStatus('Key binding is reserved.'); return; }
     Object.keys(settings.keyBindings).forEach(k=>{ if(k!==action&&next&&settings.keyBindings[k]===next)settings.keyBindings[k]=''; });
     settings.keyBindings[action]=next;
     pendingKeyBindingAction=null;

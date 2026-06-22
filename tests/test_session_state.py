@@ -80,6 +80,27 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(prefs["actions"]["rotationModifiers"]["ctrl"], {"axis": "z", "direction": -1})
         self.assertEqual(prefs["actions"]["keyBindings"]["nearby"], "n")
 
+    def test_normalize_preferences_filters_reserved_key_bindings(self):
+        prefs = server.normalize_preferences({
+            "actions": {
+                "keyBindings": {"focus": "Delete", "cycleLigand": "Ctrl+L", "cycleChain": "shift", "nearby": "N"},
+            },
+        })
+        self.assertEqual(prefs["actions"]["keyBindings"], {"nearby": "n"})
+
+    def test_normalize_preferences_deduplicates_key_bindings(self):
+        prefs = server.normalize_preferences({
+            "actions": {
+                "keyBindings": {"focus": "z", "cycleLigand": "z", "cycleChain": "c", "nearby": "c"},
+            },
+        })
+        self.assertEqual(prefs["actions"]["keyBindings"], {
+            "focus": "z",
+            "cycleLigand": "",
+            "cycleChain": "c",
+            "nearby": "",
+        })
+
     def test_get_last_structure_returns_not_found_without_session(self):
         original = server.load_session_or_legacy
         server.load_session_or_legacy = lambda: None
