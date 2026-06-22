@@ -656,7 +656,7 @@ const entry = await molAgent.loadServerFile("/home/user/project/structure.cif");
 molAgent.getState().entries.find(e => e.name === entry.name);
 ```
 
-`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. They are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
+`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. The visible `Open server` dialog is a Linux-style explorer, but agents should use `molAgent.loadServerFile(...)` or the HTTP APIs for routine loading. Both paths are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
 
 Remove an entry from the current viewer session:
 
