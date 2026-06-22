@@ -393,6 +393,8 @@ Useful fields:
 - `filter`: defaults to `true`, so only matching interaction guide lines are drawn while the global Interactions toggle is on.
 - `representation`, `replace`, `select`, `focus`, `only`, and `hideOthers`: behave like `showWithin`.
 
+Manual interaction-panel edits clear the current agent interaction filter. If a user changes an interaction type checkbox or the `All` / `Protein-Ligand` / `Protein-Protein` scope dropdown, the viewer returns to normal GUI-controlled interaction display.
+
 Clear the current interaction filter:
 
 ```js

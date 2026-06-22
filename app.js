@@ -2331,6 +2331,11 @@ function boot(){
     const t=interState.types[type];
     return !!(t&&t.on&&interactionInScope(item,interactionUiScopeForGroup(group)));
   }
+  function clearInteractionFilterForManualEdit(){
+    if(!interState.filter)return false;
+    interState.filter=null;
+    return true;
+  }
   function atomForInteractionSerial(serial,record){
     if(record&&record.entryName){
       const direct=atomByEntrySourceSerial.get(atomEntryIndexKey(record.entryName,serial));
@@ -2436,7 +2441,7 @@ function boot(){
     const lab=document.createElement('span'); lab.textContent=t.label; lab.style.flex='1';
     const sw=document.createElement('span'); sw.style.cssText='width:13px;height:13px;border-radius:3px;flex:none;background:'+t.color+(t.on?'':';opacity:.25');
     wrap.appendChild(box); wrap.appendChild(lab); wrap.appendChild(sw);
-    wrap.onclick=function(){ t.on=!t.on; buildInterPanel(); redrawInteractions(true); };
+    wrap.onclick=function(){ clearInteractionFilterForManualEdit(); t.on=!t.on; buildInterPanel(); redrawInteractions(true); };
     return wrap;
   }
   function buildInterPanel(){
@@ -2455,7 +2460,7 @@ function boot(){
       const sel=document.createElement('select'); sel.style.cssText='flex:none;width:124px;height:22px;background:#1f1f1f;color:#d4d4d4;border:1px solid #555;border-radius:4px;font-size:11px;font-family:inherit';
       SCOPE_OPTS.forEach(o=>{ const op=document.createElement('option'); op.value=o[1]; op.textContent=o[0]; sel.appendChild(op); });
       sel.value=interState.scope[g.key];
-      sel.onchange=function(){ interState.scope[g.key]=sel.value; redrawInteractions(true); };
+      sel.onchange=function(){ clearInteractionFilterForManualEdit(); interState.scope[g.key]=sel.value; redrawInteractions(true); };
       head.appendChild(sel);
       sec.appendChild(head);
       g.rows.forEach(row=>{ const r=document.createElement('div'); r.style.cssText='display:grid;grid-template-columns:repeat('+row.length+',1fr);gap:8px;padding-left:30px'; row.forEach(k=>r.appendChild(makeInterToggle(k))); sec.appendChild(r); });
