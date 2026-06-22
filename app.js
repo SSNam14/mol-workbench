@@ -48,6 +48,7 @@ function boot(){
   const VIEWER_SESSION_API = 'api/session';
   const VIEWER_SESSION_ENTRY_API = 'api/session-entry';
   const VIEWER_SESSION_ENTRY_TITLE_API = 'api/session-entry-title';
+  const VIEWER_SESSION_ENTRIES_DELETE_API = 'api/session-entries-delete';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const VIEWER_SESSION_STATE_API = 'api/session-state';
   const AGENT_ACTIONS_API = 'api/agent-actions';
@@ -596,6 +597,17 @@ function boot(){
     suppressSessionPollUntil=Date.now()+1500;
     return fetchJsonResult(VIEWER_SESSION_ENTRY_TITLE_API,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cleanName,title:cleanTitle})}).then(result=>{
       if(!result.ok)return reportPersistenceFailure('Viewer session entry title',result,opts);
+      rememberSessionResponse(result.data);
+      return true;
+    });
+  }
+  function deleteViewerSessionEntries(names,opts){
+    opts=opts||{};
+    const clean=Array.from(new Set((names||[]).map(name=>normText(name)).filter(Boolean)));
+    if(!clean.length)return Promise.resolve(true);
+    suppressSessionPollUntil=Date.now()+1500;
+    return fetchJsonResult(VIEWER_SESSION_ENTRIES_DELETE_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({names:clean}),keepalive:true}).then(result=>{
+      if(!result.ok)return reportPersistenceFailure('Viewer session entry delete',result,opts);
       rememberSessionResponse(result.data);
       return true;
     });
@@ -3290,14 +3302,13 @@ function boot(){
     if(deletedCount)parts.push(deletedCount.toLocaleString()+' atom'+(deletedCount===1?'':'s'));
     if(removeEntries.length)parts.push(removeEntries.length.toLocaleString()+' entr'+(removeEntries.length===1?'y':'ies'));
     setStatus('Deleted selected '+parts.join(' and '));
-    let savedAll=await saveViewerSession({status:false});
-    if(!savedAll&&!removeEntries.length){
-      let partialSavedAll=true;
-      for(const entry of updated){
-        const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
-        if(!saved)partialSavedAll=false;
-      }
-      savedAll=partialSavedAll;
+    let savedAll=true;
+    if(removeEntries.length){
+      savedAll=await deleteViewerSessionEntries(removeEntries.map(entry=>entry.name),{status:false});
+    }
+    for(const entry of updated){
+      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+      if(!saved)savedAll=false;
     }
     if(!savedAll)setStatus('Deleted locally but not saved on server.');
   }
@@ -4629,7 +4640,7 @@ function boot(){
     if(opts.resetSelection!==false)resetSelectionState();
     if(opts.rebuild!==false)rebuildDisplayedEntries({preserveView:true,zoom:false});
     if(opts.persist!==false){
-      saveViewerSession({status:false}).then(saved=>{ if(!saved)setStatus('Deleted locally but not saved on server.'); });
+      deleteViewerSessionEntries(targets.map(entry=>entry.name),{status:false}).then(saved=>{ if(!saved)setStatus('Deleted locally but not saved on server.'); });
     }
     return targets;
   }

@@ -235,6 +235,43 @@ class SessionStateTests(unittest.TestCase):
                 for key, value in originals.items():
                     setattr(server, key, value)
 
+    def test_remove_session_entries_persists_batch_delete(self):
+        originals = {
+            "STATE_DIR": server.STATE_DIR,
+            "LAST_STRUCTURE_PATH": server.LAST_STRUCTURE_PATH,
+            "SESSION_PATH": server.SESSION_PATH,
+            "SESSION_STATE_PATH": server.SESSION_STATE_PATH,
+            "SESSION_META_PATH": server.SESSION_META_PATH,
+            "PREFERENCES_PATH": server.PREFERENCES_PATH,
+            "INTERACTION_INDEX_DIR": server.INTERACTION_INDEX_DIR,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.STATE_DIR = root
+            server.LAST_STRUCTURE_PATH = root / "last_structure.json"
+            server.SESSION_PATH = root / "session.json"
+            server.SESSION_STATE_PATH = root / "session_state.json"
+            server.SESSION_META_PATH = root / "session_meta.json"
+            server.PREFERENCES_PATH = root / "preferences.json"
+            server.INTERACTION_INDEX_DIR = root / "interaction_indexes"
+            try:
+                session = server.normalize_session({
+                    "entries": [entry("one"), entry("two"), entry("three")],
+                    "includedEntries": ["one", "two", "three"],
+                    "lockedEntries": ["two"],
+                })
+                server.write_session(session)
+                next_session, removed = server.remove_session_entries(["two", "missing"])
+                self.assertEqual([item["name"] for item in removed], ["two"])
+                self.assertEqual([item["name"] for item in next_session["entries"]], ["one", "three"])
+                self.assertEqual(next_session["includedEntries"], ["one", "three"])
+                self.assertEqual(next_session["lockedEntries"], [])
+                reloaded = server.load_session_or_legacy()
+                self.assertEqual([item["name"] for item in reloaded["entries"]], ["one", "three"])
+            finally:
+                for key, value in originals.items():
+                    setattr(server, key, value)
+
     def test_agent_action_requires_structured_known_type(self):
         self.assertIsNone(server.normalize_agent_action("show ligand"))
         self.assertIsNone(server.normalize_agent_action({"type": "unknown"}))

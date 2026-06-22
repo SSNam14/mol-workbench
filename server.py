@@ -1411,23 +1411,33 @@ def upsert_session_entries(new_entries, replace=False):
 
 
 def remove_session_entry(name):
+    session, _ = remove_session_entries([name])
+    return session
+
+
+def remove_session_entries(names):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            return None
-        target = str(name or "").strip()
-        entries = [entry for entry in session.get("entries", []) if entry.get("name") != target]
-        if len(entries) == len(session.get("entries", [])):
-            return session
+            return None, []
+        targets = {str(name or "").strip() for name in (names or [])}
+        targets.discard("")
+        if not targets:
+            return session, []
+        original_entries = session.get("entries", [])
+        entries = [entry for entry in original_entries if entry.get("name") not in targets]
+        removed = [entry for entry in original_entries if entry.get("name") in targets]
+        if not removed:
+            return session, []
         if not entries:
             clear_session()
-            return None
+            return None, removed
         names = {entry["name"] for entry in entries}
         included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
         locked = [entry_name for entry_name in session.get("lockedEntries", []) if entry_name in names]
         next_session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": locked})
         write_session(next_session)
-        return next_session
+        return next_session, removed
 
 
 def update_session_entry_title(name, title):
@@ -1569,6 +1579,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/session-entry-title":
             self.handle_put_session_entry_title()
+            return
+        if path == "/api/session-entries-delete":
+            self.handle_delete_session_entries()
             return
         if path == "/api/session-state":
             self.handle_put_session_state()
@@ -1879,6 +1892,30 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": "state_write_failed"})
             return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]) if session else 0, "session": session_meta(session)})
+
+    def handle_delete_session_entries(self):
+        payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
+        if payload is None:
+            return
+        raw_names = payload.get("names") if isinstance(payload, dict) else payload
+        if not isinstance(raw_names, list):
+            self.send_json(400, {"error": "invalid_entry_names"})
+            return
+        names = [str(name or "").strip() for name in raw_names if str(name or "").strip()]
+        if not names:
+            self.send_json(400, {"error": "invalid_entry_names"})
+            return
+        try:
+            session, removed = remove_session_entries(names)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        self.send_json(200, {
+            "ok": True,
+            "removedEntries": [{"name": entry.get("name", ""), "title": entry.get("title", entry.get("name", ""))} for entry in removed],
+            "entries": len(session["entries"]) if session else 0,
+            "session": session_meta(session),
+        })
 
     def handle_get_last_structure(self):
         try:
