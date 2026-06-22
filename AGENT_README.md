@@ -133,6 +133,8 @@ Some Schrodinger-style CIF exports omit `_atom_site.group_PDB`, which can cause 
 
 If a protein CIF has no HELIX/SHEET or mmCIF secondary-structure annotation, the viewer applies a conservative phi/psi fallback for cartoon helix/sheet/loop display. Structures that already include secondary-structure annotation keep their source-provided assignments.
 
+Line representation uses bond-order metadata when it is available. Double and triple bonds are rendered as parallel wide-line segments. MAE/MAEGZ conversion preserves Maestro `i_m_order` metadata for this purpose; plain PDB `CONECT` records do not encode bond order, so those bonds remain single-line unless another loaded format provides order metadata.
+
 ## Large Structure Performance Notes
 
 For very large entries, first display can still take seconds because 3Dmol parsing, atom-map construction, hierarchy building, and initial scene generation run in the browser. After an entry is cached, display inclusion should be much faster.
