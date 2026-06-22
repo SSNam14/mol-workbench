@@ -3761,15 +3761,10 @@ function boot(){
     return loaded.length===1?loaded[0]:loaded;
   }
   async function persistAndLoadEntries(list){
-    const loaded=[];
-    for(const raw of list||[]){
-      const e=normalizeStructureEntry(raw);
-      if(!e)continue;
-      const item=loadEntry(e,{persist:false});
-      if(!await saveViewerSessionEntryDeferred(item,{status:false}))setStatus('Loaded but not saved on server: '+item.title);
-      loaded.push(item);
-    }
+    const loaded=loadEntries(list,{persist:false});
     if(!loaded.length)throw new Error('Invalid structure data');
+    const saved=loaded.length===1?await saveViewerSessionEntryDeferred(loaded[0],{status:false}):await saveViewerSession({status:false});
+    if(!saved)setStatus('Loaded but not saved on server: '+(loaded.length===1?loaded[0].title:loaded.length+' entries'));
     return loaded;
   }
   async function persistAndLoadEntry(e){
@@ -4466,21 +4461,30 @@ function boot(){
     const removed=deleteEntry(entry);
     return removed?{name:removed.name,title:removed.title,pdbId:removed.pdbId,fmt:removed.fmt}:null;
   }
+  function loadEntries(list,opts){
+    opts=opts||{};
+    const normalized=normalizeStructureEntryList(list);
+    if(!normalized.length)throw new Error('Invalid structure data');
+    if(!viewer)initViewer();
+    const hadOverrides=displayStateHasOverrides();
+    let existingAny=false;
+    normalized.forEach(e=>ensureEntryModel(e));
+    normalized.forEach(e=>{
+      const existingEntry=entries.findIndex(x=>x.name===e.name);
+      if(existingEntry>=0){ entries[existingEntry]=e; existingAny=true; }
+      else entries.push(e);
+      entryChecked[e.name]=true;
+    });
+    resetDisplayRulesForStructure();
+    if(existingAny||hadOverrides)rebuildDisplayedEntries({zoom:opts.zoom!==false});
+    else refreshDisplayedEntriesFast({zoom:opts.zoom!==false});
+    return normalized;
+  }
   function loadEntry(e,opts){
     opts=opts||{};
-    e=normalizeStructureEntry(e);
-    if(!e)throw new Error('Invalid structure data');
-    if(!viewer)initViewer();
-    ensureEntryModel(e);
-    const hadOverrides=displayStateHasOverrides();
-    const existingEntry=entries.findIndex(x=>x.name===e.name);
-    if(existingEntry>=0)entries[existingEntry]=e; else entries.push(e);
-    entryChecked[e.name]=true;
-    resetDisplayRulesForStructure();
-    if(existingEntry>=0||hadOverrides)rebuildDisplayedEntries({zoom:true});
-    else refreshDisplayedEntriesFast({zoom:true});
-    if(opts.persist!==false)saveViewerSessionEntryDeferred(e,{status:false}).then(ok=>{ if(!ok)setStatus('Loaded but not saved on server: '+e.title); });
-    return e;
+    const loaded=loadEntries([e],opts)[0];
+    if(opts.persist!==false)saveViewerSessionEntryDeferred(loaded,{status:false}).then(ok=>{ if(!ok)setStatus('Loaded but not saved on server: '+loaded.title); });
+    return loaded;
   }
   function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.psazip'))return 'psazip'; if(n.endsWith('.maegz')||n.endsWith('.mae.gz'))return 'maegz'; if(n.endsWith('.mae'))return 'mae'; if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   function hasLineMatch(text,pattern){ return pattern.test(String(text||'')); }
@@ -4758,8 +4762,7 @@ function boot(){
         const rawEntries=result.data&&Array.isArray(result.data.loadedEntries)?result.data.loadedEntries:(result.data&&result.data.entry);
         const loadedEntries=normalizeStructureEntryList(rawEntries);
         if(!loadedEntries.length)throw new Error('Server returned no structure entry.');
-        loadedEntries.forEach(loadedEntry=>loadEntry(loadedEntry,{persist:false}));
-        return loadedEntries;
+        return loadEntries(loadedEntries,{persist:false});
       });
       suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+5000);
       setStatus(entry.length===1?'Loaded server file: '+entry[0].title:'Loaded server file: '+name+' ('+entry.length+' entries)');
