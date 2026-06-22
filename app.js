@@ -118,7 +118,7 @@ function boot(){
   let panelRefreshTimer = null;
   let interactionStartTimer = null;
   let pendingKeyBindingAction = null;
-  const serverFileState = {path:'', parent:'', roots:[], items:[]};
+  const serverFileState = {path:'', parent:'', roots:[], items:[], loading:false};
   let busyToken = 0;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -4259,6 +4259,11 @@ function boot(){
     return d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
   }
   function setServerFileStatus(text){ if($('serverFileStatus'))$('serverFileStatus').textContent=text||''; }
+  function setServerFileLoading(loading){
+    serverFileState.loading=!!loading;
+    if($('serverFileOverlay'))$('serverFileOverlay').classList.toggle('is-loading',serverFileState.loading);
+    ['serverFileRoots','serverFileUp','serverFileClose','serverFileCancel'].forEach(id=>{ if($(id))$(id).disabled=serverFileState.loading; });
+  }
   function syncServerFileRoots(){
     const sel=$('serverFileRoots'); if(!sel)return;
     const roots=serverFileState.roots||[];
@@ -4309,6 +4314,7 @@ function boot(){
       mtime.textContent=formatServerFileTime(item.mtime);
       row.appendChild(icon); row.appendChild(name); row.appendChild(size); row.appendChild(mtime);
       row.onclick=function(){
+        if(serverFileState.loading)return;
         if(item.type==='directory')refreshServerFileList(item.path);
         else loadServerFile(item.path,{suppressThrow:true});
       };
@@ -4316,6 +4322,7 @@ function boot(){
     });
   }
   async function refreshServerFileList(path){
+    if(serverFileState.loading)return null;
     const params=new URLSearchParams();
     if(path)params.set('path',path);
     setServerFileStatus('Loading directory...');
@@ -4337,17 +4344,24 @@ function boot(){
   async function loadServerFile(path,opts){
     opts=opts||{};
     if(!path)return;
+    if(serverFileState.loading){
+      const err=new Error('Another server file is already loading.');
+      if(opts.suppressThrow)return null;
+      throw err;
+    }
     const name=path.split(/[\\/]/).pop()||path;
     suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+60000);
+    setServerFileLoading(true);
     try{
-      const result=await withBusy('Loading '+name+'...',function(){
-        return fetchJsonResult(SERVER_FILE_LOAD_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+      const entry=await withBusy('Loading '+name+'...',async function(){
+        const result=await fetchJsonResult(SERVER_FILE_LOAD_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+        if(!result.ok)throw new Error(persistenceErrorText(result));
+        rememberSessionResponse(result.data);
+        const loadedEntry=normalizeStructureEntry(result.data&&result.data.entry);
+        if(!loadedEntry)throw new Error('Server returned no structure entry.');
+        loadEntry(loadedEntry,{persist:false});
+        return loadedEntry;
       });
-      if(!result.ok)throw new Error(persistenceErrorText(result));
-      rememberSessionResponse(result.data);
-      const entry=normalizeStructureEntry(result.data&&result.data.entry);
-      if(!entry)throw new Error('Server returned no structure entry.');
-      loadEntry(entry,{persist:false});
       suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+5000);
       setStatus('Loaded server file: '+entry.title);
       closeServerFileBrowser();
@@ -4357,6 +4371,8 @@ function boot(){
       setStatus('Server file load failed: '+((err&&err.message)||err));
       if(!opts.suppressThrow)throw err;
       return null;
+    }finally{
+      setServerFileLoading(false);
     }
   }
   async function loadInitialStructure(){
