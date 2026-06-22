@@ -223,7 +223,7 @@ class SessionStateTests(unittest.TestCase):
         action = server.normalize_agent_action({
             "type": "showInteractions",
             "interaction": "hbond",
-            "source": {"selector": {"resn": "85C"}},
+            "source": {"selector": {"resn": "LIG"}},
         }, assign_id=True)
         self.assertEqual(action["type"], "showInteractions")
 

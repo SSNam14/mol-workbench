@@ -110,7 +110,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Hydrogen-bond guide lines must connect `H -> acceptor`; the donor heavy atom is stored for classification/scope but is not the displayed line endpoint.
 - H-bond and salt UI sliders filter the precomputed interaction index; changing those cutoffs must not trigger full reindexing.
 - The custom select mouse action uses screen-space nearest-atom picking instead of 3Dmol's general `handleClickSelection` raycast to avoid click-time frame drops.
-- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules. CPK sphere size uses configured VDW radii times a configured scale, so H/He remain smaller than C/N/O/etc.
+- Protein backbone display and protein atom-level display are separate controls. Default is backbone `cartoon` with protein atoms `off`. The vendored 3Dmol cartoon renderer has local options for reduced loop width and helix/sheet spline tension; the current app default keeps sheet arrows off, uses a narrow loop width, and raises sheet tension slightly above helix tension. Atom-level `cpk` means one combined 3Dmol style containing both `stick` and `sphere`; do not implement it as two separate style rules. CPK sphere size uses configured VDW radii times a configured scale, so H/He remain smaller than C/N/O/etc.
 - FPS overlay is a browser `requestAnimationFrame` indicator, not remote desktop streaming FPS.
 
 ## API Contract

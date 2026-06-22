@@ -7,7 +7,7 @@ MolWorkbench is a static WebGL viewer with a small Python persistence server. It
 ## Features
 
 - Multi-entry molecular visualization with independent show/hide state per entry.
-- Protein backbone and atom-level representation controls.
+- Protein backbone and atom-level representation controls, with a tuned cartoon backbone default.
 - Selection, range selection, Shift-additive viewer selection, Ctrl/Shift hierarchy selection, and selected-atom actions.
 - Server-persisted viewer sessions, preferences, colors, and interaction indexes.
 - Background nonbonded interaction indexing with dashed guide-line rendering.
@@ -53,7 +53,7 @@ await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
 const hits = molAgent.queryWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}});
 molAgent.style(hits.selector, "line");
-molAgent.showInteractions({interaction: "hbond", source: {selector: {resn: "85C"}}});
+molAgent.showInteractions({interaction: "hbond", source: {selector: {resn: "LIG"}}});
 molAgent.focus();
 molAgent.setProteinAtomStyle("line");
 molAgent.getState();

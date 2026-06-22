@@ -319,10 +319,11 @@ molAgent.showWithin({
 Show the atom-level interface between chain A and chain C in one entry:
 
 ```js
+const entryId = molAgent.getState().entries[0].name;
 molAgent.showWithin({
   radius: 7,
-  source: {selector: {_entryName: "5HXB.pdb", chain: "A"}},
-  target: {selector: {_entryName: "5HXB.pdb", chain: "C"}},
+  source: {selector: {_entryName: entryId, chain: "A"}},
+  target: {selector: {_entryName: entryId, chain: "C"}},
   level: "atom",
   sides: "both",
   representation: "line"
@@ -360,12 +361,13 @@ molAgent.run({
 
 Use `queryInteractions` when the user asks for already-indexed nonbonded interactions rather than raw distance neighborhoods. The command is generic: `source` and `target` use the same selector/category spec shape as `queryWithin`, and `interaction` may be `hbond`, `halogen`, `salt`, `pipi`, `pication`, `good`, `bad`, `ugly`, or `contacts`.
 
-Show only hydrogen-bond interactions touching ligand `85C`, and display the involved residues:
+Show only hydrogen-bond interactions touching a named ligand residue, and display the involved residues:
 
 ```js
+const ligandResn = "LIG";
 molAgent.showInteractions({
   interaction: "hbond",
-  source: {selector: {resn: "85C"}},
+  source: {selector: {resn: ligandResn}},
   level: "residue",
   representation: "line"
 });
@@ -374,10 +376,11 @@ molAgent.showInteractions({
 Show interactions between chain A and chain C in one entry:
 
 ```js
+const entryId = molAgent.getState().entries[0].name;
 molAgent.showInteractions({
   interaction: ["hbond", "salt", "pication"],
-  source: {selector: {_entryName: "5HXB.pdb", chain: "A"}},
-  target: {selector: {_entryName: "5HXB.pdb", chain: "C"}},
+  source: {selector: {_entryName: entryId, chain: "A"}},
+  target: {selector: {_entryName: entryId, chain: "C"}},
   level: "residue",
   representation: "line"
 });
@@ -668,9 +671,10 @@ molAgent.removeEntry("Display Title");
 Rename one loaded entry title without changing its internal id:
 
 ```js
-const matches = molAgent.getState().entries.filter(e => e.title === "1FJS.cif");
+const originalTitle = "Original display title";
+const matches = molAgent.getState().entries.filter(e => e.title === originalTitle);
 const entry = matches[1] || matches[0];
-await molAgent.renameEntry(entry.name, "1FJS reference");
+await molAgent.renameEntry(entry.name, "Reference structure");
 ```
 
 `molAgent.setEntryTitle(...)` is an alias. Prefer the unique `entry.name` from `molAgent.getState().entries` when two entries share the same title; title lookup is allowed but selects the first match.
@@ -791,13 +795,14 @@ molAgent.models();
 
 ### Temporary Viewer-Level Shapes
 
-Agents can add temporary geometric annotations directly to the current 3Dmol viewer when the structured API is insufficient. This is useful for tasks such as "draw a 10 A cube centered on ligand 85C COM" or "draw a guide line between two residue centers".
+Agents can add temporary geometric annotations directly to the current 3Dmol viewer when the structured API is insufficient. This is useful for tasks such as "draw a 10 A cube centered on a ligand COM" or "draw a guide line between two residue centers".
 
-Example: draw a 10 A cube centered on ligand `85C`:
+Example: draw a 10 A cube centered on a named ligand residue:
 
 ```js
-const ligand = molAgent.selectAtoms({resn: "85C"});
-if (!ligand.length) throw new Error("No atoms matched ligand 85C");
+const ligandResn = "LIG";
+const ligand = molAgent.selectAtoms({resn: ligandResn});
+if (!ligand.length) throw new Error(`No atoms matched ligand ${ligandResn}`);
 
 const center = ligand.reduce((p, a) => ({
   x: p.x + a.x,
