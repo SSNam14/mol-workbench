@@ -324,6 +324,7 @@ Useful fields:
 - `replace`: defaults to replacing the previous `agent-showWithin` rule with the same `tag`.
 - `select`: defaults to selecting the matched atoms as well as displaying them.
 - `focus`: set `true` only when the user explicitly asks to move the camera.
+- `only` / `hideOthers`: hide atoms outside the matched set after applying the display rule.
 
 `molAgent.selectWithin(...)` accepts the same fields but only changes selection. The compatibility form also works:
 

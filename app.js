@@ -1049,6 +1049,7 @@ function boot(){
     const representation=ATOM_REPS.has(rep)?rep:'line';
     const tag=normText(command.tag||'default')||'default';
     const source='agent-showWithin';
+    let needsStyleApply=false;
     if(command.replace!==false)agentRemoveRules(source,tag);
     state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serialTextSet(result.matched));
     if(opts.show!==false){
@@ -1062,8 +1063,17 @@ function boot(){
       });
       if(command.id)ruleOptions.agentActionId=command.id;
       state.styleRules.push({selector:result.selector,representation,options:ruleOptions});
-      applyStylesFull(true);
+      needsStyleApply=true;
     }
+    if(command.only||command.hideOthers){
+      state.hiddenRules.push({
+        selector:{not:result.selector},
+        representation:'hide',
+        options:{source,tag,atomLevel:true,only:true}
+      });
+      needsStyleApply=true;
+    }
+    if(needsStyleApply)applyStylesFull(true);
     if(command.select!==false)setSelection(result.selector,{source:'agent-showWithin',representation:'line'});
     if(command.focus)focus(result.selector);
     setStatus('Agent within: '+result.matched.length.toLocaleString()+' atoms');
