@@ -478,6 +478,8 @@ function boot(){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
     const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const sourcePath=normText(e.sourcePath||'');
+    if(sourcePath)out.sourcePath=sourcePath;
     const loadGroup=normalizeEntryLoadGroup(e.loadGroup);
     if(loadGroup)out.loadGroup=loadGroup;
     const surfaces=normalizeEntrySurfaces(e.surfaces);
@@ -5938,7 +5940,7 @@ function installFrameSyncedMotion(targetViewer){
     queryInteractions:function(command){ return queryInteractionsAction(Object.assign({},command||{},{type:'queryInteractions'})); },
     showInteractions:function(command){ return showInteractionsAction(Object.assign({},command||{},{type:'showInteractions'})); },
     clearInteractionFilter:function(command){ return clearInteractionFilterAction(Object.assign({},command||{})); },
-    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryIsIncluded(e),locked:isEntryLocked(e),selected:selectedEntryNames.has(e.name),loadGroup:e.loadGroup?Object.assign({},e.loadGroup):null})),includedEntries:includedEntries().map(e=>e.name),lockedEntries:entries.filter(isEntryLocked).map(e=>e.name),selectedEntries:selectedEntryRecords().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,sourcePath:e.sourcePath||'',included:entryIsIncluded(e),locked:isEntryLocked(e),selected:selectedEntryNames.has(e.name),loadGroup:e.loadGroup?Object.assign({},e.loadGroup):null})),includedEntries:includedEntries().map(e=>e.name),lockedEntries:entries.filter(isEntryLocked).map(e=>e.name),selectedEntries:selectedEntryRecords().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },

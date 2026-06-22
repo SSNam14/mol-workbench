@@ -280,6 +280,11 @@ def _normalize_entry_list(entries):
     return out
 
 
+def with_source_path(entries, path):
+    source_path = str(path.resolve())
+    return [dict(entry, sourcePath=source_path) for entry in entries]
+
+
 def _sdf_bytes_to_entries(payload, filename="", fmt=None, title=None, pdb_id=""):
     try:
         text = bytes(payload or b"").decode("utf-8")
@@ -331,7 +336,7 @@ def load_server_file_entries(value):
     if fmt == "psazip":
         try:
             entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
-            return [entry], meta
+            return with_source_path([entry], path), meta
         except MaestroConversionError as exc:
             return None, str(exc) or "conversion_failed"
     if is_maestro_format(fmt) or payload[:2] == b"\x1f\x8b":
@@ -339,17 +344,18 @@ def load_server_file_entries(value):
             entries, meta = convert_structure_bytes_entries(payload, filename, fmt, filename, "")
         except MaestroConversionError as exc:
             return None, str(exc) or "conversion_failed"
-        return entries, meta
+        return with_source_path(entries, path), meta
     if fmt in {"sdf", "mol"}:
         try:
-            return _sdf_bytes_to_entries(payload, filename, fmt, filename, "")
+            entries, meta = _sdf_bytes_to_entries(payload, filename, fmt, filename, "")
+            return with_source_path(entries, path), meta
         except MaestroConversionError as exc:
             return None, str(exc) or "conversion_failed"
     try:
         data = payload.decode("utf-8")
     except UnicodeDecodeError:
         return None, "decode_failed"
-    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt})
+    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt, "sourcePath": str(path.resolve())})
     if not entry:
         return None, "invalid_structure"
     return [entry], {"sourceFormat": fmt, "convertedFormat": fmt, "entryCount": 1}
@@ -436,6 +442,9 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    source_path = str(value.get("sourcePath") or "").strip()
+    if source_path:
+        entry["sourcePath"] = source_path
     load_group = normalize_entry_load_group(value.get("loadGroup"))
     if load_group:
         entry["loadGroup"] = load_group
@@ -1287,6 +1296,7 @@ def session_meta(session=None):
                 "title": entry.get("title", entry.get("name", "")),
                 "pdbId": entry.get("pdbId", ""),
                 "fmt": entry.get("fmt", ""),
+                "sourcePath": entry.get("sourcePath", ""),
             }
             for entry in entries
         ],
@@ -1321,6 +1331,7 @@ def normalize_stored_session_meta(value):
             "title": str(raw.get("title") or name).strip() or name,
             "pdbId": str(raw.get("pdbId") or "").strip(),
             "fmt": str(raw.get("fmt") or "").strip().lower(),
+            "sourcePath": str(raw.get("sourcePath") or "").strip(),
         })
     names = {entry["name"] for entry in entries}
     included = value.get("includedEntries")

@@ -55,12 +55,24 @@ class SessionStateTests(unittest.TestCase):
         })
         self.assertEqual(normalized["loadGroup"], {"id": "load-1", "title": "multi.maegz", "index": 2, "total": 5})
 
+    def test_normalize_entry_preserves_source_path(self):
+        normalized = server.normalize_entry({
+            **entry("one"),
+            "sourcePath": "/tmp/one.pdb",
+        })
+        self.assertEqual(normalized["sourcePath"], "/tmp/one.pdb")
+
     def test_apply_entry_load_group_marks_multi_entry_loads(self):
         grouped = server.apply_entry_load_group([entry("one"), entry("two")], "multi.maegz")
         self.assertEqual(grouped[0]["loadGroup"]["title"], "multi.maegz")
         self.assertEqual(grouped[0]["loadGroup"]["total"], 2)
         self.assertEqual(grouped[1]["loadGroup"]["index"], 2)
         self.assertEqual(grouped[0]["loadGroup"]["id"], grouped[1]["loadGroup"]["id"])
+
+    def test_session_meta_includes_source_path(self):
+        item = {**entry("one"), "sourcePath": "/tmp/one.pdb"}
+        meta = server.session_meta({"entries": [item], "includedEntries": ["one"], "lockedEntries": []})
+        self.assertEqual(meta["entries"][0]["sourcePath"], "/tmp/one.pdb")
 
     def test_normalize_session_state_preserves_explicit_empty_included_entries(self):
         fallback = {"includedEntries": ["one", "two"]}
@@ -173,6 +185,7 @@ class SessionStateTests(unittest.TestCase):
                 entry, meta = server.load_server_file_entry(str(pdb))
                 self.assertEqual(entry["name"], "one.pdb")
                 self.assertEqual(entry["fmt"], "pdb")
+                self.assertEqual(entry["sourcePath"], str(pdb.resolve()))
                 self.assertEqual(meta["sourceFormat"], "pdb")
             finally:
                 server.SERVER_FILE_ROOTS = original_roots
