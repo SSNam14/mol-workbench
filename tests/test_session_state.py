@@ -48,6 +48,20 @@ class SessionStateTests(unittest.TestCase):
         })
         self.assertEqual(normalized["deletedSourceSerials"], ["2", "3"])
 
+    def test_normalize_entry_preserves_load_group(self):
+        normalized = server.normalize_entry({
+            **entry("one"),
+            "loadGroup": {"id": "load-1", "title": "multi.maegz", "index": 2, "total": 5},
+        })
+        self.assertEqual(normalized["loadGroup"], {"id": "load-1", "title": "multi.maegz", "index": 2, "total": 5})
+
+    def test_apply_entry_load_group_marks_multi_entry_loads(self):
+        grouped = server.apply_entry_load_group([entry("one"), entry("two")], "multi.maegz")
+        self.assertEqual(grouped[0]["loadGroup"]["title"], "multi.maegz")
+        self.assertEqual(grouped[0]["loadGroup"]["total"], 2)
+        self.assertEqual(grouped[1]["loadGroup"]["index"], 2)
+        self.assertEqual(grouped[0]["loadGroup"]["id"], grouped[1]["loadGroup"]["id"])
+
     def test_normalize_session_state_preserves_explicit_empty_included_entries(self):
         fallback = {"includedEntries": ["one", "two"]}
         state = server.normalize_session_state({"includedEntries": []}, self.entries, fallback)

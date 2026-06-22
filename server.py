@@ -436,6 +436,9 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    load_group = normalize_entry_load_group(value.get("loadGroup"))
+    if load_group:
+        entry["loadGroup"] = load_group
     bond_orders = normalize_bond_orders(value.get("bondOrders"))
     if bond_orders:
         entry["bondOrders"] = bond_orders
@@ -446,6 +449,38 @@ def normalize_entry(value):
     if deleted:
         entry["deletedSourceSerials"] = deleted
     return entry
+
+
+def normalize_entry_load_group(value):
+    if not isinstance(value, dict):
+        return None
+    group_id = str(value.get("id") or value.get("name") or "").strip()
+    if not group_id:
+        return None
+    title = str(value.get("title") or value.get("label") or group_id).strip() or group_id
+    try:
+        index = max(1, int(value.get("index") or 1))
+    except (TypeError, ValueError):
+        index = 1
+    try:
+        total = max(index, int(value.get("total") or index))
+    except (TypeError, ValueError):
+        total = index
+    return {"id": group_id[:160], "title": title[:160], "index": index, "total": total}
+
+
+def apply_entry_load_group(entries, title):
+    if not isinstance(entries, list) or len(entries) <= 1:
+        return entries
+    group_title = str(title or entries[0].get("title") or entries[0].get("name") or "Multi-entry load").strip() or "Multi-entry load"
+    group_id = f"load-{int(time.time_ns())}"
+    total = len(entries)
+    out = []
+    for idx, entry in enumerate(entries, 1):
+        item = dict(entry)
+        item["loadGroup"] = {"id": group_id, "title": group_title[:160], "index": idx, "total": total}
+        out.append(item)
+    return out
 
 
 def normalize_entry_surfaces(value):
@@ -1843,12 +1878,14 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             self.send_json(400, {"error": "invalid_request"})
             return
-        loaded_entries, meta = load_server_file_entries(payload.get("path"))
+        requested_path = payload.get("path")
+        loaded_entries, meta = load_server_file_entries(requested_path)
         if not loaded_entries:
             error = meta or "invalid_structure"
             status = 403 if error in {"forbidden", "permission_denied"} else 413 if error == "invalid_body_size" else 400
             self.send_json(status, {"error": error})
             return
+        loaded_entries = apply_entry_load_group(loaded_entries, Path(str(requested_path or "Multi-entry load")).name)
         try:
             session, stored_entries = upsert_session_entries(loaded_entries)
         except (OSError, json.JSONDecodeError):

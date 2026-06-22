@@ -109,6 +109,7 @@ function boot(){
   let selectedEntryNames = new Set();
   let entryCycleCursorName = '';
   let entryIncludeClickTimer = null;
+  let entryGroupCollapsed = Object.create(null);
   let hierarchyContextAction = null;
   const undoStack = [];
   const MAX_UNDO_STACK = 20;
@@ -477,6 +478,8 @@ function boot(){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
     const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const loadGroup=normalizeEntryLoadGroup(e.loadGroup);
+    if(loadGroup)out.loadGroup=loadGroup;
     const surfaces=normalizeEntrySurfaces(e.surfaces);
     if(surfaces.length)out.surfaces=surfaces;
     const bondOrders=normalizeEntryBondOrders(e.bondOrders);
@@ -484,6 +487,15 @@ function boot(){
     const deleted=normalizeDeletedSourceSerials(e.deletedSourceSerials);
     if(deleted.length)out.deletedSourceSerials=deleted;
     return out;
+  }
+  function normalizeEntryLoadGroup(value){
+    if(!value||typeof value!=='object'||Array.isArray(value))return null;
+    const id=normText(value.id||value.name||'');
+    if(!id)return null;
+    const title=normText(value.title||value.label||id)||id;
+    const index=Math.max(1,Math.floor(Number(value.index)||1));
+    const total=Math.max(index,Math.floor(Number(value.total)||index));
+    return {id,title,index,total};
   }
   function normalizeEntrySurfaces(value){
     if(!Array.isArray(value))return [];
@@ -516,6 +528,20 @@ function boot(){
       candidate=root+'__'+stamp+'-'+(++entryLoadSeq);
     }
     return candidate;
+  }
+  function uniqueEntryLoadGroupId(base){
+    const root=normText(base||'load').replace(/[^\w.-]+/g,'_')||'load';
+    const stamp=new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,17);
+    return 'load-'+root+'-'+stamp+'-'+(++entryLoadSeq);
+  }
+  function entriesWithLoadGroup(list,title){
+    const normalized=normalizeStructureEntryList(list);
+    if(normalized.length<=1)return normalized;
+    const existing=normalized.map(entry=>entry.loadGroup&&entry.loadGroup.id).filter(Boolean);
+    if(existing.length===normalized.length&&new Set(existing).size===1)return normalized;
+    const groupTitle=normText(title||normalized[0].title||normalized[0].name||'Multi-entry load')||'Multi-entry load';
+    const id=uniqueEntryLoadGroupId(groupTitle);
+    return normalized.map((entry,idx)=>Object.assign({},entry,{loadGroup:{id,title:groupTitle,index:idx+1,total:normalized.length}}));
   }
   function entryWithFreshIdentity(entry,title){
     entry=normalizeStructureEntry(entry);
@@ -673,6 +699,7 @@ function boot(){
     entriesSelectionAnchorIndex=-1;
     entryRowSelectionAnchorIndex=-1;
     entryCycleCursorName='';
+    entryGroupCollapsed=Object.create(null);
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
@@ -687,6 +714,7 @@ function boot(){
     entriesSelectionAnchorIndex=-1;
     entryRowSelectionAnchorIndex=-1;
     entryCycleCursorName='';
+    entryGroupCollapsed=Object.create(null);
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
@@ -3030,54 +3058,170 @@ function boot(){
     input.onblur=function(){ finish(true); };
     setTimeout(()=>{ input.focus(); input.select(); },0);
   }
+  function entryLoadGroup(entry){ return normalizeEntryLoadGroup(entry&&entry.loadGroup); }
+  function buildEntryListItems(){
+    const byGroup=new Map();
+    entries.forEach((entry,index)=>{
+      const group=entryLoadGroup(entry);
+      if(!group)return;
+      if(!byGroup.has(group.id))byGroup.set(group.id,{id:group.id,title:group.title,entries:[],indices:[]});
+      const rec=byGroup.get(group.id);
+      rec.entries.push(entry);
+      rec.indices.push(index);
+    });
+    const grouped=new Set();
+    byGroup.forEach((rec,id)=>{ if(rec.entries.length>1)grouped.add(id); });
+    const emitted=new Set(), items=[];
+    entries.forEach((entry,index)=>{
+      const group=entryLoadGroup(entry);
+      if(group&&grouped.has(group.id)){
+        const rec=byGroup.get(group.id);
+        if(!emitted.has(group.id)){
+          emitted.add(group.id);
+          items.push({type:'group',group:rec});
+        }
+        if(!entryGroupCollapsed[group.id])items.push({type:'entry',entry,index,child:true,group:rec});
+        return;
+      }
+      items.push({type:'entry',entry,index,child:false});
+    });
+    return items;
+  }
+  function entryRowGridStyle(child){
+    return 'display:grid;grid-template-columns:34px 18px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent'+(child?';background:#292929':'');
+  }
+  function makeEntryIncludeControl(checked,locked,title,onClick,onDoubleClick){
+    const chk=document.createElement('input');
+    chk.type='checkbox';
+    chk.checked=!!checked;
+    const CHK_ON='border:1px solid #4c9ff0;background:radial-gradient(circle at center,#f4fbff 0 34%,#3a7bd5 38% 100%)';
+    const CHK_LOCK='border:1px solid #f6c85f;background:radial-gradient(circle at center,#fff7cf 0 33%,#d69b24 37% 100%);box-shadow:0 0 0 1px rgba(246,200,95,.32)';
+    const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
+    chk.title=title||'';
+    chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;justify-self:center;margin:0;cursor:pointer;'+(locked?CHK_LOCK:(checked?CHK_ON:CHK_OFF));
+    chk.onclick=function(ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+      if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
+      if(ev.detail>1)return;
+      const click={shiftKey:ev.shiftKey,ctrlKey:ev.ctrlKey,metaKey:ev.metaKey};
+      entryIncludeClickTimer=setTimeout(function(){ entryIncludeClickTimer=null; onClick(click); },180);
+    };
+    chk.ondblclick=function(ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+      if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
+      if(onDoubleClick)onDoubleClick();
+    };
+    return chk;
+  }
+  function makeEntryDeleteButton(title,onClick){
+    const del=document.createElement('button');
+    del.type='button';
+    del.textContent='\u00d7';
+    del.title=title||'Delete entry';
+    del.style.cssText='width:17px;height:17px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:#9a9a9a;cursor:pointer;font-size:13px;line-height:1;padding:0';
+    del.onmouseenter=function(){ del.style.color='#fff'; del.style.borderColor='#555'; del.style.background='#3a1f1f'; };
+    del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
+    del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); onClick(); };
+    return del;
+  }
+  function toggleEntryGroupCollapsed(id){
+    if(entryGroupCollapsed[id])delete entryGroupCollapsed[id];
+    else entryGroupCollapsed[id]=true;
+    buildEntriesList();
+  }
+  function setEntryGroupIncludedFromClick(group,e){
+    const names=group.entries.map(entry=>entry.name);
+    const current=new Set(includedEntries().map(entry=>entry.name));
+    let next;
+    if(e&&(e.ctrlKey||e.metaKey)){
+      next=current;
+      const allIncluded=names.every(name=>next.has(name)||entryLocked[name]===true);
+      names.forEach(name=>{
+        if(entryLocked[name]===true)return;
+        if(allIncluded)next.delete(name);
+        else next.add(name);
+      });
+    }else{
+      next=new Set(names);
+    }
+    lockedEntryNameSet().forEach(name=>next.add(name));
+    const label='Displayed group: '+group.title+' ('+names.length.toLocaleString()+' entries)';
+    const work=function(){ setIncludedEntryNames(next,label); };
+    if(next.size>20||atoms.length>=HUGE_FIT_ATOM_LIMIT)return withBusy('Updating displayed entries...',work).catch(err=>setStatus('Entry update failed: '+(err&&err.message||err)));
+    return work();
+  }
+  function toggleEntryGroupLock(group){
+    const allLocked=group.entries.every(isEntryLocked);
+    group.entries.forEach(entry=>{
+      if(allLocked)delete entryLocked[entry.name];
+      else{ entryLocked[entry.name]=true; entryChecked[entry.name]=true; }
+    });
+    refreshDisplayedEntriesFast({preserveView:true,zoom:false});
+    saveViewerSessionState();
+    setStatus((allLocked?'Unlocked group: ':'Locked group visible: ')+group.title);
+  }
+  function selectEntryGroup(group){
+    setEntryRowSelection(group.entries.map(entry=>entry.name),'Selected entries: '+group.entries.length.toLocaleString());
+  }
+  function entryGroupContextMenu(group,e){
+    e.preventDefault();
+    e.stopPropagation();
+    selectEntryGroup(group);
+    showHierarchyContextMenu(e.clientX,e.clientY,'Delete entries',{type:'entries',entries:group.entries.slice()});
+  }
+  function appendEntryGroupRow(el,group){
+    const collapsed=entryGroupCollapsed[group.id]===true;
+    const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.setAttribute('data-load-group-id',group.id);
+    row.classList.toggle('is-selected',group.entries.some(entry=>selectedEntryNames.has(entry.name)));
+    row.style.cssText=entryRowGridStyle(false)+';font-weight:600;background:#303030';
+    const rn=document.createElement('span');
+    rn.textContent='';
+    const arrow=hierarchyCollapseArrow(collapsed,collapsed?'Expand entries':'Collapse entries');
+    arrow.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); toggleEntryGroupCollapsed(group.id); };
+    const anyIncluded=group.entries.some(entryIsIncluded), anyLocked=group.entries.some(isEntryLocked);
+    const chk=makeEntryIncludeControl(anyIncluded,anyLocked,anyLocked?'Group contains locked visible entries. Double-click to toggle group lock.':'Click to show group. Ctrl-click toggles group append. Double-click to lock group visible.',function(click){ setEntryGroupIncludedFromClick(group,click); },function(){ toggleEntryGroupLock(group); });
+    const ttl=document.createElement('span');
+    ttl.textContent=group.title+' ('+group.entries.length.toLocaleString()+')';
+    ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer';
+    ttl.title=group.title+' · '+group.entries.length.toLocaleString()+' entries';
+    const del=makeEntryDeleteButton('Delete entry group',function(){ deleteEntries(group.entries); });
+    row.appendChild(rn); row.appendChild(arrow); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+    row.onclick=function(ev){ selectEntryGroup(group); };
+    row.oncontextmenu=function(ev){ entryGroupContextMenu(group,ev); };
+    el.appendChild(row);
+  }
+  function appendEntryRow(el,e,i,child){
+    const locked=isEntryLocked(e);
+    const row=document.createElement('div');
+    row.setAttribute('data-row','');
+    row.setAttribute('data-entry-name',e.name);
+    row.classList.toggle('is-selected',selectedEntryNames.has(e.name));
+    row.style.cssText=entryRowGridStyle(child);
+    const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
+    const arrow=document.createElement('span'); arrow.style.cssText='width:14px;height:18px;display:block';
+    const chk=makeEntryIncludeControl(entryIsIncluded(e),locked,locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.',function(click){ setEntriesIncludedFromClick(i,click); },function(){ toggleEntryLock(i); });
+    const ttl=document.createElement('span');
+    ttl.textContent=e.title;
+    ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'+(child?';padding-left:8px':'');
+    ttl.title='Double-click to rename: '+e.title;
+    ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
+    ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
+    const del=makeEntryDeleteButton('Delete entry',function(){ deleteEntry(e); });
+    row.appendChild(rn); row.appendChild(arrow); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+    row.onclick=function(ev){ selectEntryRowsFromClick(i,ev); };
+    row.oncontextmenu=function(ev){ entryRowContextMenu(i,ev); };
+    el.appendChild(row);
+  }
   function buildEntriesList(){
     const el=$('entriesList'); el.innerHTML=''; el.tabIndex=0;
     pruneSelectedEntries();
-    entries.forEach((e,i)=>{
-      const locked=isEntryLocked(e);
-      const row=document.createElement('div');
-      row.setAttribute('data-row','');
-      row.setAttribute('data-entry-name',e.name);
-      row.classList.toggle('is-selected',selectedEntryNames.has(e.name));
-      row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent';
-      const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
-      const chk=document.createElement('input'); chk.type='checkbox';
-      chk.checked=entryIsIncluded(e);
-      const CHK_ON='border:1px solid #4c9ff0;background:radial-gradient(circle at center,#f4fbff 0 34%,#3a7bd5 38% 100%)';
-      const CHK_LOCK='border:1px solid #f6c85f;background:radial-gradient(circle at center,#fff7cf 0 33%,#d69b24 37% 100%);box-shadow:0 0 0 1px rgba(246,200,95,.32)';
-      const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
-      chk.title=locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.';
-      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;justify-self:center;margin:0;cursor:pointer;'+(locked?CHK_LOCK:(chk.checked?CHK_ON:CHK_OFF)); }
-      paintChk();
-      chk.onclick=function(ev){
-        ev.preventDefault();
-        ev.stopPropagation();
-        if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
-        if(ev.detail>1)return;
-        const click={shiftKey:ev.shiftKey,ctrlKey:ev.ctrlKey,metaKey:ev.metaKey};
-        entryIncludeClickTimer=setTimeout(function(){ entryIncludeClickTimer=null; setEntriesIncludedFromClick(i,click); },180);
-      };
-      chk.ondblclick=function(ev){
-        ev.preventDefault();
-        ev.stopPropagation();
-        if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
-        toggleEntryLock(i);
-      };
-      const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'; ttl.title='Double-click to rename: '+e.title;
-      ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
-      ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
-      const del=document.createElement('button');
-      del.type='button';
-      del.textContent='\u00d7';
-      del.title='Delete entry';
-      del.style.cssText='width:17px;height:17px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:3px;background:transparent;color:#9a9a9a;cursor:pointer;font-size:13px;line-height:1;padding:0';
-      del.onmouseenter=function(){ del.style.color='#fff'; del.style.borderColor='#555'; del.style.background='#3a1f1f'; };
-      del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
-      del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); deleteEntry(e); };
-      row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
-      row.onclick=function(ev){ selectEntryRowsFromClick(i,ev); };
-      row.oncontextmenu=function(ev){ entryRowContextMenu(i,ev); };
-      el.appendChild(row);
+    buildEntryListItems().forEach(item=>{
+      if(item.type==='group')appendEntryGroupRow(el,item.group);
+      else appendEntryRow(el,item.entry,item.index,item.child);
     });
   }
   function chainVisibilityKey(entry,chain){ return (entry||'')+'\u0001'+(chain||'?'); }
@@ -3834,16 +3978,18 @@ function boot(){
     if(isServerConvertedFormat(sourceFmt)){
       const converted=await convertStructureBufferEntries(await res.arrayBuffer(),sourceFmt,entryName,displayTitle,pdbId||'');
       const fresh=converted.map(entry=>entryWithFreshIdentity(entry,entry.title||displayTitle)).filter(Boolean);
-      const loaded=await persistAndLoadEntries(fresh);
+      const loaded=await persistAndLoadEntries(fresh,{groupTitle:displayTitle});
       return loaded.length===1?loaded[0]:loaded;
     }
     const data=await res.text();
     const fresh=textStructureEntries(data,sourceFmt||'pdb',entryName,displayTitle,pdbId||'').map(entry=>entryWithFreshIdentity(entry,entry.title||displayTitle)).filter(Boolean);
-    const loaded=await persistAndLoadEntries(fresh);
+    const loaded=await persistAndLoadEntries(fresh,{groupTitle:displayTitle});
     return loaded.length===1?loaded[0]:loaded;
   }
-  async function persistAndLoadEntries(list){
-    const loaded=loadEntries(list,{persist:false});
+  async function persistAndLoadEntries(list,opts){
+    opts=opts||{};
+    const grouped=entriesWithLoadGroup(list,opts.groupTitle);
+    const loaded=loadEntries(grouped,{persist:false});
     if(!loaded.length)throw new Error('Invalid structure data');
     const saved=loaded.length===1?await saveViewerSessionEntryDeferred(loaded[0],{status:false}):await saveViewerSession({status:false});
     if(!saved)setStatus('Loaded but not saved on server: '+(loaded.length===1?loaded[0].title:loaded.length+' entries'));
@@ -4760,7 +4906,7 @@ function boot(){
         if(isServerConvertedFormat(fmt))sourceEntries=await convertStructureBufferEntries(await f.arrayBuffer(),fmt,f.name,f.name,'');
         else sourceEntries=textStructureEntries(await f.text(),fmt,f.name,f.name,'');
         const fresh=sourceEntries.map(entry=>entryWithFreshIdentity(entry,entry.title||f.name)).filter(Boolean);
-        await persistAndLoadEntries(fresh);
+        await persistAndLoadEntries(fresh,{groupTitle:f.name});
         loadedEntryCount+=fresh.length;
         loaded.push(f.name);
       }catch(err){
@@ -5780,7 +5926,7 @@ function installFrameSyncedMotion(targetViewer){
     queryInteractions:function(command){ return queryInteractionsAction(Object.assign({},command||{},{type:'queryInteractions'})); },
     showInteractions:function(command){ return showInteractionsAction(Object.assign({},command||{},{type:'showInteractions'})); },
     clearInteractionFilter:function(command){ return clearInteractionFilterAction(Object.assign({},command||{})); },
-    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryIsIncluded(e),locked:isEntryLocked(e),selected:selectedEntryNames.has(e.name)})),includedEntries:includedEntries().map(e=>e.name),lockedEntries:entries.filter(isEntryLocked).map(e=>e.name),selectedEntries:selectedEntryRecords().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryIsIncluded(e),locked:isEntryLocked(e),selected:selectedEntryNames.has(e.name),loadGroup:e.loadGroup?Object.assign({},e.loadGroup):null})),includedEntries:includedEntries().map(e=>e.name),lockedEntries:entries.filter(isEntryLocked).map(e=>e.name),selectedEntries:selectedEntryRecords().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
