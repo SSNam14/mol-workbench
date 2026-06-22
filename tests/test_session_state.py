@@ -101,6 +101,41 @@ class SessionStateTests(unittest.TestCase):
             "nearby": "",
         })
 
+    def test_server_file_listing_filters_to_allowed_root_and_structures(self):
+        original_roots = server.SERVER_FILE_ROOTS
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ok.pdb").write_text("ATOM\n", encoding="utf-8")
+            (root / "notes.txt").write_text("ignore\n", encoding="utf-8")
+            (root / ".hidden").mkdir()
+            (root / "child").mkdir()
+            (root / "child" / "child.cif").write_text("_atom_site.Cartn_x\n", encoding="utf-8")
+            server.SERVER_FILE_ROOTS = [root.resolve()]
+            try:
+                payload, error = server.list_server_files(str(root))
+                self.assertIsNone(error)
+                self.assertEqual([item["name"] for item in payload["items"]], ["child", "ok.pdb"])
+                outside, outside_error = server.list_server_files(str(root.parent))
+                self.assertIsNone(outside)
+                self.assertEqual(outside_error, "forbidden")
+            finally:
+                server.SERVER_FILE_ROOTS = original_roots
+
+    def test_load_server_file_entry_supports_structure_files(self):
+        original_roots = server.SERVER_FILE_ROOTS
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdb = root / "one.pdb"
+            pdb.write_text("ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N\n", encoding="utf-8")
+            server.SERVER_FILE_ROOTS = [root.resolve()]
+            try:
+                entry, meta = server.load_server_file_entry(str(pdb))
+                self.assertEqual(entry["name"], "one.pdb")
+                self.assertEqual(entry["fmt"], "pdb")
+                self.assertEqual(meta["sourceFormat"], "pdb")
+            finally:
+                server.SERVER_FILE_ROOTS = original_roots
+
     def test_get_last_structure_returns_not_found_without_session(self):
         original = server.load_session_or_legacy
         server.load_session_or_legacy = lambda: None

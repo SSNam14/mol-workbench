@@ -26,7 +26,7 @@ MolWorkbench is a static WebGL viewer with a small Python persistence server. It
 - `tests/`: focused regression tests for server-side session contracts.
 - `AGENT_README.md`: detailed operation manual for browser automation agents.
 
-No molecular structures are bundled in this repository. Load structures through the UI `Open file` control, through `molAgent.loadUrl(...)`, or by serving your own ignored local `data/` directory.
+No molecular structures are bundled in this repository. Load structures through the UI `Open file` control, the UI `Open server` browser, `molAgent.loadUrl(...)`, `molAgent.loadServerFile(...)`, or by serving your own ignored local `data/` directory.
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Open:
 http://127.0.0.1:8704/
 ```
 
-The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a local `pdb`, `cif`, `sdf`, `mol`, `mol2`, `xyz`, `mae`, or `maegz` file. MAE/MAEGZ loading uses the bundled pure-Python converter and does not require a Schrodinger installation. Each load gets a unique internal entry id, so loading the same filename again creates another entry while preserving the filename as the display title. Double-click an entry title in the Entries panel to rename that displayed title.
+The first launch starts with an empty viewer unless a previous server-side session exists. In that clean state, legacy `/api/last-structure` requests return `404 {"error":"not_found"}` rather than a server error. Use `Open file` to load a browser-local `pdb`, `cif`, `sdf`, `mol`, `mol2`, `xyz`, `mae`, or `maegz` file. Use `Open server` to browse structure files on the machine running `server.py`; by default it is limited to the server user's home directory, and `--file-root <dir>` may be supplied one or more times to choose exposed roots. MAE/MAEGZ loading uses the bundled pure-Python converter and does not require a Schrodinger installation. Each load gets a unique internal entry id, so loading the same filename again creates another entry while preserving the filename as the display title. Double-click an entry title in the Entries panel to rename that displayed title.
 
 ## Agent Control
 
@@ -48,6 +48,7 @@ Agents should use the structured API exposed in the page:
 
 ```js
 const entry = await molAgent.loadUrl("path/to/structure.pdb", "pdb", "entry-name", "Display title", "");
+await molAgent.loadServerFile("/path/on/server/structure.cif");
 await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
 const hits = molAgent.queryWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}});

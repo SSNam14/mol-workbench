@@ -31,6 +31,7 @@ MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 MAX_AGENT_ACTION_BYTES = 128 * 1024
 MAX_AGENT_ACTIONS = 100
+MAX_SERVER_FILE_ITEMS = 1000
 SESSION_SCHEMA = "viewer-session-v1"
 PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
@@ -60,6 +61,8 @@ RESERVED_KEY_BINDINGS = {"delete", "control", "ctrl", "shift", "alt", "meta", "c
 BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
+SERVER_FILE_ROOTS = [Path.home()]
+SERVER_STRUCTURE_SUFFIXES = (".pdb", ".ent", ".sdf", ".mol", ".mol2", ".xyz", ".cif", ".mmcif", ".mae", ".maegz", ".mae.gz")
 AGENT_ACTION_TYPES = {
     "querywithin",
     "showwithin",
@@ -106,6 +109,139 @@ def normalize_key_binding_value(value):
     if "+" in key:
         return None
     return key
+
+
+def normalize_server_file_roots(values):
+    roots = []
+    for value in values or []:
+        try:
+            path = Path(str(value or "")).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if path.is_dir() and path not in roots:
+            roots.append(path)
+    if not roots:
+        roots.append(ROOT)
+    return roots
+
+
+def is_supported_server_structure(path):
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in SERVER_STRUCTURE_SUFFIXES)
+
+
+def resolve_server_file_path(value):
+    roots = SERVER_FILE_ROOTS or [ROOT]
+    raw = str(value or "").strip()
+    candidate = Path(raw).expanduser() if raw else roots[0]
+    if not candidate.is_absolute():
+        candidate = roots[0] / candidate
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None, None
+    for root in roots:
+        try:
+            rel = resolved.relative_to(root)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            return None, None
+        return resolved, root
+    return None, None
+
+
+def server_file_roots_payload():
+    return [{"path": str(root), "name": str(root)} for root in SERVER_FILE_ROOTS]
+
+
+def server_file_item(path):
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if path.is_dir():
+        return {"name": path.name, "path": str(path), "type": "directory", "size": None, "mtime": stat.st_mtime, "loadable": False}
+    if path.is_file() and is_supported_server_structure(path):
+        return {"name": path.name, "path": str(path), "type": "file", "size": stat.st_size, "mtime": stat.st_mtime, "loadable": True}
+    return None
+
+
+def list_server_files(value):
+    path, root = resolve_server_file_path(value)
+    if path is None:
+        return None, "forbidden"
+    if not path.is_dir():
+        return None, "not_directory"
+    items = []
+    try:
+        children = list(path.iterdir())
+    except PermissionError:
+        return None, "permission_denied"
+    except OSError:
+        return None, "read_failed"
+    for child in children:
+        resolved, _ = resolve_server_file_path(str(child))
+        if resolved is None:
+            continue
+        item = server_file_item(resolved)
+        if item:
+            items.append(item)
+        if len(items) >= MAX_SERVER_FILE_ITEMS:
+            break
+    items.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
+    parent = ""
+    if path != root:
+        parent_candidate, _ = resolve_server_file_path(str(path.parent))
+        if parent_candidate is not None:
+            parent = str(parent_candidate)
+    return {
+        "ok": True,
+        "path": str(path),
+        "root": str(root),
+        "parent": parent,
+        "roots": server_file_roots_payload(),
+        "items": items,
+        "truncated": len(items) >= MAX_SERVER_FILE_ITEMS,
+    }, None
+
+
+def load_server_file_entry(value):
+    path, _ = resolve_server_file_path(value)
+    if path is None:
+        return None, "forbidden"
+    if not path.is_file():
+        return None, "not_file"
+    if not is_supported_server_structure(path):
+        return None, "unsupported_format"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None, "read_failed"
+    if size <= 0 or size > MAX_STRUCTURE_BYTES:
+        return None, "invalid_body_size"
+    try:
+        payload = path.read_bytes()
+    except PermissionError:
+        return None, "permission_denied"
+    except OSError:
+        return None, "read_failed"
+    filename = path.name
+    fmt = infer_structure_format(filename)
+    if is_maestro_format(fmt) or payload[:2] == b"\x1f\x8b":
+        try:
+            entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
+        except MaestroConversionError as exc:
+            return None, str(exc) or "conversion_failed"
+        return entry, meta
+    try:
+        data = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "decode_failed"
+    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt})
+    if not entry:
+        return None, "invalid_structure"
+    return entry, {"sourceFormat": fmt, "convertedFormat": fmt}
 
 
 def normalize_deleted_source_serials(value):
@@ -797,6 +933,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/preferences":
             self.handle_get_preferences()
             return
+        if path == "/api/server-files":
+            self.handle_get_server_files()
+            return
         if path == "/api/last-structure":
             self.handle_get_last_structure()
             return
@@ -834,6 +973,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/convert-structure":
             self.handle_convert_structure()
+            return
+        if path == "/api/server-file-load":
+            self.handle_server_file_load()
             return
         if path == "/api/last-structure":
             self.handle_put_last_structure()
@@ -1064,6 +1206,38 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         self.send_json(200, {"ok": True, "preferences": preferences})
 
+    def handle_get_server_files(self):
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get("path") or [""])[0]
+        payload, error = list_server_files(requested)
+        if error:
+            status = 403 if error == "forbidden" else 404 if error == "not_directory" else 500
+            if error == "permission_denied":
+                status = 403
+            self.send_json(status, {"error": error, "roots": server_file_roots_payload()})
+            return
+        self.send_json(200, payload)
+
+    def handle_server_file_load(self):
+        payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
+        if payload is None:
+            return
+        if not isinstance(payload, dict):
+            self.send_json(400, {"error": "invalid_request"})
+            return
+        entry, meta = load_server_file_entry(payload.get("path"))
+        if not entry:
+            error = meta or "invalid_structure"
+            status = 403 if error in {"forbidden", "permission_denied"} else 413 if error == "invalid_body_size" else 400
+            self.send_json(status, {"error": error})
+            return
+        try:
+            session, stored_entry = upsert_session_entry(entry)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session), **meta})
+
     def handle_convert_structure(self):
         payload = self.read_raw_body(MAX_STRUCTURE_BYTES)
         if payload is None:
@@ -1173,13 +1347,17 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
 
 def main():
+    global SERVER_FILE_ROOTS
     parser = argparse.ArgumentParser(description="Serve the molecular viewer and persisted structure API.")
     parser.add_argument("--bind", default="0.0.0.0", help="address to bind")
     parser.add_argument("--port", type=int, default=8704, help="port to listen on")
+    parser.add_argument("--file-root", action="append", help="server-side root directory exposed to the Open server file browser; may be repeated")
     args = parser.parse_args()
 
+    SERVER_FILE_ROOTS = normalize_server_file_roots(args.file_root or [str(Path.home())])
     httpd = ThreadingHTTPServer((args.bind, args.port), ViewerHandler)
     print(f"Serving {ROOT} on http://{args.bind}:{args.port}/", flush=True)
+    print("Server file roots: " + ", ".join(str(root) for root in SERVER_FILE_ROOTS), flush=True)
     httpd.serve_forever()
 
 

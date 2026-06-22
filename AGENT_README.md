@@ -647,6 +647,15 @@ molAgent.getState();
 
 The `name` argument is an identity base, not a guaranteed final id. Every UI or `molAgent.loadUrl(...)` load receives a fresh internal entry id by appending a timestamp-like suffix. The visible filename/title is kept in `title`. If you need to delete or target a newly loaded entry, read the actual id from `molAgent.getState().entries`.
 
+Load a structure that already exists on the server filesystem:
+
+```js
+const entry = await molAgent.loadServerFile("/home/user/project/structure.cif");
+molAgent.getState().entries.find(e => e.name === entry.name);
+```
+
+`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. They are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
+
 Remove an entry from the current viewer session:
 
 ```js
@@ -863,6 +872,36 @@ PY
 ```
 
 `/api/session-entry` also treats `name` as an entry id. If the id already exists, the server appends a unique suffix and returns the stored `entry` in the response. To intentionally replace an existing id, send `{"entry": entry, "replace": true}` or add `?replace=1`.
+
+Load one existing server-side structure file without manually reading the file in the agent process:
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+body = json.dumps({"path": "/home/user/project/structure.cif"}).encode()
+req = urllib.request.Request(
+    f"{base_url}/api/server-file-load",
+    data=body,
+    method="POST",
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+List allowed server directories and supported structure files:
+
+```bash
+python3 - <<'PY'
+import os, urllib.parse, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+path = urllib.parse.quote("/home/user/project")
+print(urllib.request.urlopen(f"{base_url}/api/server-files?path={path}").read().decode())
+PY
+```
 
 Rename an entry title from an external agent:
 

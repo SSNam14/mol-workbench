@@ -52,6 +52,8 @@ function boot(){
   const LAST_STRUCTURE_API = 'api/last-structure';
   const PREFERENCES_API = 'api/preferences';
   const STRUCTURE_CONVERT_API = 'api/convert-structure';
+  const SERVER_FILES_API = 'api/server-files';
+  const SERVER_FILE_LOAD_API = 'api/server-file-load';
 
   const mousePresets = {'select-left':{buttons:{left:'select',right:'rotate',middle:'pan'},wheel:'zoom'},'default':{passThrough:true}};
   function defaultSelectionOptions(){ return {color:'#fdd835',opacity:1,linewidth:lineWidths.selection}; }
@@ -116,6 +118,7 @@ function boot(){
   let panelRefreshTimer = null;
   let interactionStartTimer = null;
   let pendingKeyBindingAction = null;
+  const serverFileState = {path:'', parent:'', roots:[], items:[]};
   let busyToken = 0;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -4242,6 +4245,120 @@ function boot(){
     setStatus('Loaded '+countText+'.');
     return {loaded,failed};
   }
+  function formatServerFileSize(size){
+    const n=Number(size);
+    if(!Number.isFinite(n)||n<0)return '';
+    if(n<1024)return n+' B';
+    if(n<1024*1024)return (n/1024).toFixed(n<10240?1:0)+' KB';
+    if(n<1024*1024*1024)return (n/1024/1024).toFixed(n<10*1024*1024?1:0)+' MB';
+    return (n/1024/1024/1024).toFixed(1)+' GB';
+  }
+  function formatServerFileTime(value){
+    const d=new Date(Number(value||0)*1000);
+    if(!Number.isFinite(d.getTime()))return '';
+    return d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  }
+  function setServerFileStatus(text){ if($('serverFileStatus'))$('serverFileStatus').textContent=text||''; }
+  function syncServerFileRoots(){
+    const sel=$('serverFileRoots'); if(!sel)return;
+    const roots=serverFileState.roots||[];
+    sel.innerHTML='';
+    roots.forEach(root=>{
+      const opt=document.createElement('option');
+      opt.value=root.path;
+      opt.textContent=root.name||root.path;
+      sel.appendChild(opt);
+    });
+    if(serverFileState.root)sel.value=serverFileState.root;
+  }
+  function renderServerFileList(payload){
+    if(payload&&typeof payload==='object'){
+      serverFileState.path=payload.path||'';
+      serverFileState.root=payload.root||'';
+      serverFileState.parent=payload.parent||'';
+      serverFileState.roots=Array.isArray(payload.roots)?payload.roots:[];
+      serverFileState.items=Array.isArray(payload.items)?payload.items:[];
+    }
+    syncServerFileRoots();
+    if($('serverFilePath'))$('serverFilePath').textContent=serverFileState.path||'';
+    if($('serverFileUp'))$('serverFileUp').disabled=!serverFileState.parent;
+    const list=$('serverFileList'); if(!list)return;
+    list.innerHTML='';
+    if(!serverFileState.items.length){
+      const empty=document.createElement('div');
+      empty.className='server-file-empty';
+      empty.textContent='No supported structure files in this directory.';
+      list.appendChild(empty);
+      return;
+    }
+    serverFileState.items.forEach(item=>{
+      const row=document.createElement('div');
+      row.className='server-file-row '+(item.type==='directory'?'is-dir':'is-file');
+      row.title=item.path||item.name||'';
+      const icon=document.createElement('span');
+      icon.className='server-file-icon';
+      icon.textContent=item.type==='directory'?'DIR':'FILE';
+      const name=document.createElement('span');
+      name.className='server-file-name';
+      name.textContent=item.name||item.path||'';
+      const size=document.createElement('span');
+      size.className='server-file-size';
+      size.textContent=item.type==='directory'?'':formatServerFileSize(item.size);
+      const mtime=document.createElement('span');
+      mtime.className='server-file-mtime';
+      mtime.textContent=formatServerFileTime(item.mtime);
+      row.appendChild(icon); row.appendChild(name); row.appendChild(size); row.appendChild(mtime);
+      row.onclick=function(){
+        if(item.type==='directory')refreshServerFileList(item.path);
+        else loadServerFile(item.path,{suppressThrow:true});
+      };
+      list.appendChild(row);
+    });
+  }
+  async function refreshServerFileList(path){
+    const params=new URLSearchParams();
+    if(path)params.set('path',path);
+    setServerFileStatus('Loading directory...');
+    const result=await fetchJsonResult(SERVER_FILES_API+(params.toString()?'?'+params.toString():''),{method:'GET'});
+    if(!result.ok){
+      setServerFileStatus('Directory load failed: '+persistenceErrorText(result));
+      return null;
+    }
+    renderServerFileList(result.data);
+    setServerFileStatus((serverFileState.items||[]).length+' items'+(result.data&&result.data.truncated?' shown; list truncated':''));
+    return result.data;
+  }
+  function openServerFileBrowser(){
+    const overlay=$('serverFileOverlay'); if(!overlay)return;
+    overlay.style.display='flex';
+    refreshServerFileList(serverFileState.path).catch(err=>setServerFileStatus('Directory load failed: '+((err&&err.message)||err)));
+  }
+  function closeServerFileBrowser(){ if($('serverFileOverlay'))$('serverFileOverlay').style.display='none'; }
+  async function loadServerFile(path,opts){
+    opts=opts||{};
+    if(!path)return;
+    const name=path.split(/[\\/]/).pop()||path;
+    suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+60000);
+    try{
+      const result=await withBusy('Loading '+name+'...',function(){
+        return fetchJsonResult(SERVER_FILE_LOAD_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+      });
+      if(!result.ok)throw new Error(persistenceErrorText(result));
+      rememberSessionResponse(result.data);
+      const entry=normalizeStructureEntry(result.data&&result.data.entry);
+      if(!entry)throw new Error('Server returned no structure entry.');
+      loadEntry(entry,{persist:false});
+      suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+5000);
+      setStatus('Loaded server file: '+entry.title);
+      closeServerFileBrowser();
+      return entry;
+    }catch(err){
+      setServerFileStatus('Load failed: '+((err&&err.message)||err));
+      setStatus('Server file load failed: '+((err&&err.message)||err));
+      if(!opts.suppressThrow)throw err;
+      return null;
+    }
+  }
   async function loadInitialStructure(){
     const saved=(await loadViewerSession()) || (await loadLastStructure());
     if(saved){
@@ -5005,7 +5122,7 @@ function installFrameSyncedMotion(targetViewer){
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
     reloadVisualConfig:function(){ return loadVisualConfig().then(function(cfg){ applyStylesFull(true); return cfg; }); },
-    loadUrl, removeEntry, renameEntry, setEntryTitle:renameEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
+    loadUrl, loadServerFile, removeEntry, renameEntry, setEntryTitle:renameEntry, run:runCompat, viewer:function(){ return viewer; }, model:function(){ return model; }, models:function(){ return models.map(x=>x.model); }
   };
 
   // ---------- Wire UI ----------
@@ -5055,6 +5172,12 @@ function installFrameSyncedMotion(targetViewer){
     }catch(err){ setStatus('Load failed: '+err.message); }
     e.target.value='';
   };
+  $('serverOpenBtn').onclick=openServerFileBrowser;
+  $('serverFileClose').onclick=closeServerFileBrowser;
+  $('serverFileCancel').onclick=closeServerFileBrowser;
+  $('serverFileOverlay').addEventListener('mousedown',function(e){ if(e.target===$('serverFileOverlay'))closeServerFileBrowser(); });
+  $('serverFileUp').onclick=function(){ if(serverFileState.parent)refreshServerFileList(serverFileState.parent); };
+  $('serverFileRoots').onchange=function(){ if($('serverFileRoots').value)refreshServerFileList($('serverFileRoots').value); };
 
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
@@ -5093,7 +5216,7 @@ function installFrameSyncedMotion(targetViewer){
     if(isActionHotkey(e,'cycleLigand')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
     if(isActionHotkey(e,'cycleChain')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
     if(isActionHotkey(e,'nearby')){ e.preventDefault(); if(!e.repeat)addNearbySelection(); return; }
-    if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
+    if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('serverFileOverlay').style.display==='flex'){ closeServerFileBrowser(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
   document.addEventListener('pointerdown',function(e){
     if(hierarchyContextMenu&&!hierarchyContextMenu.hidden&&!hierarchyContextMenu.contains(e.target))closeHierarchyContextMenu();
