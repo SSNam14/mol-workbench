@@ -102,6 +102,10 @@ function boot(){
   let hierarchyRows = [];
   let hierarchySelectionAnchorKey = '';
   let hierarchyContextMenu = null;
+  let entriesSelectionAnchorIndex = -1;
+  let entryRowSelectionAnchorIndex = -1;
+  let selectedEntryNames = new Set();
+  let hierarchyContextAction = null;
   const undoStack = [];
   const MAX_UNDO_STACK = 20;
   let wideLineLayer = null;
@@ -579,16 +583,6 @@ function boot(){
       return true;
     });
   }
-  function deleteViewerSessionEntry(name,opts){
-    opts=opts||{};
-    if(!name)return Promise.resolve(false);
-    suppressSessionPollUntil=Date.now()+1500;
-    return fetchJsonResult(VIEWER_SESSION_ENTRY_API+'/'+encodeURIComponent(name),{method:'DELETE'}).then(result=>{
-      if(!result.ok)return reportPersistenceFailure('Viewer session entry delete',result,opts);
-      rememberSessionResponse(result.data);
-      return true;
-    });
-  }
   function saveViewerSessionEntryTitle(name,title,opts){
     opts=opts||{};
     const cleanName=normText(name), cleanTitle=normText(title);
@@ -654,6 +648,9 @@ function boot(){
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    selectedEntryNames.clear();
+    entriesSelectionAnchorIndex=-1;
+    entryRowSelectionAnchorIndex=-1;
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
@@ -663,6 +660,9 @@ function boot(){
     disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    selectedEntryNames.clear();
+    entriesSelectionAnchorIndex=-1;
+    entryRowSelectionAnchorIndex=-1;
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
@@ -3007,22 +3007,24 @@ function boot(){
     setTimeout(()=>{ input.focus(); input.select(); },0);
   }
   function buildEntriesList(){
-    const el=$('entriesList'); el.innerHTML='';
+    const el=$('entriesList'); el.innerHTML=''; el.tabIndex=0;
+    pruneSelectedEntries();
     entries.forEach((e,i)=>{
       const row=document.createElement('div');
       row.setAttribute('data-row','');
+      row.setAttribute('data-entry-name',e.name);
+      row.classList.toggle('is-selected',selectedEntryNames.has(e.name));
       row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent';
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
       const chk=document.createElement('input'); chk.type='checkbox';
       chk.checked=entryChecked[e.name]!==false;
-      const CHK_ON="border:1px solid #3a7bd5;background:#3a7bd5 url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E\") center/10px no-repeat";
+      const CHK_ON='border:1px solid #4c9ff0;background:radial-gradient(circle at center,#f4fbff 0 34%,#3a7bd5 38% 100%)';
       const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
-      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:3px;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
+      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
       paintChk();
-      chk.onclick=function(ev){ ev.stopPropagation(); };
-      chk.onchange=function(){ setEntryIncludedWithBusy(e,chk.checked); };
+      chk.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); setEntriesIncludedFromClick(i,ev); };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'; ttl.title='Double-click to rename: '+e.title;
-      ttl.onclick=function(ev){ ev.stopPropagation(); };
+      ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
       ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
       const del=document.createElement('button');
       del.type='button';
@@ -3033,6 +3035,8 @@ function boot(){
       del.onmouseleave=function(){ del.style.color='#9a9a9a'; del.style.borderColor='transparent'; del.style.background='transparent'; };
       del.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); deleteEntry(e); };
       row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+      row.onclick=function(ev){ selectEntryRowsFromClick(i,ev); };
+      row.oncontextmenu=function(ev){ entryRowContextMenu(i,ev); };
       el.appendChild(row);
     });
   }
@@ -3195,6 +3199,7 @@ function boot(){
   }
   function closeHierarchyContextMenu(){
     if(hierarchyContextMenu)hierarchyContextMenu.hidden=true;
+    hierarchyContextAction=null;
   }
   function selectedSourceSerialsByEntry(selected){
     const out=new Map();
@@ -3224,10 +3229,16 @@ function boot(){
   async function deleteSelectedAtoms(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
-    const byEntry=selectedSourceSerialsByEntry(selected), updated=[], undoEntries=[];
+    const byEntry=selectedSourceSerialsByEntry(selected), updated=[], undoEntries=[], removeEntries=[];
     byEntry.forEach((serials,entryName)=>{
       const entry=entries.find(e=>e.name===entryName);
       if(!entry)return;
+      const record=entryModelCache.get(entryName), visibleAtoms=record&&record.atoms?record.atoms:atomsForEntry(entry);
+      const remainingVisible=visibleAtoms.filter(a=>!serials.has(sourceSerialText(atomSourceSerial(a))));
+      if(!remainingVisible.length){
+        removeEntries.push(entry);
+        return;
+      }
       const merged=new Set(normalizeDeletedSourceSerials(entry.deletedSourceSerials));
       const added=[];
       serials.forEach(serial=>{
@@ -3240,17 +3251,25 @@ function boot(){
       updated.push(entry);
       undoEntries.push({entryName:entry.name,serials:normalizeDeletedSourceSerials(added)});
     });
-    if(!updated.length){ setStatus('No deletable selected atoms'); return; }
-    pushUndoAction({type:'delete-atoms',entries:undoEntries});
+    if(!updated.length&&!removeEntries.length){ setStatus('No deletable selected atoms'); return; }
+    if(undoEntries.length)pushUndoAction({type:'delete-atoms',entries:undoEntries});
     const deletedCount=undoEntries.reduce((sum,item)=>sum+item.serials.length,0);
     resetSelectionState();
+    if(removeEntries.length)removeEntriesFromSession(removeEntries,{persist:false,rebuild:false});
     updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
     rebuildDisplayedEntries({preserveView:true,zoom:false});
-    setStatus('Deleted selected atoms: '+deletedCount.toLocaleString());
-    let savedAll=true;
-    for(const entry of updated){
-      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
-      if(!saved)savedAll=false;
+    const parts=[];
+    if(deletedCount)parts.push(deletedCount.toLocaleString()+' atom'+(deletedCount===1?'':'s'));
+    if(removeEntries.length)parts.push(removeEntries.length.toLocaleString()+' entr'+(removeEntries.length===1?'y':'ies'));
+    setStatus('Deleted selected '+parts.join(' and '));
+    let savedAll=await saveViewerSession({status:false});
+    if(!savedAll&&!removeEntries.length){
+      let partialSavedAll=true;
+      for(const entry of updated){
+        const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+        if(!saved)partialSavedAll=false;
+      }
+      savedAll=partialSavedAll;
     }
     if(!savedAll)setStatus('Deleted locally but not saved on server.');
   }
@@ -3306,17 +3325,29 @@ function boot(){
     del.onclick=function(e){
       e.preventDefault();
       e.stopPropagation();
+      const action=hierarchyContextAction;
       closeHierarchyContextMenu();
+      if(action&&action.type==='entry'){
+        try{ deleteEntry(action.entry); }catch(err){ setStatus('Delete failed: '+(err&&err.message||err)); }
+        return;
+      }
+      if(action&&action.type==='entries'){
+        try{ deleteEntries(action.entries||[]); }catch(err){ setStatus('Delete failed: '+(err&&err.message||err)); }
+        return;
+      }
       deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
     };
     menu.appendChild(del);
+    menu._deleteButton=del;
     menu.onclick=function(e){ e.stopPropagation(); };
     document.body.appendChild(menu);
     hierarchyContextMenu=menu;
     return menu;
   }
-  function showHierarchyContextMenu(x,y){
+  function showHierarchyContextMenu(x,y,label,action){
     const menu=ensureHierarchyContextMenu();
+    hierarchyContextAction=action||{type:'atoms'};
+    if(menu._deleteButton)menu._deleteButton.textContent=label||'Delete';
     menu.hidden=false;
     menu.style.left='0px';
     menu.style.top='0px';
@@ -3328,15 +3359,20 @@ function boot(){
   }
   function hierarchyContextRow(row,e){
     const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
-    if(!serials||!serials.length)return;
+    const entry=row&&row.__hierarchyEntry;
+    if((!serials||!serials.length)&&!entry)return;
     e.preventDefault();
     e.stopPropagation();
+    if(entry&&(!serials||!serials.length)){
+      showHierarchyContextMenu(e.clientX,e.clientY,'Delete entry',{type:'entry',entry});
+      return;
+    }
     const selectedSerials=new Set(serialsForAtoms(selectionAtoms));
     if(!hierarchyMatchSelected(match,selectedSerials)){
       hierarchySelectionAnchorKey=hierarchyRowKey(row);
       setHierarchySerialSelection(serials.slice());
     }
-    showHierarchyContextMenu(e.clientX,e.clientY);
+    showHierarchyContextMenu(e.clientX,e.clientY,'Delete',{type:'atoms'});
   }
   function hierarchySelectRow(row,e){
     const match=row&&row.__hierarchyMatch, serials=match&&match.serials;
@@ -3473,6 +3509,7 @@ function boot(){
   function entryHeaderRow(entry,count,collapsed,entryAtoms){
     const row=document.createElement('div');
     row.setAttribute('data-row','');
+    row.__hierarchyEntry=entry;
     row.__hierarchyMatch=hierarchyMatch('entry',entry.name,entryAtoms);
     hierarchyRows.push(row);
     row.style.cssText='display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;font-size:11.5px;color:#cfcfcf;font-weight:700;border-top:1px solid #242424;background:#2d2d2d;cursor:pointer';
@@ -4396,33 +4433,144 @@ function boot(){
     }
     return visible;
   }
-  function setEntryIncluded(entry,on){
-    entryChecked[entry.name]=!!on;
+  function setIncludedEntryNames(names,label){
+    const next=names instanceof Set?names:new Set(names||[]);
+    entries.forEach(entry=>{ entryChecked[entry.name]=next.has(entry.name); });
     refreshDisplayedEntriesFast({preserveView:true,zoom:false});
     saveViewerSessionState();
+    if(label)setStatus(label);
   }
-  function entryNeedsBusy(entry){
-    const record=entryModelCache.get(entry&&entry.name);
-    return !!((record&&record.atoms&&record.atoms.length>=HUGE_FIT_ATOM_LIMIT)||String(entry&&entry.data||'').length>=5*1024*1024);
+  function pruneSelectedEntries(){
+    if(!selectedEntryNames.size)return;
+    const names=new Set(entries.map(entry=>entry.name));
+    selectedEntryNames.forEach(name=>{ if(!names.has(name))selectedEntryNames.delete(name); });
+    if(entryRowSelectionAnchorIndex>=entries.length)entryRowSelectionAnchorIndex=entries.length-1;
   }
-  function setEntryIncludedWithBusy(entry,on){
-    const label=(on?'Showing ':'Hiding ')+(entry&&entry.title||entry&&entry.name||'entry')+'...';
-    if(entryNeedsBusy(entry))return withBusy(label,()=>setEntryIncluded(entry,on)).catch(err=>setStatus('Entry update failed: '+(err&&err.message||err)));
-    return setEntryIncluded(entry,on);
+  function selectedEntryRecords(){
+    pruneSelectedEntries();
+    return entries.filter(entry=>selectedEntryNames.has(entry.name));
+  }
+  function paintEntrySelectionRows(){
+    const el=$('entriesList');
+    if(!el)return;
+    Array.prototype.forEach.call(el.querySelectorAll('[data-entry-name]'),function(row){
+      row.classList.toggle('is-selected',selectedEntryNames.has(row.getAttribute('data-entry-name')));
+    });
+  }
+  function setEntryRowSelection(names,label){
+    const allowed=new Set(entries.map(entry=>entry.name));
+    selectedEntryNames=new Set();
+    (names||[]).forEach(name=>{ if(allowed.has(name))selectedEntryNames.add(name); });
+    paintEntrySelectionRows();
+    if(label)setStatus(label);
+  }
+  function selectEntryRowsFromClick(index,e){
+    if(index<0||index>=entries.length)return;
+    const clicked=entries[index], current=new Set(selectedEntryNames);
+    let next;
+    if(e&&e.shiftKey){
+      const anchor=entryRowSelectionAnchorIndex>=0?entryRowSelectionAnchorIndex:index;
+      const lo=Math.min(anchor,index),hi=Math.max(anchor,index);
+      next=[];
+      for(let i=lo;i<=hi;i++)next.push(entries[i].name);
+    }else if(e&&(e.ctrlKey||e.metaKey)){
+      next=current;
+      if(next.has(clicked.name))next.delete(clicked.name);
+      else next.add(clicked.name);
+      entryRowSelectionAnchorIndex=index;
+    }else{
+      next=[clicked.name];
+      entryRowSelectionAnchorIndex=index;
+    }
+    const count=next instanceof Set?next.size:next.length;
+    setEntryRowSelection(next,count?('Selected entries: '+count.toLocaleString()):'Entry selection cleared');
+    const el=$('entriesList');
+    if(el&&el.focus){
+      try{ el.focus({preventScroll:true}); }catch(_){ try{ el.focus(); }catch(__){} }
+    }
+  }
+  function entryRowContextMenu(index,e){
+    if(index<0||index>=entries.length)return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry=entries[index];
+    if(!selectedEntryNames.has(entry.name))setEntryRowSelection([entry.name],'Selected entries: 1');
+    const targets=selectedEntryRecords();
+    const label=targets.length>1?'Delete entries':'Delete entry';
+    showHierarchyContextMenu(e.clientX,e.clientY,label,{type:'entries',entries:targets});
+  }
+  function setEntriesIncludedFromClick(index,e){
+    if(index<0||index>=entries.length)return;
+    const current=new Set(includedEntries().map(entry=>entry.name));
+    const clicked=entries[index];
+    let next;
+    if(e&&e.shiftKey){
+      const anchor=entriesSelectionAnchorIndex>=0?entriesSelectionAnchorIndex:index;
+      const lo=Math.min(anchor,index),hi=Math.max(anchor,index);
+      next=new Set();
+      for(let i=lo;i<=hi;i++)next.add(entries[i].name);
+    }else if(e&&(e.ctrlKey||e.metaKey)){
+      next=current;
+      if(next.has(clicked.name))next.delete(clicked.name);
+      else next.add(clicked.name);
+      entriesSelectionAnchorIndex=index;
+    }else{
+      next=new Set([clicked.name]);
+      entriesSelectionAnchorIndex=index;
+    }
+    const label=next.size?('Displayed entries: '+next.size.toLocaleString()+' / '+entries.length.toLocaleString()):'No entries displayed';
+    const work=function(){ setIncludedEntryNames(next,label); };
+    if(next.size>20||atoms.length>=HUGE_FIT_ATOM_LIMIT)return withBusy('Updating displayed entries...',work).catch(err=>setStatus('Entry update failed: '+(err&&err.message||err)));
+    return work();
+  }
+  function removeEntriesFromSession(targetEntries,opts){
+    opts=opts||{};
+    const targets=[],seen=new Set();
+    (targetEntries||[]).forEach(entry=>{
+      const name=normText(entry&&entry.name);
+      if(!name||seen.has(name))return;
+      const current=entries.find(e=>e.name===name);
+      if(!current)return;
+      seen.add(name);
+      targets.push(current);
+    });
+    if(!targets.length)return [];
+    const names=new Set(targets.map(entry=>entry.name));
+    for(let i=entries.length-1;i>=0;i--){
+      if(!names.has(entries[i].name))continue;
+      entries.splice(i,1);
+    }
+    names.forEach(name=>{
+      delete entryChecked[name];
+      selectedEntryNames.delete(name);
+      disposeEntryRecord(name,entries);
+    });
+    if(entriesSelectionAnchorIndex>=entries.length)entriesSelectionAnchorIndex=entries.length-1;
+    if(entryRowSelectionAnchorIndex>=entries.length)entryRowSelectionAnchorIndex=entries.length-1;
+    if(opts.resetSelection!==false)resetSelectionState();
+    if(opts.rebuild!==false)rebuildDisplayedEntries({preserveView:true,zoom:false});
+    if(opts.persist!==false){
+      saveViewerSession({status:false}).then(saved=>{ if(!saved)setStatus('Deleted locally but not saved on server.'); });
+    }
+    return targets;
+  }
+  function deleteEntries(targetEntries){
+    const removed=removeEntriesFromSession(targetEntries);
+    if(removed.length)setStatus('Deleted entries: '+removed.length.toLocaleString());
+    return removed;
+  }
+  function deleteSelectedEntries(){
+    const targets=selectedEntryRecords();
+    if(!targets.length)return false;
+    deleteEntries(targets);
+    return true;
   }
   function deleteEntry(entry){
     const idx=entries.findIndex(e=>e.name===entry.name);
     if(idx<0)return null;
-    entries.splice(idx,1);
-    delete entryChecked[entry.name];
-    disposeEntryRecord(entry.name);
-    resetSelectionState();
-    rebuildDisplayedEntries({preserveView:true,zoom:false});
-    deleteViewerSessionEntry(entry.name,{status:false}).then(ok=>{
-      if(!ok)saveViewerSession().then(saved=>{ if(!saved)setStatus('Deleted locally but not saved on server: '+entry.title); });
-    });
-    setStatus('Deleted entry: '+entry.title);
-    return entry;
+    const removed=removeEntriesFromSession([entry]);
+    if(removed.length)setStatus('Deleted entry: '+entry.title);
+    return removed[0]||null;
   }
   function entryByIdentifier(value){
     if(value&&typeof value==='object')value=value.name||value.title||value.pdbId||value.entry||'';
@@ -5642,7 +5790,11 @@ function installFrameSyncedMotion(targetViewer){
     if(e.key==='Delete'){
       if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
       e.preventDefault();
-      if(!e.repeat)deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      if(!e.repeat){
+        const entryListTarget=ae&&ae.closest&&ae.closest('#entriesList');
+        if(entryListTarget&&deleteSelectedEntries())return;
+        deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      }
       return;
     }
     if(isActionHotkey(e,'cycleLigand')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
