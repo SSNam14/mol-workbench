@@ -3194,6 +3194,17 @@ function boot(){
     row.oncontextmenu=function(ev){ entryGroupContextMenu(group,ev); };
     el.appendChild(row);
   }
+  function entryChildDisplayTitle(entry){
+    const group=entryLoadGroup(entry), title=normText(entry&&entry.title||entry&&entry.name||'');
+    if(!group)return title;
+    const prefix=group.title+' ['+group.index+']';
+    if(title===prefix)return 'Entry '+group.index;
+    if(title.indexOf(prefix+' ')===0){
+      const detail=normText(title.slice(prefix.length+1));
+      if(detail)return detail;
+    }
+    return title||('Entry '+group.index);
+  }
   function appendEntryRow(el,e,i,child){
     const locked=isEntryLocked(e);
     const row=document.createElement('div');
@@ -3205,9 +3216,10 @@ function boot(){
     const arrow=document.createElement('span'); arrow.style.cssText='width:14px;height:18px;display:block';
     const chk=makeEntryIncludeControl(entryIsIncluded(e),locked,locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.',function(click){ setEntriesIncludedFromClick(i,click); },function(){ toggleEntryLock(i); });
     const ttl=document.createElement('span');
-    ttl.textContent=e.title;
+    const displayTitle=child?entryChildDisplayTitle(e):(e.title||e.name||'');
+    ttl.textContent=displayTitle;
     ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'+(child?';padding-left:8px':'');
-    ttl.title='Double-click to rename: '+e.title;
+    ttl.title='Double-click to rename: '+(e.title||e.name||'');
     ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
     ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
     const del=makeEntryDeleteButton('Delete entry',function(){ deleteEntry(e); });
