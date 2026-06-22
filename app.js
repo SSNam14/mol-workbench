@@ -4473,7 +4473,7 @@ function installFrameSyncedMotion(targetViewer){
     function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.rotateAxis=action==='rotate'?rotateAxisForEvent(e):null; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
     function rotateAxisFromDrag(d){
       if(!drag.rotateAxis||!viewer||!drag.startQuaternion||!viewer.rotationGroup)return false;
-      const angle=d.x*Math.PI*2, s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
+      const angle=(drag.rotateAxis==='z'?-d.x:d.x)*Math.PI*2, s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
       if(drag.rotateAxis==='z')q.set(0,0,s,c);
       else q.set(0,s,0,c);
       q.multiply(drag.startQuaternion);
