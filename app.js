@@ -1080,7 +1080,7 @@ function boot(){
     const source='agent-showWithin';
     let needsStyleApply=false;
     if(command.replace!==false)agentRemoveRules(source,tag);
-    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serialTextSet(result.matched));
+    state.hiddenRules=removeAtomsFromHideRules(state.hiddenRules,result.matched);
     if(opts.show!==false){
       const ruleOptions=Object.assign({},command.options||{},{
         source,
@@ -1449,7 +1449,7 @@ function boot(){
     const rep=normText(state.selectionRepresentation||'line').toLowerCase();
     clearSelectionHighlight({deferLineMask:rep==='line'});
     if(!viewer||!state.selectionSel||state.selectionRepresentation==='off'){ if(rep==='line')setLineSelectionStyleMask(null); return; }
-    const opts=state.selectionOptions||{},rawSelected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel),selected=rawSelected.filter(isAtomVisibleNow);
+    const opts=state.selectionOptions||{},rawSelected=selectedAtomsOverride||selectedAtomsForSelector(state.selectionSel),selected=rawSelected.filter(isAtomSelectableNow);
     if(!selected.length){ if(rep==='line')setLineSelectionStyleMask(null); return; }
     const job=selectionHighlightJob;
     if(rep==='line'&&drawAdaptiveLineSelection(selected,opts,job))return;
@@ -1733,7 +1733,7 @@ function boot(){
     if(!viewer||!model)return false;
     const t=sel||state.selectionSel;
     if(!t){ focusOverview(); return false; }
-    const target=filterAtoms(t).filter(isAtomVisibleNow);
+    const target=filterAtoms(t).filter(isAtomSelectableNow);
     if(shouldUseFastFit(target))return fastFitAtoms(target.length?target:atoms,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
     let s=styleSelection(t,{});
     if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector();
@@ -1758,11 +1758,16 @@ function boot(){
     return out;
   }
   function hiddenByRules(a){ for(const r of state.hiddenRules){ if(r.disabled)continue; try{ if(matchesResolvedSelector(a,resolveSelector(r.selector)))return true; }catch(e){} } return false; }
-  function isAtomVisibleNow(a){
+  function isAtomSelectableNow(a){
     const c=atomCategory(a);
     if(state.visibility[c]===false)return false;
     if(c==='protein'&&!isChainVisible(a))return false;
     if(c!=='protein'&&!isGroupVisible(a))return false;
+    return true;
+  }
+  function isAtomVisibleNow(a){
+    if(!isAtomSelectableNow(a))return false;
+    const c=atomCategory(a);
     if(c==='solvents'&&state.solvent==='off')return false;
     if(c==='other'&&state.other==='off')return false;
     if(hiddenByRules(a))return false;
@@ -3654,6 +3659,24 @@ function boot(){
       return true;
     });
   }
+  function removeAtomsFromHideRules(rules,selected){
+    const serials=serialTextSet(selected), serialSel=serialSelectorForAtoms(selected);
+    if(!serials.size)return rules||[];
+    return (rules||[]).filter(rule=>{
+      const sel=rule&&rule.selector;
+      if(!sel||typeof sel!=='object'||Array.isArray(sel))return true;
+      if(Object.prototype.hasOwnProperty.call(sel,'serial')){
+        const raw=Array.isArray(sel.serial)?sel.serial:[sel.serial], kept=raw.filter(s=>!serials.has(String(s)));
+        if(!kept.length)return false;
+        rule.selector=Object.assign({},sel,{serial:kept});
+        return true;
+      }
+      if(serialSel&&sel.not){
+        rule.selector=Object.assign({},sel,{not:{or:[sel.not,serialSel]}});
+      }
+      return true;
+    });
+  }
   function atomLevelStyleSpecForAtoms(rep,opts,selected){
     const spec=styleSpec(rep,opts);
     const protein=[],other=[];
@@ -3710,11 +3733,10 @@ function boot(){
     return selected;
   }
   function showSelectionToolbarAtoms(selected){
-    const serials=serialTextSet(selected);
-    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+    state.hiddenRules=removeAtomsFromHideRules(state.hiddenRules,selected);
   }
   function ensureSelectionToolbarDefaultLine(selected){
-    const targets=(selected||[]).filter(a=>isAtomVisibleNow(a)&&!isAtomLevelShown(a)), sel=serialSelectorForAtoms(targets);
+    const targets=(selected||[]).filter(a=>isAtomSelectableNow(a)&&!isAtomLevelShown(a)), sel=serialSelectorForAtoms(targets);
     if(!sel)return 0;
     state.styleRules=removeSerialsFromDirectRules(state.styleRules,serialTextSet(targets));
     state.styleRules.push({selector:sel,representation:'line',options:{source:'selection-toolbar',atomLevel:true,defaultVisible:true}});
@@ -3724,7 +3746,7 @@ function boot(){
     const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
     if(!sel)return;
     const serials=serialTextSet(selected);
-    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+    state.hiddenRules=removeAtomsFromHideRules(state.hiddenRules,selected);
     state.hiddenRules.push({selector:sel,representation:'hide',options:{source:'selection-toolbar',atomLevel:true}});
     applyStylesFull(true);
     setStatus('Hidden selected atoms: '+selected.length.toLocaleString());
@@ -3751,12 +3773,12 @@ function boot(){
     const selected=currentSelectionToolbarAtoms(), sel=serialSelectorForAtoms(selected);
     if(!sel)return;
     const serials=serialTextSet(selected);
-    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serials);
+    state.hiddenRules=removeAtomsFromHideRules(state.hiddenRules,selected);
     state.styleRules=removeSerialsFromDirectRules(state.styleRules,serials);
     state.styleRules.push({selector:sel,representation:rep,options:{source:'selection-toolbar',atomLevel:true}});
     styleGeneration++;
     resetAtomLevelCache();
-    const visible=selected.filter(isAtomVisibleNow);
+    const visible=selected.filter(isAtomSelectableNow);
     atomLevelStyleSpecForAtoms(rep,{source:'selection-toolbar',atomLevel:true},visible);
     applyVisibility();
     applyHiddenRulesForAtoms(visible);

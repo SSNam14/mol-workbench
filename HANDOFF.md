@@ -86,6 +86,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - `model`: all atoms in touched entries
 - Pressing `z` toggles between focusing the current selection and overview.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z` or `molAgent.focus(...)`.
+- Selection and focus operate on loaded atoms, not only currently atom-level-rendered atoms. Representation `off` or hide rules must not make atoms permanently unselectable; selection highlight and selection-toolbar show/style actions should be able to recover hidden/off atoms while entry/chain/group inclusion still controls whether atoms are in scope.
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.
 - With protein atom display `off`, selected protein atoms are highlighted as app-managed wide lines over the cartoon. If selected atoms are already displayed as atom-level `line`, `stick`, `sphere`, or `cpk`, selection follows that visible representation using the selection color.
 - Selection highlight controls should not be exposed in the normal GUI. It is fixed by default, but agents may adjust it through `molAgent.setSelectionHighlight(...)` when explicitly requested.

@@ -247,6 +247,8 @@ molAgent.clearSelection();
 
 `molAgent.setSelection(null)` also clears selection. Passing a non-object selector throws; selectors must be an object, an array of selector objects, or `null`.
 
+Selection is based on loaded atoms, not only atoms that currently have an atom-level representation. A selector may target atoms hidden by representation `off` or hide rules; the selection highlight should still make them visible. Use selected-atom show/style actions to recover intentionally hidden atoms.
+
 Selection options currently used by `setSelection`:
 
 - `representation`: `stick`, `line`, `tube`, `sphere`, `cpk`, or `off`
