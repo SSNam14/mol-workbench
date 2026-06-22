@@ -769,6 +769,63 @@ molAgent.models();
 
 `molAgent.viewer()` returns the underlying 3Dmol viewer. `molAgent.model()` returns the first displayed 3Dmol model for backward compatibility. `molAgent.models()` returns all currently displayed 3Dmol models. Direct calls can bypass app state, so prefer the structured API first.
 
+### Temporary Viewer-Level Shapes
+
+Agents can add temporary geometric annotations directly to the current 3Dmol viewer when the structured API is insufficient. This is useful for tasks such as "draw a 10 A cube centered on ligand 85C COM" or "draw a guide line between two residue centers".
+
+Example: draw a 10 A cube centered on ligand `85C`:
+
+```js
+const ligand = molAgent.selectAtoms({resn: "85C"});
+if (!ligand.length) throw new Error("No atoms matched ligand 85C");
+
+const center = ligand.reduce((p, a) => ({
+  x: p.x + a.x,
+  y: p.y + a.y,
+  z: p.z + a.z
+}), {x: 0, y: 0, z: 0});
+center.x /= ligand.length;
+center.y /= ligand.length;
+center.z /= ligand.length;
+
+const half = 5; // 10 A cube edge length
+const corners = [
+  [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+  [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
+].map(([x, y, z]) => ({
+  x: center.x + x * half,
+  y: center.y + y * half,
+  z: center.z + z * half,
+}));
+const edges = [
+  [0, 1], [1, 2], [2, 3], [3, 0],
+  [4, 5], [5, 6], [6, 7], [7, 4],
+  [0, 4], [1, 5], [2, 6], [3, 7],
+];
+
+const viewer = molAgent.viewer();
+const shape = viewer.addShape({});
+edges.forEach(([a, b]) => shape.addLine({
+  start: corners[a],
+  end: corners[b],
+  color: "#fdd835",
+  linewidth: 2,
+  opacity: 0.85,
+}));
+viewer.render();
+
+// Keep this handle if you need to remove the annotation later:
+// viewer.removeShape(shape); viewer.render();
+```
+
+Limitations:
+
+- These are viewer-level temporary shapes, not entry-owned objects.
+- They are not saved in the server session or preferences.
+- They do not automatically hide/delete when an entry is hidden or removed.
+- They may be removed by app redraw paths that clear viewer-level overlays.
+- There is currently no structured `molAgent.addShape(...)` or entry-scoped persistent annotation API.
+
 ## Server-Side Entry Commands
 
 Use these when an agent needs to update the shared viewer session without clicking the UI. Open clients with the current app code will pick up the change through `/api/session-meta`.
