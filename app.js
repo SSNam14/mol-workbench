@@ -184,8 +184,8 @@ function boot(){
     if(!surfaces.length)return '';
     return surfaces.map(s=>{
       const chunks=Array.isArray(s&&s.chunks)?s.chunks:[];
-      const chunkSig=chunks.map(c=>[(c.vertices&&c.vertices.length)||0,(c.faces&&c.faces.length)||0,(c.normals&&c.normals.length)||0].join('/')).join(',');
-      return [s.name||'',s.kind||'',s.color||'',s.opacity==null?'':s.opacity,s.vertexCount||0,s.faceCount||0,chunkSig].join(':');
+      const chunkSig=chunks.map(c=>[(c.vertices&&c.vertices.length)||0,(c.faces&&c.faces.length)||0,(c.normals&&c.normals.length)||0,(c.colors&&c.colors.length)||0].join('/')).join(',');
+      return [s.name||'',s.kind||'',s.color||'',s.colorMode||'',s.colorField||'',s.opacity==null?'':s.opacity,s.vertexCount||0,s.faceCount||0,chunkSig].join(':');
     }).join('|');
   }
   function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
@@ -461,9 +461,12 @@ function boot(){
         kind:normText(raw.kind||'surface'),
         source:normText(raw.source||''),
         color:normText(raw.color||'#8ecae6')||'#8ecae6',
+        colorMode:normText(raw.colorMode||''),
+        colorField:normText(raw.colorField||''),
         opacity:raw.opacity==null?0.85:Number(raw.opacity),
         vertexCount:Number(raw.vertexCount)||0,
         faceCount:Number(raw.faceCount)||0,
+        valueRange:Array.isArray(raw.valueRange)?raw.valueRange.slice(0,2):[],
         chunks
       });
     });
@@ -3795,6 +3798,17 @@ function boot(){
     for(let i=0;i<values.length;i++)out.push(Number(values[i])|0);
     return out;
   }
+  function flatColorArray(values){
+    const out=[];
+    for(let i=0;i+2<values.length;i+=3){
+      out.push({
+        r:Math.max(0,Math.min(1,(Number(values[i])||0)/255)),
+        g:Math.max(0,Math.min(1,(Number(values[i+1])||0)/255)),
+        b:Math.max(0,Math.min(1,(Number(values[i+2])||0)/255))
+      });
+    }
+    return out;
+  }
   function clearSurfaceShapesForRecord(record){
     if(!viewer||!record||!record.surfaceShapes)return;
     record.surfaceShapes.forEach(shape=>{ try{ viewer.removeShape(shape); }catch(e){} });
@@ -3813,7 +3827,8 @@ function boot(){
         shape.addCustom({
           vertexArr:flatVectorArray(chunk.vertices),
           normalArr:Array.isArray(chunk.normals)?flatVectorArray(chunk.normals):[],
-          faceArr:flatIndexArray(chunk.faces)
+          faceArr:flatIndexArray(chunk.faces),
+          colorArr:Array.isArray(chunk.colors)?flatColorArray(chunk.colors):undefined
         });
         record.surfaceShapes.push(shape);
       });

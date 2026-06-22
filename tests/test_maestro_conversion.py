@@ -1,6 +1,7 @@
 import gzip
 import io
 import json
+import pickle
 import tempfile
 import unittest
 import zipfile
@@ -107,6 +108,10 @@ class MaestroConversionTests(unittest.TestCase):
         with zipfile.ZipFile(payload, "w") as zf:
             zf.writestr("basename.maegz", gzip.compress(SIMPLE_MAE))
             zf.writestr("basename.vis", vis_payload)
+            zf.writestr("basename.pkl", pickle.dumps((
+                np.array([0.0, 0.1, 0.2, 0.3], dtype=float),
+                np.array([-0.2, 0.0, 0.2, -0.1], dtype=float),
+            ), protocol=2))
             zf.writestr("basename_panel_state.json", json.dumps({"settings_trans_front": 25}))
         entry, meta = server.convert_structure_bytes(payload.getvalue(), "surface.psazip", "psazip", "Surface", "")
         self.assertEqual(entry["fmt"], "pdb")
@@ -116,7 +121,10 @@ class MaestroConversionTests(unittest.TestCase):
         self.assertEqual(entry["surfaces"][0]["vertexCount"], 4)
         self.assertEqual(entry["surfaces"][0]["faceCount"], 2)
         self.assertEqual(entry["surfaces"][0]["opacity"], 0.75)
+        self.assertEqual(entry["surfaces"][0]["colorField"], "electrostatic")
+        self.assertEqual(entry["surfaces"][0]["valueRange"], [-0.2, 0.2])
         self.assertEqual(len(entry["surfaces"][0]["chunks"][0]["faces"]), 6)
+        self.assertEqual(len(entry["surfaces"][0]["chunks"][0]["colors"]), 12)
 
 
 if __name__ == "__main__":

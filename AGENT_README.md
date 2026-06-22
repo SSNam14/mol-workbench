@@ -675,7 +675,7 @@ await molAgent.renameEntry(entry.name, "1FJS reference");
 
 Supported format inference in the UI includes common molecular files such as `pdb`, `sdf`, `mol`, `mol2`, `xyz`, `cif`, `mae`, `maegz`, and Maestro `psazip`. For API calls, pass the format explicitly when known. MAE/MAEGZ inputs are converted server-side to PDB text with the bundled pure-Python converter; no Schrodinger runtime is required for normal loading.
 
-Maestro `psazip` inputs are converted server-side as a combined structure + surface entry. The server extracts the embedded structure, converts MAE/MAEGZ content to PDB when needed, parses the `.vis` HDF5 surface mesh, chunks the mesh below the 3Dmol custom-shape index limit, and persists the surface data in the entry. No Schrodinger runtime is required, but the server Python environment must provide `h5py` and `numpy`. Agents can load these files with either:
+Maestro `psazip` inputs are converted server-side as a combined structure + surface entry. The server extracts the embedded structure, converts MAE/MAEGZ content to PDB when needed, parses the `.vis` HDF5 surface mesh, chunks the mesh below the 3Dmol custom-shape index limit, and persists the surface data in the entry. If the PSAZIP includes Bioluminate patch pickle data, the second vertex scalar array is treated as the positive/negative electrostatic field and converted to per-vertex red-white-blue colors using the embedded positive/negative color settings. No Schrodinger runtime is required, but the server Python environment must provide `h5py` and `numpy`. Agents can load these files with either:
 
 ```js
 await molAgent.loadUrl("path/to/surface.psazip", "psazip", "surface", "Surface", "");

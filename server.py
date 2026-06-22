@@ -5,6 +5,7 @@ import argparse
 import io
 import json
 import os
+import pickle
 import tempfile
 import threading
 import time
@@ -311,11 +312,14 @@ def normalize_entry_surfaces(value):
                 vertices = chunk.get("vertices")
                 faces = chunk.get("faces")
                 normals = chunk.get("normals")
+                colors = chunk.get("colors")
                 if not isinstance(vertices, list) or not isinstance(faces, list):
                     continue
                 clean = {"vertices": vertices, "faces": faces}
                 if isinstance(normals, list):
                     clean["normals"] = normals
+                if isinstance(colors, list):
+                    clean["colors"] = colors
                 chunks.append(clean)
         if not chunks:
             continue
@@ -324,10 +328,14 @@ def normalize_entry_surfaces(value):
             "kind": str(raw.get("kind") or "surface")[:80],
             "color": str(raw.get("color") or "#8ecae6")[:32],
             "opacity": raw.get("opacity", 0.85),
+            "colorMode": str(raw.get("colorMode") or "")[:80],
+            "colorField": str(raw.get("colorField") or "")[:80],
             "vertexCount": raw.get("vertexCount"),
             "faceCount": raw.get("faceCount"),
             "chunks": chunks,
         }
+        if isinstance(raw.get("valueRange"), list):
+            surface["valueRange"] = raw.get("valueRange")[:2]
         if raw.get("source"):
             surface["source"] = str(raw.get("source"))[:160]
         out.append(surface)
@@ -408,11 +416,16 @@ def _psazip_surface_vis_name(names):
     return found[0] if found else ""
 
 
+def _psazip_patch_pickle_name(names):
+    found = [name for name in names if name.lower().endswith(".pkl")]
+    return found[0] if found else ""
+
+
 def _round_float(value, digits):
     return round(float(value), digits)
 
 
-def _flush_surface_chunk(chunks, vertices, normals, faces, include_normals):
+def _flush_surface_chunk(chunks, vertices, normals, colors, faces, include_normals, include_colors):
     if not vertices or not faces:
         return
     chunk = {
@@ -421,24 +434,29 @@ def _flush_surface_chunk(chunks, vertices, normals, faces, include_normals):
     }
     if include_normals:
         chunk["normals"] = [_round_float(coord, 4) for point in normals for coord in point]
+    if include_colors:
+        chunk["colors"] = [int(value) for point in colors for value in point]
     chunks.append(chunk)
 
 
-def chunk_surface_mesh(coords, normals, faces):
+def chunk_surface_mesh(coords, normals, faces, colors=None):
     chunks = []
     vertex_map = {}
     out_vertices = []
     out_normals = []
+    out_colors = []
     out_faces = []
     include_normals = normals is not None and len(normals) == len(coords)
+    include_colors = colors is not None and len(colors) == len(coords)
 
     for face in faces:
         needed = [int(idx) for idx in face if int(idx) not in vertex_map]
         if out_faces and len(out_vertices) + len(needed) > MAX_SURFACE_CHUNK_VERTICES:
-            _flush_surface_chunk(chunks, out_vertices, out_normals, out_faces, include_normals)
+            _flush_surface_chunk(chunks, out_vertices, out_normals, out_colors, out_faces, include_normals, include_colors)
             vertex_map = {}
             out_vertices = []
             out_normals = []
+            out_colors = []
             out_faces = []
         mapped = []
         for raw_idx in face:
@@ -450,9 +468,11 @@ def chunk_surface_mesh(coords, normals, faces):
                 out_vertices.append(coords[idx])
                 if include_normals:
                     out_normals.append(normals[idx])
+                if include_colors:
+                    out_colors.append(colors[idx])
             mapped.append(mapped_idx)
         out_faces.append(mapped)
-    _flush_surface_chunk(chunks, out_vertices, out_normals, out_faces, include_normals)
+    _flush_surface_chunk(chunks, out_vertices, out_normals, out_colors, out_faces, include_normals, include_colors)
     return chunks
 
 
@@ -471,7 +491,131 @@ def _surface_opacity(panel_state, attrs):
     return round(1.0 - transparency / 100.0, 3)
 
 
-def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source=""):
+class _SafePsazipUnpickler(pickle.Unpickler):
+    _dummy_classes = {}
+    _allowed = {
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "scalar"),
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("_codecs", "encode"),
+        ("builtins", "set"),
+        ("__builtin__", "set"),
+        ("builtins", "frozenset"),
+        ("__builtin__", "frozenset"),
+        ("collections", "OrderedDict"),
+    }
+
+    @classmethod
+    def _dummy_class(cls, module, name):
+        key = (module, name)
+        if key in cls._dummy_classes:
+            return cls._dummy_classes[key]
+
+        def __new__(dummy_cls, *args, **kwargs):
+            obj = object.__new__(dummy_cls)
+            obj.__args__ = args
+            return obj
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __setstate__(self, state):
+            if isinstance(state, dict):
+                self.__dict__.update(state)
+            else:
+                self.__state__ = state
+
+        dummy = type(name, (object,), {
+            "__module__": module,
+            "__new__": __new__,
+            "__init__": __init__,
+            "__setstate__": __setstate__,
+        })
+        cls._dummy_classes[key] = dummy
+        return dummy
+
+    def find_class(self, module, name):
+        if (module, name) in self._allowed:
+            return super().find_class(module, name)
+        if module == "schrodinger.application.bioluminate.patch_utils.patch_finder" and name in {"ProteinProperties", "ResInfo"}:
+            return self._dummy_class(module, name)
+        raise pickle.UnpicklingError(f"blocked {module}.{name}")
+
+
+def parse_psazip_patch_values(pickle_payload):
+    if not pickle_payload:
+        return {}
+    try:
+        import numpy as np
+    except ImportError:
+        return {}
+    try:
+        obj = _SafePsazipUnpickler(io.BytesIO(pickle_payload)).load()
+    except (pickle.UnpicklingError, ValueError, TypeError, EOFError, ImportError):
+        return {}
+    arrays = []
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            if isinstance(item, np.ndarray) and item.ndim == 1 and np.issubdtype(item.dtype, np.number):
+                arrays.append(item.astype(float))
+    out = {}
+    if arrays:
+        out["hydrophobic"] = arrays[0]
+    if len(arrays) >= 2:
+        out["electrostatic"] = arrays[1]
+    return out
+
+
+def _panel_rgb(panel_state, key, fallback):
+    value = panel_state.get(key, {}).get("color") if isinstance(panel_state.get(key), dict) else None
+    if not isinstance(value, list) or len(value) < 3:
+        return fallback
+    out = []
+    for raw, default in zip(value[:3], fallback):
+        try:
+            out.append(max(0, min(255, int(round(float(raw))))))
+        except (TypeError, ValueError):
+            out.append(default)
+    return tuple(out)
+
+
+def _lerp_rgb(a, b, t):
+    t = max(0.0, min(1.0, float(t)))
+    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
+
+
+def electrostatic_vertex_colors(values, panel_state):
+    try:
+        import numpy as np
+    except ImportError:
+        return None, None
+    if values is None:
+        return None, None
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 1 or arr.size == 0:
+        return None, None
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None, None
+    min_value = float(np.nanmin(finite))
+    max_value = float(np.nanmax(finite))
+    scale = max(abs(min_value), abs(max_value), 1e-9)
+    negative = _panel_rgb(panel_state, "settings_negative", (225, 30, 30))
+    positive = _panel_rgb(panel_state, "settings_positive", (0, 0, 180))
+    neutral = (245, 245, 245)
+    colors = []
+    for raw in arr:
+        if not np.isfinite(raw):
+            colors.append(neutral)
+        elif raw < 0:
+            colors.append(_lerp_rgb(neutral, negative, min(abs(float(raw)) / scale, 1.0)))
+        else:
+            colors.append(_lerp_rgb(neutral, positive, min(abs(float(raw)) / scale, 1.0)))
+    return colors, [round(min_value, 6), round(max_value, 6)]
+
+
+def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source="", patch_values=None):
     try:
         import h5py
         import numpy as np
@@ -494,10 +638,12 @@ def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source=""):
             if coords.size == 0 or faces.size == 0:
                 return
             attrs = {key: _decode_hdf_attr(value) for key, value in obj.attrs.items()}
-            chunks = chunk_surface_mesh(coords, normals, faces)
+            electrostatic = (patch_values or {}).get("electrostatic")
+            colors, value_range = electrostatic_vertex_colors(electrostatic, panel_state) if electrostatic is not None and len(electrostatic) == len(coords) else (None, None)
+            chunks = chunk_surface_mesh(coords, normals, faces, colors)
             if not chunks:
                 return
-            surfaces.append({
+            surface = {
                 "name": str(attrs.get("Dataset Name") or name.rsplit("/", 1)[-1] or "Surface"),
                 "kind": "maestro-psazip-surface",
                 "source": source,
@@ -506,7 +652,12 @@ def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source=""):
                 "vertexCount": int(coords.shape[0]),
                 "faceCount": int(faces.shape[0]),
                 "chunks": chunks,
-            })
+            }
+            if colors is not None:
+                surface["colorMode"] = "red-white-blue"
+                surface["colorField"] = "electrostatic"
+                surface["valueRange"] = value_range
+            surfaces.append(surface)
         h5.visititems(visit)
     return surfaces
 
@@ -520,6 +671,7 @@ def psazip_bytes_to_entry(payload, filename="", title=None, pdb_id=""):
         names = [name for name in zipf.namelist() if not name.endswith("/")]
         structure_name = _psazip_structure_name(names)
         vis_name = _psazip_surface_vis_name(names)
+        pkl_name = _psazip_patch_pickle_name(names)
         if not structure_name:
             raise MaestroConversionError("psazip_no_structure")
         if not vis_name:
@@ -537,7 +689,8 @@ def psazip_bytes_to_entry(payload, filename="", title=None, pdb_id=""):
                 raise MaestroConversionError("psazip_structure_decode_failed") from exc
             meta = {"atomCount": None, "bondCount": None}
             converted_fmt = structure_fmt or "pdb"
-        surfaces = parse_maestro_vis_surfaces(zipf.read(vis_name), panel_state, vis_name)
+        patch_values = parse_psazip_patch_values(zipf.read(pkl_name)) if pkl_name else {}
+        surfaces = parse_maestro_vis_surfaces(zipf.read(vis_name), panel_state, vis_name, patch_values)
 
     name = str(filename or "surface.psazip").strip() or "surface.psazip"
     if name.lower().endswith(".psazip"):
