@@ -329,6 +329,7 @@ Useful fields:
 
 - `radius`: positive distance cutoff in Angstrom.
 - `source` / `target`: `{selector: {...}}` using normal selector syntax, or `{category: "ligand" | "protein" | "solvent" | "other" | "all"}`.
+- `atoms` / `atomFilter`: `all`, `heavyPolarH`, `heavy`, `polarH`, or `hydrogen`. Prefer `all` or `heavyPolarH` for normal inspection; plain `heavy` excludes polar hydrogens and is rarely the intended biological view.
 - `entry`, `entryName`, `_entryName`, `title`, or `pdbId` may be placed inside `source` or `target` to restrict entries.
 - `level`: `atom`, `residue`, `chain`, or `entry`; default is `residue`.
 - `sides`: `target` by default; use `both` for chain-chain or group-group interfaces.

@@ -916,9 +916,18 @@ function boot(){
     if(c==='other'||c==='others'||c==='ion'||c==='ions')return atomCategory(a)==='other';
     return false;
   }
+  function agentAtomFilterMatches(a,filter){
+    const f=normText(filter||'all').replace(/[-_+\s]/g,'').toLowerCase();
+    if(!f||f==='all'||f==='any')return true;
+    if(f==='heavy'||f==='heavyatom'||f==='heavyatoms'||f==='noh'||f==='nohydrogen'||f==='nohydrogens')return !isHydrogenAtom(a);
+    if(f==='heavypolarh'||f==='heavypolarhydrogen'||f==='heavypolarhydrogens'||f==='heavyandpolarh'||f==='heavyandpolarhydrogen')return !isHydrogenAtom(a)||isPolarHydrogen(a);
+    if(f==='polarh'||f==='polarhydrogen'||f==='polarhydrogens')return isPolarHydrogen(a);
+    if(f==='h'||f==='hydrogen'||f==='hydrogens')return isHydrogenAtom(a);
+    throw new Error('Unsupported atom filter: '+filter);
+  }
   function selectorLikeSpec(spec){
     if(!spec||typeof spec!=='object'||Array.isArray(spec))return null;
-    const meta=new Set(['category','entry','entryName','entryTitle','title','pdbId','pdbID','level','selector','options','sides','scope']);
+    const meta=new Set(['category','atoms','atomFilter','entry','entryName','entryTitle','title','pdbId','pdbID','level','selector','options','sides','scope']);
     return Object.keys(spec).some(k=>!meta.has(k))?spec:null;
   }
   function agentAtomsForSpec(spec,fallbackCategory){
@@ -929,7 +938,7 @@ function boot(){
     const pool=selector?filterAtoms(selector):atoms.slice();
     return pool.filter(a=>{
       if(entryNames&&!entryNames.has(a._entryName||''))return false;
-      return agentCategoryMatches(a,category);
+      return agentCategoryMatches(a,category)&&agentAtomFilterMatches(a,spec.atoms||spec.atomFilter||'all');
     });
   }
   function agentGroupByEntry(list){
