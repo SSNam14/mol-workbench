@@ -119,7 +119,7 @@ function boot(){
   let panelRefreshTimer = null;
   let interactionStartTimer = null;
   let pendingKeyBindingAction = null;
-  const serverFileState = {path:'', parent:'', roots:[], items:[], loading:false};
+  const serverFileState = {path:'', root:'', parent:'', roots:[], items:[], loading:false, selectedPath:'', history:[], historyIndex:-1};
   let busyToken = 0;
 
   function setStatus(t){ if(statusEl)statusEl.textContent = t || ''; }
@@ -4478,22 +4478,131 @@ function boot(){
     return d.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
   }
   function setServerFileStatus(text){ if($('serverFileStatus'))$('serverFileStatus').textContent=text||''; }
+  const SFX_ICON_FOLDER='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 6.4c0-.83.67-1.5 1.5-1.5h3.8c.4 0 .78.16 1.06.44l1.2 1.2h6.94c.83 0 1.5.67 1.5 1.5v8.62c0 .83-.67 1.5-1.5 1.5H5c-.83 0-1.5-.67-1.5-1.5z"></path></svg>';
+  const SFX_ICON_FILE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M6 3.5h7l5 5v12H6z"></path><path d="M13 3.5V9h5"></path></svg>';
+  const SFX_ICON_PLACE=SFX_ICON_FOLDER;
+  function findServerFileItem(path){ return path?((serverFileState.items||[]).find(it=>it.path===path)||null):null; }
+  function updateServerFileOpenButton(){
+    const open=$('serverFileOpen');
+    if(open)open.disabled=serverFileState.loading||!findServerFileItem(serverFileState.selectedPath);
+  }
+  function updateServerFileNavButtons(){
+    const back=$('serverFileBack'),fwd=$('serverFileForward'),up=$('serverFileUp');
+    const loading=serverFileState.loading;
+    if(back)back.disabled=loading||serverFileState.historyIndex<=0;
+    if(fwd)fwd.disabled=loading||serverFileState.historyIndex>=serverFileState.history.length-1;
+    if(up)up.disabled=loading||!serverFileState.parent;
+  }
   function setServerFileLoading(loading){
     serverFileState.loading=!!loading;
     if($('serverFileOverlay'))$('serverFileOverlay').classList.toggle('is-loading',serverFileState.loading);
-    ['serverFileRoots','serverFileUp','serverFileClose','serverFileCancel'].forEach(id=>{ if($(id))$(id).disabled=serverFileState.loading; });
+    ['serverFileClose','serverFileCancel'].forEach(id=>{ if($(id))$(id).disabled=serverFileState.loading; });
+    updateServerFileNavButtons();
+    updateServerFileOpenButton();
+  }
+  function serverFileRowByPath(path){
+    const list=$('serverFileList');
+    if(!list||!path)return null;
+    return Array.prototype.find.call(list.querySelectorAll('.sfx-row'),function(r){ return r.getAttribute('data-path')===path; })||null;
+  }
+  function setSelectedServerFile(item){
+    serverFileState.selectedPath=item?item.path:'';
+    const list=$('serverFileList');
+    if(list)Array.prototype.forEach.call(list.querySelectorAll('.sfx-row'),function(r){
+      r.classList.toggle('is-selected', !!serverFileState.selectedPath&&r.getAttribute('data-path')===serverFileState.selectedPath);
+    });
+    updateServerFileOpenButton();
+  }
+  function activateServerFileItem(item){
+    if(!item)return;
+    if(item.type==='directory')navigateServerFile(item.path);
+    else loadServerFile(item.path,{suppressThrow:true});
+  }
+  function moveServerFileSelection(delta){
+    const items=serverFileState.items||[];
+    if(!items.length)return;
+    let idx=items.findIndex(it=>it.path===serverFileState.selectedPath);
+    if(idx<0)idx=delta>0?-1:0;
+    idx=Math.max(0,Math.min(items.length-1,idx+delta));
+    const item=items[idx];
+    setSelectedServerFile(item);
+    const row=serverFileRowByPath(item.path);
+    if(row&&row.scrollIntoView)row.scrollIntoView({block:'nearest'});
+  }
+  function serverFileListKeydown(e){
+    if(serverFileState.loading)return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); moveServerFileSelection(1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); moveServerFileSelection(-1); }
+    else if(e.key==='Enter'){ e.preventDefault(); activateServerFileItem(findServerFileItem(serverFileState.selectedPath)); }
+    else if(e.key==='Backspace'){ e.preventDefault(); if(serverFileState.parent)navigateServerFile(serverFileState.parent); }
+  }
+  function navigateServerFile(path){
+    return refreshServerFileList(path).then(function(data){
+      if(data){
+        const resolved=serverFileState.path;
+        if(serverFileState.history[serverFileState.historyIndex]!==resolved){
+          serverFileState.history=serverFileState.history.slice(0,serverFileState.historyIndex+1);
+          serverFileState.history.push(resolved);
+          serverFileState.historyIndex=serverFileState.history.length-1;
+        }
+        updateServerFileNavButtons();
+      }
+      return data;
+    });
+  }
+  function serverFileHistoryGo(delta){
+    if(serverFileState.loading)return;
+    const idx=serverFileState.historyIndex+delta;
+    if(idx<0||idx>=serverFileState.history.length)return;
+    serverFileState.historyIndex=idx;
+    refreshServerFileList(serverFileState.history[idx]).then(updateServerFileNavButtons);
   }
   function syncServerFileRoots(){
-    const sel=$('serverFileRoots'); if(!sel)return;
-    const roots=serverFileState.roots||[];
-    sel.innerHTML='';
-    roots.forEach(root=>{
-      const opt=document.createElement('option');
-      opt.value=root.path;
-      opt.textContent=root.name||root.path;
-      sel.appendChild(opt);
+    const wrap=$('serverFileRoots'); if(!wrap)return;
+    wrap.innerHTML='';
+    (serverFileState.roots||[]).forEach(function(root){
+      const row=document.createElement('button');
+      row.type='button';
+      row.className='sfx-place'+(root.path===serverFileState.root?' is-active':'');
+      row.title=root.path;
+      const icon=document.createElement('span');
+      icon.className='sfx-place-icon';
+      icon.innerHTML=SFX_ICON_PLACE;
+      const name=document.createElement('span');
+      name.className='sfx-place-name';
+      name.textContent=root.name||root.path;
+      row.appendChild(icon); row.appendChild(name);
+      row.onclick=function(){ if(!serverFileState.loading&&root.path!==serverFileState.path)navigateServerFile(root.path); };
+      wrap.appendChild(row);
     });
-    if(serverFileState.root)sel.value=serverFileState.root;
+  }
+  function renderServerFileBreadcrumb(){
+    const bar=$('serverFilePath'); if(!bar)return;
+    bar.innerHTML='';
+    const path=serverFileState.path||'', root=serverFileState.root||'', sep='/';
+    if(!path)return;
+    const segments=[];
+    if(root&&(path===root||path.indexOf(root+sep)===0)){
+      segments.push({label:(root.split(sep).filter(Boolean).pop()||root),target:root});
+      let acc=root;
+      path.slice(root.length).split(sep).filter(Boolean).forEach(function(part){ acc+=sep+part; segments.push({label:part,target:acc}); });
+    }else{
+      let acc='';
+      path.split(sep).filter(Boolean).forEach(function(part){ acc+=sep+part; segments.push({label:part,target:acc}); });
+    }
+    segments.forEach(function(seg,i){
+      if(i>0){ const s=document.createElement('span'); s.className='sfx-crumb-sep'; s.textContent='›'; bar.appendChild(s); }
+      const crumb=document.createElement('button');
+      crumb.type='button';
+      const current=i===segments.length-1;
+      crumb.className='sfx-crumb'+(current?' is-current':'');
+      crumb.textContent=seg.label;
+      crumb.title=seg.target;
+      if(current)crumb.disabled=true;
+      else crumb.onclick=function(){ if(!serverFileState.loading)navigateServerFile(seg.target); };
+      bar.appendChild(crumb);
+    });
+    bar.scrollLeft=bar.scrollWidth;
   }
   function renderServerFileList(payload){
     if(payload&&typeof payload==='object'){
@@ -4503,42 +4612,44 @@ function boot(){
       serverFileState.roots=Array.isArray(payload.roots)?payload.roots:[];
       serverFileState.items=Array.isArray(payload.items)?payload.items:[];
     }
+    serverFileState.selectedPath='';
     syncServerFileRoots();
-    if($('serverFilePath'))$('serverFilePath').textContent=serverFileState.path||'';
-    if($('serverFileUp'))$('serverFileUp').disabled=!serverFileState.parent;
+    renderServerFileBreadcrumb();
+    updateServerFileNavButtons();
     const list=$('serverFileList'); if(!list)return;
     list.innerHTML='';
     if(!serverFileState.items.length){
       const empty=document.createElement('div');
-      empty.className='server-file-empty';
-      empty.textContent='No supported structure files in this directory.';
+      empty.className='sfx-empty';
+      empty.textContent='This folder has no sub-folders or supported structure files.';
       list.appendChild(empty);
+      updateServerFileOpenButton();
       return;
     }
     serverFileState.items.forEach(item=>{
       const row=document.createElement('div');
-      row.className='server-file-row '+(item.type==='directory'?'is-dir':'is-file');
+      row.className='sfx-row '+(item.type==='directory'?'is-dir':'is-file');
+      row.setAttribute('data-path',item.path||'');
+      row.setAttribute('role','option');
       row.title=item.path||item.name||'';
       const icon=document.createElement('span');
-      icon.className='server-file-icon';
-      icon.textContent=item.type==='directory'?'DIR':'FILE';
+      icon.className='sfx-row-icon';
+      icon.innerHTML=item.type==='directory'?SFX_ICON_FOLDER:SFX_ICON_FILE;
       const name=document.createElement('span');
-      name.className='server-file-name';
+      name.className='sfx-row-name';
       name.textContent=item.name||item.path||'';
       const size=document.createElement('span');
-      size.className='server-file-size';
+      size.className='sfx-row-size';
       size.textContent=item.type==='directory'?'':formatServerFileSize(item.size);
       const mtime=document.createElement('span');
-      mtime.className='server-file-mtime';
+      mtime.className='sfx-row-mtime';
       mtime.textContent=formatServerFileTime(item.mtime);
       row.appendChild(icon); row.appendChild(name); row.appendChild(size); row.appendChild(mtime);
-      row.onclick=function(){
-        if(serverFileState.loading)return;
-        if(item.type==='directory')refreshServerFileList(item.path);
-        else loadServerFile(item.path,{suppressThrow:true});
-      };
+      row.onclick=function(){ if(serverFileState.loading)return; setSelectedServerFile(item); };
+      row.ondblclick=function(){ if(serverFileState.loading)return; activateServerFileItem(item); };
       list.appendChild(row);
     });
+    updateServerFileOpenButton();
   }
   async function refreshServerFileList(path){
     if(serverFileState.loading)return null;
@@ -4557,7 +4668,10 @@ function boot(){
   function openServerFileBrowser(){
     const overlay=$('serverFileOverlay'); if(!overlay)return;
     overlay.style.display='flex';
-    refreshServerFileList(serverFileState.path).catch(err=>setServerFileStatus('Directory load failed: '+((err&&err.message)||err)));
+    navigateServerFile(serverFileState.path).then(function(){
+      const list=$('serverFileList');
+      if(list&&list.focus)try{ list.focus(); }catch(e){}
+    }).catch(err=>setServerFileStatus('Directory load failed: '+((err&&err.message)||err)));
   }
   function closeServerFileBrowser(){ if($('serverFileOverlay'))$('serverFileOverlay').style.display='none'; }
   async function loadServerFile(path,opts){
@@ -5411,8 +5525,11 @@ function installFrameSyncedMotion(targetViewer){
   $('serverFileClose').onclick=closeServerFileBrowser;
   $('serverFileCancel').onclick=closeServerFileBrowser;
   $('serverFileOverlay').addEventListener('mousedown',function(e){ if(e.target===$('serverFileOverlay'))closeServerFileBrowser(); });
-  $('serverFileUp').onclick=function(){ if(serverFileState.parent)refreshServerFileList(serverFileState.parent); };
-  $('serverFileRoots').onchange=function(){ if($('serverFileRoots').value)refreshServerFileList($('serverFileRoots').value); };
+  $('serverFileUp').onclick=function(){ if(!serverFileState.loading&&serverFileState.parent)navigateServerFile(serverFileState.parent); };
+  $('serverFileBack').onclick=function(){ serverFileHistoryGo(-1); };
+  $('serverFileForward').onclick=function(){ serverFileHistoryGo(1); };
+  $('serverFileOpen').onclick=function(){ activateServerFileItem(findServerFileItem(serverFileState.selectedPath)); };
+  $('serverFileList').addEventListener('keydown',serverFileListKeydown);
 
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
@@ -5425,6 +5542,10 @@ function installFrameSyncedMotion(targetViewer){
       const key=bindingKeyFromEvent(e);
       if(!key){ setStatus('Key binding must be a single key without Ctrl/Alt/Meta.'); return; }
       setKeyBinding(pendingKeyBindingAction,key);
+      return;
+    }
+    if($('serverFileOverlay')&&$('serverFileOverlay').style.display==='flex'){
+      if(e.key==='Escape'){ e.preventDefault(); closeServerFileBrowser(); }
       return;
     }
     if(isUndoHotkey(e)){
