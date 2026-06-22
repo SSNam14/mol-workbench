@@ -3824,12 +3824,14 @@ function boot(){
       chunks.forEach(chunk=>{
         if(!Array.isArray(chunk.vertices)||!Array.isArray(chunk.faces)||!chunk.vertices.length||!chunk.faces.length)return;
         const shape=viewer.addShape({color:surface.color||'#8ecae6',opacity:surfaceOpacity(surface.opacity)});
+        const hasVertexColors=Array.isArray(chunk.colors)&&chunk.colors.length;
         shape.addCustom({
           vertexArr:flatVectorArray(chunk.vertices),
           normalArr:Array.isArray(chunk.normals)?flatVectorArray(chunk.normals):[],
           faceArr:flatIndexArray(chunk.faces),
-          colorArr:Array.isArray(chunk.colors)?flatColorArray(chunk.colors):undefined
+          colorArr:hasVertexColors?flatColorArray(chunk.colors):undefined
         });
+        if(hasVertexColors)delete shape.color;
         record.surfaceShapes.push(shape);
       });
     });
