@@ -1882,6 +1882,8 @@ function boot(){
   }
   function visibleAtomSelector(){ const serials=serialsForAtoms(atoms); return serials.length?{serial:serials}:{}; }
   function workspaceFitAtoms(){
+    const rendered=atoms.filter(isAtomRenderedForFit);
+    if(rendered.length)return rendered;
     const visible=atoms.filter(isAtomVisibleNow);
     return visible.length?visible:atoms;
   }
@@ -2025,6 +2027,7 @@ function boot(){
     return finishVisualBounds(bounds);
   }
   function workspaceVisualExtent(targetAtoms){
+    if(targetAtoms&&targetAtoms.length&&targetAtoms.length<HUGE_FIT_ATOM_LIMIT)return visualExtentForAtoms(targetAtoms);
     if(!displayStateHasFitVisibilityOverrides()){
       const box=visualExtentForBoxes(visibleEntryRecords().map(record=>record.extent));
       if(box)return box;
@@ -2215,6 +2218,22 @@ function boot(){
     if(c==='other'&&state.other==='off')return false;
     if(hiddenByRules(a))return false;
     return true;
+  }
+  function isProteinBackboneFitAtom(a){
+    return backboneAtoms.has(atomName(a));
+  }
+  function isAtomRenderedForFit(a){
+    if(!isAtomSelectableNow(a)||hiddenByRules(a))return false;
+    const c=atomCategory(a);
+    if(c==='protein'){
+      if(ATOM_REPS.has(state.proteinAtoms))return true;
+      if(state.baseProtein!=='off'&&state.baseProtein!=='hide')return isProteinBackboneFitAtom(a);
+      return false;
+    }
+    if(c==='ligands')return ATOM_REPS.has(state.ligand);
+    if(c==='solvents')return ATOM_REPS.has(state.solvent);
+    if(c==='other')return ATOM_REPS.has(state.other);
+    return false;
   }
   // "Visualized atoms" = atoms currently shown at the ATOM level by the display
   // settings. This is independent of the (yellow) selection, so the Interactions button behaves the
