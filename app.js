@@ -1175,6 +1175,21 @@ function boot(){
     });
     return out;
   }
+  function entryLoadGroupIdMap(){
+    const counts=new Map(), out=new Map();
+    entries.forEach(entry=>{
+      const group=entryLoadGroup(entry);
+      if(group&&group.id)counts.set(group.id,(counts.get(group.id)||0)+1);
+    });
+    entries.forEach(entry=>{
+      const group=entryLoadGroup(entry);
+      if(group&&group.id&&counts.get(group.id)>1)out.set(entry.name,group.id);
+    });
+    return out;
+  }
+  function entryAtomListHasProtein(list){
+    return (list||[]).some(isProtein);
+  }
   function agentSpatialCellKey(a,cell){
     return Math.floor(Number(a.x)/cell)+'\u0001'+Math.floor(Number(a.y)/cell)+'\u0001'+Math.floor(Number(a.z)/cell);
   }
@@ -2484,10 +2499,33 @@ function boot(){
     const targetPool=atoms.filter(isAtomSelectableNow);
     if(!targetPool.length){ setStatus('Nearby: no selectable atoms'); return false; }
     const bySource=agentGroupByEntry(source), byTarget=agentGroupByEntry(targetPool), hits=[];
+    const loadGroups=entryLoadGroupIdMap(), targetsByGroup=new Map(), proteinTargetsByGroup=new Map();
+    function addGroupTarget(store,groupId,entryName,list){
+      if(!groupId)return;
+      let group=store.get(groupId);
+      if(!group){ group=new Map(); store.set(groupId,group); }
+      group.set(entryName,list);
+    }
+    byTarget.forEach((targetList,entryName)=>{
+      const groupId=loadGroups.get(entryName);
+      addGroupTarget(targetsByGroup,groupId,entryName,targetList);
+      if(entryAtomListHasProtein(targetList))addGroupTarget(proteinTargetsByGroup,groupId,entryName,targetList);
+    });
     bySource.forEach((sourceList,entryName)=>{
-      const targetList=byTarget.get(entryName)||[];
-      if(!targetList.length)return;
-      hits.push.apply(hits,agentAtomsWithin(sourceList,targetList,NEARBY_SELECTION_RADIUS));
+      const visited=new Set();
+      function collect(targetEntryName,targetList){
+        if(!targetList||!targetList.length||visited.has(targetEntryName))return;
+        visited.add(targetEntryName);
+        hits.push.apply(hits,agentAtomsWithin(sourceList,targetList,NEARBY_SELECTION_RADIUS));
+      }
+      collect(entryName,byTarget.get(entryName));
+      const groupId=loadGroups.get(entryName);
+      if(!groupId)return;
+      const groupTargets=(entryAtomListHasProtein(sourceList)?targetsByGroup:proteinTargetsByGroup).get(groupId);
+      if(!groupTargets)return;
+      groupTargets.forEach((targetList,targetEntryName)=>{
+        if(targetEntryName!==entryName)collect(targetEntryName,targetList);
+      });
     });
     const expanded=agentUniqueAtoms(agentExpandHits(agentUniqueAtoms(hits),targetPool,selectionExpansionLevel()));
     const selectedBefore=new Set(serialsForAtoms(selectionAtoms));
