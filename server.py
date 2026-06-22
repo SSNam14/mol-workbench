@@ -45,6 +45,7 @@ BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
 AGENT_ACTION_TYPES = {
+    "querywithin",
     "showwithin",
     "selectwithin",
     "style",

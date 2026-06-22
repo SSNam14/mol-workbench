@@ -50,7 +50,8 @@ Agents should use the structured API exposed in the page:
 const entry = await molAgent.loadUrl("path/to/structure.pdb", "pdb", "entry-name", "Display title", "");
 await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
-molAgent.showWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}, level: "residue"});
+const hits = molAgent.queryWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}});
+molAgent.style(hits.selector, "line");
 molAgent.focus();
 molAgent.setProteinAtomStyle("line");
 molAgent.getState();

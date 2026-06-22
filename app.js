@@ -972,6 +972,9 @@ function boot(){
     }
     return out;
   }
+  function agentAtomKey(a){
+    return a&&a.serial!=null?'s:'+a.serial:'i:'+(a&&a._entryName||'')+'\u0001'+(a&&a.index);
+  }
   function agentExpandHits(hits,pool,level){
     const lvl=normText(level||'residue').replace(/[-_\s]/g,'').toLowerCase();
     if(lvl==='atom'||lvl==='atoms')return hits;
@@ -988,7 +991,7 @@ function boot(){
   function agentUniqueAtoms(list){
     const seen=new Set(),out=[];
     (list||[]).forEach(a=>{
-      const key=a&&a.serial!=null?'s:'+a.serial:'i:'+(a&&a._entryName||'')+'\u0001'+(a&&a.index);
+      const key=agentAtomKey(a);
       if(!a||seen.has(key))return;
       seen.add(key);
       out.push(a);
@@ -1006,7 +1009,10 @@ function boot(){
     const sourceSpec=agentSpecObject(command.source||{category:'ligand'});
     const targetSpec=agentSpecObject(command.target||{category:'protein'});
     const sourceAtoms=agentAtomsForSpec(sourceSpec,'ligand');
-    const targetAtoms=agentAtomsForSpec(targetSpec,'protein');
+    const rawTargetAtoms=agentAtomsForSpec(targetSpec,'protein');
+    const sourceKeys=new Set(sourceAtoms.map(agentAtomKey));
+    const excludeSource=command.excludeSource!==false&&command.excludeSourceFromTarget!==false;
+    const targetAtoms=excludeSource?rawTargetAtoms.filter(a=>!sourceKeys.has(agentAtomKey(a))):rawTargetAtoms;
     if(!sourceAtoms.length||!targetAtoms.length){
       return {retry:entries.length&&!atoms.length,sourceAtoms,targetAtoms,matched:[],selector:null};
     }
@@ -1036,6 +1042,20 @@ function boot(){
     }
     const matched=agentUniqueAtoms(collect),selector=serialSelectorForAtoms(matched);
     return {radius,sourceAtoms,targetAtoms,matched,selector,level,sides};
+  }
+  function queryWithinAction(command){
+    const result=agentWithinResult(command||{});
+    return {
+      radius:result.radius,
+      level:result.level,
+      sides:result.sides,
+      sourceAtomCount:(result.sourceAtoms||[]).length,
+      targetAtomCount:(result.targetAtoms||[]).length,
+      atomCount:(result.matched||[]).length,
+      residueCount:selectionInfo(result.selector,result.matched).residueCount,
+      selector:result.selector,
+      retry:!!result.retry
+    };
   }
   function showWithinAction(command,opts){
     opts=opts||{};
@@ -1081,6 +1101,7 @@ function boot(){
   }
   function executeAgentAction(command){
     const type=agentActionType(command);
+    if(type==='querywithin')return queryWithinAction(command);
     if(type==='showwithin')return showWithinAction(command);
     if(type==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
     if(type==='clearstyles'){ clearStyles(); return true; }
@@ -4143,6 +4164,7 @@ function installFrameSyncedMotion(targetViewer){
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
     const type=normText(command.type||command.action).toLowerCase();
+    if(type.replace(/[-_\s]/g,'')==='querywithin')return queryWithinAction(command);
     if(type.replace(/[-_\s]/g,'')==='showwithin')return showWithinAction(command);
     if(type.replace(/[-_\s]/g,'')==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
     if(type==='selection'||type==='setselection')return setSelection(command.selector||command.target||{},command.options||command);
@@ -4164,6 +4186,7 @@ function installFrameSyncedMotion(targetViewer){
     getPreferences:preferencesPayload, savePreferences:savePreferencesNow,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
+    queryWithin:function(command){ return queryWithinAction(Object.assign({},command||{},{type:'queryWithin'})); },
     showWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'showWithin'})); },
     selectWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'selectWithin',select:true}),{show:false}); },
     getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },

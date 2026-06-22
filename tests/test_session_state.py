@@ -141,12 +141,12 @@ class SessionStateTests(unittest.TestCase):
         self.assertIsNone(server.normalize_agent_action("show ligand"))
         self.assertIsNone(server.normalize_agent_action({"type": "unknown"}))
         action = server.normalize_agent_action({
-            "type": "showWithin",
+            "type": "queryWithin",
             "radius": 5,
             "source": {"category": "ligand"},
             "target": {"category": "protein", "level": "residue"},
         }, assign_id=True)
-        self.assertEqual(action["type"], "showWithin")
+        self.assertEqual(action["type"], "queryWithin")
         self.assertIn("id", action)
         self.assertIn("expiresAt", action)
 

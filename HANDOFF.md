@@ -60,7 +60,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Persistence failures must be visible through console diagnostics and, for user-visible session/preference operations, status text. Large entry saves must not report success before the actual server write finishes.
 - Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
-- Open clients should also poll `/api/agent-actions` for structured high-level actions. The server stores only small action objects; the browser executes them against its parsed atoms and current display state. Spatial actions such as `showWithin` are generic source/target selector distance queries, default to entry-local matching, and require `scope: "global"` for intentional cross-entry distance comparison. `showWithin` can use `only`/`hideOthers` when the user asks to show only the matched atoms.
+- Open clients should also poll `/api/agent-actions` for structured high-level actions. The server stores only small action objects; the browser executes them against its parsed atoms and current display state. Spatial behavior should be built from generic `queryWithin` source/target selector distance queries plus explicit style/hide/selection operations. `showWithin` is only a thin wrapper around that primitive. Spatial queries default to entry-local matching, require `scope: "global"` for intentional cross-entry distance comparison, and default to `level: "residue"` so one atom-level hit displays the corresponding residue rather than an isolated dot.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list. A clean install with no saved session or legacy structure must return `404 {"error":"not_found"}`, not `500 invalid_state`.
 - Loading/displaying entries starts nonbonded interaction indexing per visible entry in a Web Worker. Finished indexes are cached on the server by structure key and retained in memory by entry, so switching entries or adding another displayed entry does not discard existing interaction display.
 - When multiple entries are displayed, render the ready interaction indexes for each visible entry and never compute cross-entry interactions. Index worker builds are queued to avoid starting several heavy builds at once.
@@ -127,6 +127,7 @@ molAgent.getMousePreset();
 molAgent.setMouseActions(actions);
 molAgent.getMouseActions();
 molAgent.selectAtoms(selector);
+molAgent.queryWithin(commandObject);
 molAgent.showWithin(commandObject);
 molAgent.selectWithin(commandObject);
 molAgent.getState();

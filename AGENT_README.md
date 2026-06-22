@@ -284,9 +284,22 @@ molAgent.setSelectionHighlight({
 });
 ```
 
-## Spatial Selection And Display Commands
+## Spatial Query And Display Commands
 
-Use `showWithin` for distance-based visual tasks. The command is generic: `source` and `target` may be selector objects or category aliases. The browser computes distances from the currently displayed entries. By default, distance matching is entry-local so several displayed entries do not get mixed; set `scope: "global"` only when cross-entry distance comparison is intended.
+Use `queryWithin` as the primitive for distance-based tasks. The command is generic: `source` and `target` may be selector objects or category aliases. The browser computes distances from the currently displayed entries. By default, distance matching is entry-local so several displayed entries do not get mixed; set `scope: "global"` only when cross-entry distance comparison is intended. The default visualization/query unit is `residue`, not `atom`, because atom-level distance hits often leave isolated dots.
+
+Calculate a selector for protein residues with any atom within 5 A of ligand atoms:
+
+```js
+const hits = molAgent.queryWithin({
+  radius: 5,
+  source: {category: "ligand"},
+  target: {category: "protein"}
+});
+
+molAgent.style(hits.selector, "line");
+molAgent.setSelection(hits.selector);
+```
 
 Show protein residues with any atom within 5 A of ligand atoms:
 
@@ -295,7 +308,6 @@ molAgent.showWithin({
   radius: 5,
   source: {category: "ligand"},
   target: {category: "protein"},
-  level: "residue",
   representation: "line"
 });
 ```
@@ -320,13 +332,14 @@ Useful fields:
 - `entry`, `entryName`, `_entryName`, `title`, or `pdbId` may be placed inside `source` or `target` to restrict entries.
 - `level`: `atom`, `residue`, `chain`, or `entry`; default is `residue`.
 - `sides`: `target` by default; use `both` for chain-chain or group-group interfaces.
+- `excludeSource` / `excludeSourceFromTarget`: defaults to excluding source atoms from target hits so source ligands do not match themselves by distance 0.
 - `representation`: atom-level `line`, `stick`, `sphere`, or `cpk`; default is `line`.
 - `replace`: defaults to replacing the previous `agent-showWithin` rule with the same `tag`.
 - `select`: defaults to selecting the matched atoms as well as displaying them.
 - `focus`: set `true` only when the user explicitly asks to move the camera.
 - `only` / `hideOthers`: hide atoms outside the matched set after applying the display rule.
 
-`molAgent.selectWithin(...)` accepts the same fields but only changes selection. The compatibility form also works:
+`molAgent.showWithin(...)` and `molAgent.selectWithin(...)` are wrappers around `queryWithin`: `showWithin` adds a style rule and selection, while `selectWithin` only changes selection. The compatibility form also works:
 
 ```js
 molAgent.run({
