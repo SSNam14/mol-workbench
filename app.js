@@ -3088,7 +3088,7 @@ function boot(){
     return items;
   }
   function entryRowGridStyle(child){
-    return 'display:grid;grid-template-columns:34px 18px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent'+(child?';background:#292929':'');
+    return 'display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent'+(child?';background:#292929':'');
   }
   function makeEntryIncludeControl(checked,locked,title,onClick,onDoubleClick){
     const chk=document.createElement('input');
@@ -3179,7 +3179,7 @@ function boot(){
     row.classList.toggle('is-selected',group.entries.some(entry=>selectedEntryNames.has(entry.name)));
     row.style.cssText=entryRowGridStyle(false)+';font-weight:600;background:#303030';
     const rn=document.createElement('span');
-    rn.textContent='';
+    rn.style.cssText='height:22px;display:flex;align-items:center;justify-content:flex-end';
     const arrow=hierarchyCollapseArrow(collapsed,collapsed?'Expand entries':'Collapse entries');
     arrow.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); toggleEntryGroupCollapsed(group.id); };
     const anyIncluded=group.entries.some(entryIsIncluded), anyLocked=group.entries.some(isEntryLocked);
@@ -3189,7 +3189,8 @@ function boot(){
     ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer';
     ttl.title=group.title+' · '+group.entries.length.toLocaleString()+' entries';
     const del=makeEntryDeleteButton('Delete entry group',function(){ deleteEntries(group.entries); });
-    row.appendChild(rn); row.appendChild(arrow); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+    rn.appendChild(arrow);
+    row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
     row.onclick=function(ev){ selectEntryGroup(group); };
     row.oncontextmenu=function(ev){ entryGroupContextMenu(group,ev); };
     el.appendChild(row);
@@ -3212,8 +3213,7 @@ function boot(){
     row.setAttribute('data-entry-name',e.name);
     row.classList.toggle('is-selected',selectedEntryNames.has(e.name));
     row.style.cssText=entryRowGridStyle(child);
-    const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
-    const arrow=document.createElement('span'); arrow.style.cssText='width:14px;height:18px;display:block';
+    const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.cssText='color:#8f8f8f;text-align:right;padding-right:2px';
     const chk=makeEntryIncludeControl(entryIsIncluded(e),locked,locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.',function(click){ setEntriesIncludedFromClick(i,click); },function(){ toggleEntryLock(i); });
     const ttl=document.createElement('span');
     const displayTitle=child?entryChildDisplayTitle(e):(e.title||e.name||'');
@@ -3223,7 +3223,7 @@ function boot(){
     ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
     ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
     const del=makeEntryDeleteButton('Delete entry',function(){ deleteEntry(e); });
-    row.appendChild(rn); row.appendChild(arrow); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
+    row.appendChild(rn); row.appendChild(chk); row.appendChild(ttl); row.appendChild(del);
     row.onclick=function(ev){ selectEntryRowsFromClick(i,ev); };
     row.oncontextmenu=function(ev){ entryRowContextMenu(i,ev); };
     el.appendChild(row);
@@ -3697,7 +3697,7 @@ function boot(){
     arrow.className='tree-arrow';
     arrow.textContent=collapsed?'\u25b8':'\u25be';
     arrow.title=title;
-    arrow.style.cssText='width:14px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#8f8f8f;font-weight:400;line-height:1';
+    arrow.style.cssText='width:28px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;color:#8f8f8f;font-size:22px;font-weight:400;line-height:1';
     return arrow;
   }
   function entryTitleForHierarchy(entry){ return entry.title||entry.name||'\u2014'; }
