@@ -178,7 +178,7 @@ Useful `getState()` fields:
 
 ## Interaction Index Commands
 
-The viewer builds nonbonded interaction indexes in a Web Worker per displayed entry. Completed indexes are stored on the server by structure key and reused when switching back to the same loaded molecule or adding another displayed entry.
+The viewer builds nonbonded interaction indexes in a Web Worker per displayed entry. Completed per-entry indexes are stored on the server by structure key and reused when switching back to the same loaded molecule or adding another displayed entry. Same-`loadGroup` receptor/ligand pair indexes are runtime-only because they depend on the current visible entry pairing and browser-assigned atom serials.
 
 Inspect index status:
 
@@ -194,7 +194,7 @@ Expected fields:
 - `counts`: summed precomputed interaction counts for ready displayed entries
 - `readyEntries`: number of displayed entries with ready interaction indexes
 - `totalEntries`: number of displayed entries
-- `entries`: per-entry interaction index status and counts
+- `entries`: per-entry interaction index status and counts; same-`loadGroup` receptor/ligand pair indexes appear with `type: "pair"` and `entryNames`
 
 Force a rebuild:
 
@@ -204,7 +204,7 @@ molAgent.rebuildInteractionIndex();
 
 Rendering rules:
 
-- Interaction rendering covers every displayed entry whose index is ready. Cross-entry interactions are not computed or drawn.
+- Interaction rendering covers every displayed entry whose index is ready. For multi-entry loads, eligible same-`loadGroup` protein-entry to ligand-entry pair indexes are also rendered when ready; unrelated loaded entries are not compared.
 - If a newly displayed entry has no ready index yet, indexes that are already ready remain visible while the missing entry builds in the background.
 - All nonbonded interaction guide lines are dashed.
 - A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
@@ -360,6 +360,8 @@ molAgent.run({
 ## Interaction Query And Display Commands
 
 Use `queryInteractions` when the user asks for already-indexed nonbonded interactions rather than raw distance neighborhoods. The command is generic: `source` and `target` use the same selector/category spec shape as `queryWithin`, and `interaction` may be `hbond`, `halogen`, `salt`, `pipi`, `pication`, `good`, `bad`, `ugly`, or `contacts`.
+
+Interaction indexes are built for each visible entry. For multi-entry files such as Glide poseviewer MAEGZ where the receptor and ligand poses are loaded as separate entries in the same `loadGroup`, the viewer also builds visible protein-entry to ligand-entry pair indexes. This lets `queryInteractions` and `showInteractions` find receptor-ligand interactions across those sibling entries without comparing unrelated loaded structures.
 
 Show only hydrogen-bond interactions touching a named ligand residue, and display the involved residues:
 
