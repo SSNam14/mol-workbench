@@ -284,6 +284,59 @@ molAgent.setSelectionHighlight({
 });
 ```
 
+## Spatial Selection And Display Commands
+
+Use `showWithin` for distance-based visual tasks. The command is generic: `source` and `target` may be selector objects or category aliases. The browser computes distances from the currently displayed entries. By default, distance matching is entry-local so several displayed entries do not get mixed; set `scope: "global"` only when cross-entry distance comparison is intended.
+
+Show protein residues with any atom within 5 A of ligand atoms:
+
+```js
+molAgent.showWithin({
+  radius: 5,
+  source: {category: "ligand"},
+  target: {category: "protein"},
+  level: "residue",
+  representation: "line"
+});
+```
+
+Show the atom-level interface between chain A and chain C in one entry:
+
+```js
+molAgent.showWithin({
+  radius: 7,
+  source: {selector: {_entryName: "5HXB.pdb", chain: "A"}},
+  target: {selector: {_entryName: "5HXB.pdb", chain: "C"}},
+  level: "atom",
+  sides: "both",
+  representation: "line"
+});
+```
+
+Useful fields:
+
+- `radius`: positive distance cutoff in Angstrom.
+- `source` / `target`: `{selector: {...}}` using normal selector syntax, or `{category: "ligand" | "protein" | "solvent" | "other" | "all"}`.
+- `entry`, `entryName`, `_entryName`, `title`, or `pdbId` may be placed inside `source` or `target` to restrict entries.
+- `level`: `atom`, `residue`, `chain`, or `entry`; default is `residue`.
+- `sides`: `target` by default; use `both` for chain-chain or group-group interfaces.
+- `representation`: atom-level `line`, `stick`, `sphere`, or `cpk`; default is `line`.
+- `replace`: defaults to replacing the previous `agent-showWithin` rule with the same `tag`.
+- `select`: defaults to selecting the matched atoms as well as displaying them.
+- `focus`: set `true` only when the user explicitly asks to move the camera.
+
+`molAgent.selectWithin(...)` accepts the same fields but only changes selection. The compatibility form also works:
+
+```js
+molAgent.run({
+  type: "showWithin",
+  radius: 5,
+  source: {category: "ligand"},
+  target: {category: "protein"},
+  level: "residue"
+});
+```
+
 ## Styling Commands
 
 Add a persistent style rule:
@@ -724,10 +777,47 @@ print(urllib.request.urlopen(req).read().decode())
 PY
 ```
 
+Send a high-level viewer action without directly controlling the browser:
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+action = {
+    "type": "showWithin",
+    "radius": 5,
+    "source": {"category": "ligand"},
+    "target": {"category": "protein"},
+    "level": "residue",
+    "representation": "line",
+}
+req = urllib.request.Request(
+    f"{base_url}/api/agent-actions",
+    data=json.dumps(action).encode(),
+    method="POST",
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+Open browser clients poll `/api/agent-actions` and execute new structured actions through the same logic as `molAgent.run(...)`. The endpoint is an action log, not a natural-language interpreter. It accepts only JSON objects with known `type` values. Clear old pending actions with:
+
+```bash
+python3 - <<'PY'
+import os, urllib.request
+
+base_url = os.environ["VIEWER_URL"].rstrip("/")
+req = urllib.request.Request(f"{base_url}/api/agent-actions", method="DELETE")
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
 ## Development Notes
 
 - Rendering happens in the browser through WebGL.
-- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
+- `server.py` serves static files plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>`.
 - Static serving intentionally blocks dot-directories, `.viewer_state`, git metadata, logs, pid files, server source, and project memory/docs. Do not bypass this with a generic static server for normal use.
 - Keep normal operation local-first: no CDN and no remote PDB fetches unless explicitly requested.
 - Do not commit runtime logs, temporary files, screenshots, zips, or editor workspace files.

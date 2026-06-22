@@ -16,7 +16,7 @@ Rendering happens in the client browser through 3Dmol.js/WebGL, so interactive p
 - `maestro_convert.py`: pure-Python MAE/MAEGZ to PDB converter. Normal file loading must not depend on Schrodinger being installed.
 - `interaction-worker.js`: background nonbonded interaction index builder.
 - `wide-lines.js`: shader-backed 3Dmol scene-mesh wide-line renderer. It keeps static segment/cap geometry in the scene and expands screen-pixel width in the vertex shader with depth/zoom scaling, screen-pixel clamps, and depth testing.
-- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
+- `server.py`: static file server plus `/api/session`, `/api/session-entry`, lightweight `/api/session-state` and `/api/session-meta`, `/api/preferences`, `/api/agent-actions`, `/api/convert-structure`, compatibility `/api/last-structure`, and `/api/interaction-index/<structureKey>` for server-side runtime state.
 - `config/visualization.json`: tracked visual defaults. CPK stick radii, CPK sphere scales, and VDW radii belong here rather than being hardcoded.
 - `assets/3Dmol-min.js`: local 3Dmol dependency. Keep this local unless explicitly changed.
 - `data/`: ignored local-only structures. Do not commit molecular structure files to the public repository.
@@ -38,7 +38,8 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - The project server may be bound to a shared network address for workstation access, so it must not statically expose dot-directories, `.viewer_state`, git metadata, logs, server source, or project memory/docs.
 - Keep control surfaces explicit. Empty select clicks and empty range-select drags in the viewer clear the current selection.
 - Find/search misses should not clear the current selection; they should report no match and leave selection state unchanged.
-- Keep `window.molAgent` as the structured automation/API surface. Do not add free-form natural-language command execution.
+- Keep `window.molAgent` and `/api/agent-actions` as structured automation/API surfaces. Do not add free-form natural-language command execution.
+- Agent-facing API should expose domain operations directly rather than forcing agents to emulate GUI clicks. For example, distance-based display tasks should use structured `showWithin` commands with source/target selectors and a radius.
 
 ## Must-Have Behavior
 
@@ -59,6 +60,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
 - Persistence failures must be visible through console diagnostics and, for user-visible session/preference operations, status text. Large entry saves must not report success before the actual server write finishes.
 - Entry row `X` buttons delete entries through `/api/session-entry/<name>`, dispose the corresponding 3Dmol model/cache/worker records, and must update the server-side session so deleted entries do not reappear after refresh.
 - Open clients should poll lightweight `/api/session-meta` revisions and reload `/api/session` only when the revision changes, so agent-side session edits appear without manual refresh. A failed `/api/session` reload must not mark the revision as handled; retry the same revision on the next poll.
+- Open clients should also poll `/api/agent-actions` for structured high-level actions. The server stores only small action objects; the browser executes them against its parsed atoms and current display state. Spatial actions such as `showWithin` are generic source/target selector distance queries, default to entry-local matching, and require `scope: "global"` for intentional cross-entry distance comparison.
 - `/api/last-structure` is compatibility-only. Writes to it must upsert the supplied entry into the session rather than replacing the whole entry list. A clean install with no saved session or legacy structure must return `404 {"error":"not_found"}`, not `500 invalid_state`.
 - Loading/displaying entries starts nonbonded interaction indexing per visible entry in a Web Worker. Finished indexes are cached on the server by structure key and retained in memory by entry, so switching entries or adding another displayed entry does not discard existing interaction display.
 - When multiple entries are displayed, render the ready interaction indexes for each visible entry and never compute cross-entry interactions. Index worker builds are queued to avoid starting several heavy builds at once.
@@ -125,6 +127,8 @@ molAgent.getMousePreset();
 molAgent.setMouseActions(actions);
 molAgent.getMouseActions();
 molAgent.selectAtoms(selector);
+molAgent.showWithin(commandObject);
+molAgent.selectWithin(commandObject);
 molAgent.getState();
 molAgent.getVisualConfig();
 molAgent.reloadVisualConfig();
@@ -150,6 +154,8 @@ PUT /api/session-entry-title        # rename one entry title by unique entry id
 DELETE /api/session-entry/<name>    # remove one entry by entry name
 PUT /api/session-state              # update includedEntries only
 GET /api/session-meta               # lightweight revision for open-client sync
+POST /api/agent-actions             # append one structured browser action for open clients
+DELETE /api/agent-actions           # clear pending action log
 POST /api/convert-structure         # raw MAE/MAEGZ bytes to a PDB entry JSON payload
 ```
 

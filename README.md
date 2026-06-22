@@ -12,7 +12,7 @@ MolWorkbench is a static WebGL viewer with a small Python persistence server. It
 - Server-persisted viewer sessions, preferences, colors, and interaction indexes.
 - Background nonbonded interaction indexing with dashed guide-line rendering.
 - Shader-backed wide-line rendering for molecular and interaction lines.
-- Agent-facing JavaScript API for deterministic browser automation.
+- Agent-facing JavaScript and server action APIs for deterministic browser automation.
 
 ## Repository Contents
 
@@ -50,12 +50,13 @@ Agents should use the structured API exposed in the page:
 const entry = await molAgent.loadUrl("path/to/structure.pdb", "pdb", "entry-name", "Display title", "");
 await molAgent.renameEntry(entry.name, "New display title");
 molAgent.setSelection({chain: "A", resi: "30-35"});
+molAgent.showWithin({radius: 5, source: {category: "ligand"}, target: {category: "protein"}, level: "residue"});
 molAgent.focus();
 molAgent.setProteinAtomStyle("line");
 molAgent.getState();
 ```
 
-See `AGENT_README.md` for the full command surface, selector syntax, persistence contract, and verification workflow.
+Open browser clients also poll `/api/agent-actions`, so external agents can post structured JSON actions such as `showWithin` without clicking the UI. See `AGENT_README.md` for the full command surface, selector syntax, persistence contract, and verification workflow.
 
 ## Verification
 

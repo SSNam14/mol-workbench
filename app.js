@@ -17,6 +17,8 @@ function boot(){
   const entryChecked = Object.create(null);
   let displayedCount = 0;
   let lastSessionRevision = null, sessionSyncTimer = null, sessionSyncInFlight = false, suppressSessionPollUntil = 0;
+  let agentActionSyncTimer = null, agentActionSyncInFlight = false;
+  const agentActionSeen = new Set();
 
   const waterNames = new Set(['HOH','WAT','DOD','H2O']);
   const ionNames = new Set(['NA','CL','K','MG','CA','ZN','MN','FE','CU','CO','NI','CD','HG','SR','BA','CS','RB','LI','AL','IOD','BR']);
@@ -46,6 +48,7 @@ function boot(){
   const VIEWER_SESSION_ENTRY_TITLE_API = 'api/session-entry-title';
   const VIEWER_SESSION_META_API = 'api/session-meta';
   const VIEWER_SESSION_STATE_API = 'api/session-state';
+  const AGENT_ACTIONS_API = 'api/agent-actions';
   const LAST_STRUCTURE_API = 'api/last-structure';
   const PREFERENCES_API = 'api/preferences';
   const STRUCTURE_CONVERT_API = 'api/convert-structure';
@@ -531,6 +534,39 @@ function boot(){
     if(sessionSyncTimer)return;
     sessionSyncTimer=setInterval(pollViewerSession,1500);
   }
+  function loadAgentActions(){
+    return fetch(AGENT_ACTIONS_API,{cache:'no-store'}).then(res=>{
+      if(!res.ok)return null;
+      return res.json();
+    }).catch(()=>null);
+  }
+  async function pollAgentActions(){
+    if(agentActionSyncInFlight)return;
+    agentActionSyncInFlight=true;
+    try{
+      const payload=await loadAgentActions();
+      const actions=payload&&Array.isArray(payload.actions)?payload.actions:[];
+      for(const action of actions){
+        const id=normText(action&&action.id);
+        if(!id||agentActionSeen.has(id))continue;
+        try{
+          const result=executeAgentAction(action);
+          if(result&&result.retry)continue;
+          agentActionSeen.add(id);
+        }catch(e){
+          agentActionSeen.add(id);
+          setStatus('Agent action failed: '+(e&&e.message||e));
+        }
+      }
+    }finally{
+      agentActionSyncInFlight=false;
+    }
+  }
+  function startAgentActionSync(){
+    if(agentActionSyncTimer)return;
+    agentActionSyncTimer=setInterval(pollAgentActions,1000);
+    pollAgentActions();
+  }
   function atomElem(a){
     if(!a)return '';
     if(a._elemKey)return a._elemKey;
@@ -851,6 +887,194 @@ function boot(){
     }
     if(typeof s!=='object')throw new Error('Selection selector must be an object, an array of objects, or null.');
     return s;
+  }
+  function agentActionType(action){ return normText(action&& (action.type||action.action)).replace(/[-_\s]/g,'').toLowerCase(); }
+  function agentSpecObject(spec){ return spec&&typeof spec==='object'&&!Array.isArray(spec)?spec:{}; }
+  function agentEntryNames(spec){
+    spec=agentSpecObject(spec);
+    const raw=normText(spec.entry||spec.entryName||spec._entryName);
+    const title=normText(spec.title||spec.entryTitle);
+    const pdb=normText(spec.pdbId||spec.pdbID);
+    const out=new Set();
+    if(raw||title||pdb){
+      const ru=normUpper(raw),tu=normUpper(title),pu=normUpper(pdb);
+      entries.forEach(e=>{
+        if(ru&&(normUpper(e.name)===ru||normUpper(e.title)===ru||normUpper(e.pdbId)===ru))out.add(e.name);
+        if(tu&&normUpper(e.title)===tu)out.add(e.name);
+        if(pu&&normUpper(e.pdbId)===pu)out.add(e.name);
+      });
+      if(raw&&!out.size)out.add(raw);
+    }
+    return out.size?out:null;
+  }
+  function agentCategoryMatches(a,category){
+    const c=normText(category||'all').replace(/[-_\s]/g,'').toLowerCase();
+    if(!c||c==='all'||c==='atom'||c==='atoms')return true;
+    if(c==='protein'||c==='proteins'||c==='backbone')return isProtein(a);
+    if(c==='ligand'||c==='ligands'||c==='het'||c==='hetero')return isLigand(a);
+    if(c==='solvent'||c==='solvents'||c==='water'||c==='waters')return atomCategory(a)==='solvents';
+    if(c==='other'||c==='others'||c==='ion'||c==='ions')return atomCategory(a)==='other';
+    return false;
+  }
+  function selectorLikeSpec(spec){
+    if(!spec||typeof spec!=='object'||Array.isArray(spec))return null;
+    const meta=new Set(['category','entry','entryName','entryTitle','title','pdbId','pdbID','level','selector','options','sides','scope']);
+    return Object.keys(spec).some(k=>!meta.has(k))?spec:null;
+  }
+  function agentAtomsForSpec(spec,fallbackCategory){
+    spec=agentSpecObject(spec);
+    const selector=spec.selector||selectorLikeSpec(spec);
+    const entryNames=agentEntryNames(spec);
+    const category=spec.category||(selector?'all':fallbackCategory)||'all';
+    const pool=selector?filterAtoms(selector):atoms.slice();
+    return pool.filter(a=>{
+      if(entryNames&&!entryNames.has(a._entryName||''))return false;
+      return agentCategoryMatches(a,category);
+    });
+  }
+  function agentGroupByEntry(list){
+    const out=new Map();
+    (list||[]).forEach(a=>{
+      const key=a&&a._entryName||'';
+      if(!out.has(key))out.set(key,[]);
+      out.get(key).push(a);
+    });
+    return out;
+  }
+  function agentSpatialCellKey(a,cell){
+    return Math.floor(Number(a.x)/cell)+'\u0001'+Math.floor(Number(a.y)/cell)+'\u0001'+Math.floor(Number(a.z)/cell);
+  }
+  function agentSpatialGrid(source,cell){
+    const grid=new Map();
+    (source||[]).forEach(a=>{
+      const x=Number(a&&a.x),y=Number(a&&a.y),z=Number(a&&a.z);
+      if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z))return;
+      const key=agentSpatialCellKey(a,cell);
+      if(!grid.has(key))grid.set(key,[]);
+      grid.get(key).push(a);
+    });
+    return grid;
+  }
+  function agentAtomsWithin(source,target,radius){
+    if(!source.length||!target.length)return [];
+    const cell=Math.max(radius,0.001),r2=radius*radius,grid=agentSpatialGrid(source,cell),out=[];
+    for(const a of target){
+      const x=Number(a&&a.x),y=Number(a&&a.y),z=Number(a&&a.z);
+      if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z))continue;
+      const ix=Math.floor(x/cell),iy=Math.floor(y/cell),iz=Math.floor(z/cell);
+      let hit=false;
+      for(let dx=-1;dx<=1&&!hit;dx++)for(let dy=-1;dy<=1&&!hit;dy++)for(let dz=-1;dz<=1&&!hit;dz++){
+        const bucket=grid.get((ix+dx)+'\u0001'+(iy+dy)+'\u0001'+(iz+dz));
+        if(!bucket)continue;
+        for(const b of bucket){ if(dist2(a,b)<=r2){ hit=true; break; } }
+      }
+      if(hit)out.push(a);
+    }
+    return out;
+  }
+  function agentExpandHits(hits,pool,level){
+    const lvl=normText(level||'residue').replace(/[-_\s]/g,'').toLowerCase();
+    if(lvl==='atom'||lvl==='atoms')return hits;
+    const keys=new Set();
+    if(lvl==='chain'||lvl==='chains')hits.forEach(a=>keys.add((a._entryName||'')+'\u0001'+(a.chain||'')));
+    else if(lvl==='entry'||lvl==='model'||lvl==='models')hits.forEach(a=>keys.add(a._entryName||''));
+    else hits.forEach(a=>keys.add(residueGroupKey(a)));
+    return (pool||[]).filter(a=>{
+      if(lvl==='chain'||lvl==='chains')return keys.has((a._entryName||'')+'\u0001'+(a.chain||''));
+      if(lvl==='entry'||lvl==='model'||lvl==='models')return keys.has(a._entryName||'');
+      return keys.has(residueGroupKey(a));
+    });
+  }
+  function agentUniqueAtoms(list){
+    const seen=new Set(),out=[];
+    (list||[]).forEach(a=>{
+      const key=a&&a.serial!=null?'s:'+a.serial:'i:'+(a&&a._entryName||'')+'\u0001'+(a&&a.index);
+      if(!a||seen.has(key))return;
+      seen.add(key);
+      out.push(a);
+    });
+    out.sort((a,b)=>(Number(a.serial)||0)-(Number(b.serial)||0));
+    return out;
+  }
+  function agentRemoveRules(source,tag){
+    state.styleRules=state.styleRules.filter(r=>!(r&&r.options&&r.options.source===source&&(tag==null||r.options.tag===tag)));
+    state.hiddenRules=state.hiddenRules.filter(r=>!(r&&r.options&&r.options.source===source&&(tag==null||r.options.tag===tag)));
+  }
+  function agentWithinResult(command){
+    const radius=Number(command.radius==null?(command.distance==null?command.cutoff:command.distance):command.radius);
+    if(!Number.isFinite(radius)||radius<=0||radius>1000)throw new Error('showWithin radius must be a positive number.');
+    const sourceSpec=agentSpecObject(command.source||{category:'ligand'});
+    const targetSpec=agentSpecObject(command.target||{category:'protein'});
+    const sourceAtoms=agentAtomsForSpec(sourceSpec,'ligand');
+    const targetAtoms=agentAtomsForSpec(targetSpec,'protein');
+    if(!sourceAtoms.length||!targetAtoms.length){
+      return {retry:entries.length&&!atoms.length,sourceAtoms,targetAtoms,matched:[],selector:null};
+    }
+    const level=command.level||targetSpec.level||'residue';
+    const global=normText(command.scope||sourceSpec.scope||targetSpec.scope).toLowerCase()==='global';
+    const sides=normText(command.sides||command.side||'target').toLowerCase();
+    const collect=[];
+    if(global){
+      const targetHits=agentAtomsWithin(sourceAtoms,targetAtoms,radius);
+      collect.push.apply(collect,agentExpandHits(targetHits,targetAtoms,level));
+      if(sides==='both'||sides==='source'){
+        const sourceHits=agentAtomsWithin(targetAtoms,sourceAtoms,radius);
+        collect.push.apply(collect,agentExpandHits(sourceHits,sourceAtoms,command.sourceLevel||level));
+      }
+    }else{
+      const bySource=agentGroupByEntry(sourceAtoms),byTarget=agentGroupByEntry(targetAtoms);
+      byTarget.forEach((targetList,entryName)=>{
+        const sourceList=bySource.get(entryName)||[];
+        if(!sourceList.length)return;
+        const targetHits=agentAtomsWithin(sourceList,targetList,radius);
+        collect.push.apply(collect,agentExpandHits(targetHits,targetList,level));
+        if(sides==='both'||sides==='source'){
+          const sourceHits=agentAtomsWithin(targetList,sourceList,radius);
+          collect.push.apply(collect,agentExpandHits(sourceHits,sourceList,command.sourceLevel||level));
+        }
+      });
+    }
+    const matched=agentUniqueAtoms(collect),selector=serialSelectorForAtoms(matched);
+    return {radius,sourceAtoms,targetAtoms,matched,selector,level,sides};
+  }
+  function showWithinAction(command,opts){
+    opts=opts||{};
+    const result=agentWithinResult(command);
+    if(result.retry)return result;
+    if(!result.selector){
+      setStatus('Agent within: no matching atoms');
+      return result;
+    }
+    const rep=normText(command.representation||command.style||'line').toLowerCase();
+    const representation=ATOM_REPS.has(rep)?rep:'line';
+    const tag=normText(command.tag||'default')||'default';
+    const source='agent-showWithin';
+    if(command.replace!==false)agentRemoveRules(source,tag);
+    state.hiddenRules=removeSerialsFromDirectRules(state.hiddenRules,serialTextSet(result.matched));
+    if(opts.show!==false){
+      const ruleOptions=Object.assign({},command.options||{},{
+        source,
+        tag,
+        atomLevel:true,
+        radius:result.radius,
+        level:result.level,
+        sides:result.sides
+      });
+      if(command.id)ruleOptions.agentActionId=command.id;
+      state.styleRules.push({selector:result.selector,representation,options:ruleOptions});
+      applyStylesFull(true);
+    }
+    if(command.select!==false)setSelection(result.selector,{source:'agent-showWithin',representation:'line'});
+    if(command.focus)focus(result.selector);
+    setStatus('Agent within: '+result.matched.length.toLocaleString()+' atoms');
+    return result;
+  }
+  function executeAgentAction(command){
+    const type=agentActionType(command);
+    if(type==='showwithin')return showWithinAction(command);
+    if(type==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
+    if(type==='clearstyles'){ clearStyles(); return true; }
+    return runCompat(command);
   }
 
   function applyVisibility(){
@@ -2797,6 +3021,7 @@ function boot(){
     list.forEach(a=>{
       a._entryName=entry.name;
       a._entryTitle=entry.title;
+      a._entryPdbId=entry.pdbId||'';
       a._sourceSerial=a.serial==null?a.index:a.serial;
       a.serial=serialStart++;
     });
@@ -3908,8 +4133,11 @@ function installFrameSyncedMotion(targetViewer){
   function runCompat(command){
     if(!command||typeof command!=='object'||Array.isArray(command))throw new Error('String commands are disabled. Use structured molAgent API calls.');
     const type=normText(command.type||command.action).toLowerCase();
+    if(type.replace(/[-_\s]/g,'')==='showwithin')return showWithinAction(command);
+    if(type.replace(/[-_\s]/g,'')==='selectwithin')return showWithinAction(Object.assign({},command,{select:true}),{show:false});
     if(type==='selection'||type==='setselection')return setSelection(command.selector||command.target||{},command.options||command);
     if(type==='clearselection')return clearSelection();
+    if(type==='clearstyles')return clearStyles();
     if(type==='focus')return focus(command.selector||command.target||state.selectionSel);
     if(type==='style'){ state.styleRules.push({selector:command.selector||command.target||{},representation:command.representation||command.style||'cartoon',options:command.options||command}); applyStylesFull(true); return state.styleRules[state.styleRules.length-1]; }
     if(type==='hide'){ state.hiddenRules.push({selector:command.selector||command.target||{},representation:'hide',options:command.options||command}); applyStylesFull(true); return state.hiddenRules[state.hiddenRules.length-1]; }
@@ -3926,6 +4154,8 @@ function installFrameSyncedMotion(targetViewer){
     getPreferences:preferencesPayload, savePreferences:savePreferencesNow,
     setMousePreset, getMousePreset:function(){ return state.mousePreset; }, setMouseActions, getMouseActions:cloneMouseSettings,
     selectAtoms:function(selector){ return filterAtoms(selector).map(a=>Object.assign({},a)); },
+    showWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'showWithin'})); },
+    selectWithin:function(command){ return showWithinAction(Object.assign({},command||{},{type:'selectWithin',select:true}),{show:false}); },
     getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
@@ -4012,6 +4242,7 @@ function installFrameSyncedMotion(targetViewer){
     return loadInitialStructure();
   }).then(function(){
     startSessionSync();
+    startAgentActionSync();
   }).catch(err=>setStatus('Load failed: '+err.message+'  (use Open file)'));
 }
 const waitFor3DmolStartedAt = Date.now();

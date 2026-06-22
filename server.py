@@ -22,15 +22,19 @@ SESSION_STATE_PATH = STATE_DIR / "session_state.json"
 SESSION_META_PATH = STATE_DIR / "session_meta.json"
 PREFERENCES_PATH = STATE_DIR / "preferences.json"
 INTERACTION_INDEX_DIR = STATE_DIR / "interaction_indexes"
+AGENT_ACTIONS_PATH = STATE_DIR / "agent_actions.json"
 MAX_STRUCTURE_BYTES = 200 * 1024 * 1024
 MAX_SESSION_BYTES = 500 * 1024 * 1024
 MAX_SESSION_STATE_BYTES = 64 * 1024
 MAX_SESSION_TITLE_BYTES = 16 * 1024
 MAX_PREFERENCES_BYTES = 1024 * 1024
 MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
+MAX_AGENT_ACTION_BYTES = 128 * 1024
+MAX_AGENT_ACTIONS = 100
 SESSION_SCHEMA = "viewer-session-v1"
 PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
+AGENT_ACTIONS_SCHEMA = "viewer-agent-actions-v1"
 STATE_LOCK = threading.RLock()
 BLOCKED_STATIC_NAMES = {"server.py", "HANDOFF.md", "README.md"}
 BLOCKED_STATIC_SUFFIXES = {".log", ".pid", ".pyc"}
@@ -40,6 +44,17 @@ MOUSE_PRESETS = {"select-left", "custom", "default"}
 BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
+AGENT_ACTION_TYPES = {
+    "showwithin",
+    "selectwithin",
+    "style",
+    "hide",
+    "selection",
+    "setselection",
+    "clearselection",
+    "clearstyles",
+    "focus",
+}
 CHAIN_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 ELEMENT_IDS = (
     "H", "B", "C", "N", "O", "F", "SI", "P", "S", "CL", "BR", "I",
@@ -279,6 +294,66 @@ def normalize_preferences(value):
             return None
         out["backgroundColor"] = color
     return out
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def normalize_agent_action_type(value):
+    text = str(value or "").strip()
+    key = text.replace("-", "").replace("_", "").lower()
+    return text if key in AGENT_ACTION_TYPES else None
+
+
+def normalize_agent_action(value, *, assign_id=False):
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("action") if isinstance(value.get("action"), dict) else value
+    action = dict(raw)
+    action_type = normalize_agent_action_type(action.get("type", action.get("action")))
+    if not action_type:
+        return None
+    action["type"] = action_type
+    action.pop("action", None)
+    encoded = json.dumps(action, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > MAX_AGENT_ACTION_BYTES:
+        return None
+    if assign_id:
+        created_at = now_ms()
+        ttl_seconds = action.get("ttlSeconds", action.get("ttl", 300))
+        try:
+            ttl_seconds = max(1, min(3600, int(float(ttl_seconds))))
+        except (TypeError, ValueError):
+            ttl_seconds = 300
+        action["id"] = str(action.get("id") or f"act-{time.time_ns()}")
+        action["createdAt"] = created_at
+        action["expiresAt"] = created_at + ttl_seconds * 1000
+    elif not action.get("id"):
+        return None
+    return action
+
+
+def normalize_agent_action_log(value):
+    actions = []
+    if isinstance(value, dict):
+        raw_actions = value.get("actions", [])
+    elif isinstance(value, list):
+        raw_actions = value
+    else:
+        raw_actions = []
+    current = now_ms()
+    for raw in raw_actions:
+        action = normalize_agent_action(raw)
+        if not action:
+            continue
+        expires_at = action.get("expiresAt")
+        if isinstance(expires_at, (int, float)) and expires_at < current:
+            continue
+        actions.append(action)
+    if len(actions) > MAX_AGENT_ACTIONS:
+        actions = actions[-MAX_AGENT_ACTIONS:]
+    return {"schema": AGENT_ACTIONS_SCHEMA, "actions": actions}
 
 
 def load_json(path):
@@ -561,6 +636,45 @@ def update_session_state(value):
         return next_session
 
 
+def agent_actions_revision():
+    return file_revision(AGENT_ACTIONS_PATH) or "empty"
+
+
+def load_agent_actions():
+    with STATE_LOCK:
+        try:
+            payload = load_json(AGENT_ACTIONS_PATH)
+        except FileNotFoundError:
+            payload = None
+        log = normalize_agent_action_log(payload)
+        return {**log, "revision": agent_actions_revision()}
+
+
+def append_agent_action(value):
+    action = normalize_agent_action(value, assign_id=True)
+    if not action:
+        return None
+    with STATE_LOCK:
+        try:
+            payload = load_json(AGENT_ACTIONS_PATH)
+        except FileNotFoundError:
+            payload = None
+        log = normalize_agent_action_log(payload)
+        log["actions"].append(action)
+        if len(log["actions"]) > MAX_AGENT_ACTIONS:
+            log["actions"] = log["actions"][-MAX_AGENT_ACTIONS:]
+        write_json_atomic(AGENT_ACTIONS_PATH, log)
+        return action, {**log, "revision": agent_actions_revision()}
+
+
+def clear_agent_actions():
+    with STATE_LOCK:
+        try:
+            AGENT_ACTIONS_PATH.unlink()
+        except FileNotFoundError:
+            pass
+
+
 class ViewerHandler(SimpleHTTPRequestHandler):
     server_version = "MolecularViewerHTTP/1.0"
 
@@ -584,6 +698,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/agent-actions":
+            self.handle_get_agent_actions()
+            return
         if path == "/api/session-meta":
             self.handle_get_session_meta()
             return
@@ -610,6 +727,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/agent-actions":
+            self.handle_post_agent_action()
+            return
         if path == "/api/session":
             self.handle_put_session()
             return
@@ -638,6 +758,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path == "/api/agent-actions":
+            self.handle_post_agent_action()
+            return
         if path == "/api/session":
             self.handle_put_session()
             return
@@ -663,6 +786,14 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if path == "/api/agent-actions":
+            try:
+                clear_agent_actions()
+            except OSError:
+                self.send_json(500, {"error": "state_write_failed"})
+                return
+            self.send_json(200, {"ok": True, "actions": []})
+            return
         if path == "/api/session":
             try:
                 clear_session()
@@ -723,6 +854,29 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": "state_read_failed"})
             return
         self.send_json(200, meta)
+
+    def handle_get_agent_actions(self):
+        try:
+            actions = load_agent_actions()
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "agent_actions_read_failed"})
+            return
+        self.send_json(200, actions)
+
+    def handle_post_agent_action(self):
+        payload = self.read_json_body(MAX_AGENT_ACTION_BYTES)
+        if payload is None:
+            return
+        try:
+            result = append_agent_action(payload)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "agent_actions_write_failed"})
+            return
+        if not result:
+            self.send_json(400, {"error": "invalid_agent_action"})
+            return
+        action, log = result
+        self.send_json(200, {"ok": True, "action": action, "actions": log["actions"], "revision": log["revision"]})
 
     def handle_put_session(self):
         payload = self.read_json_body(MAX_SESSION_BYTES)

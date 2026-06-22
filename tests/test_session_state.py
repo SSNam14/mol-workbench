@@ -137,6 +137,47 @@ class SessionStateTests(unittest.TestCase):
                 for key, value in originals.items():
                     setattr(server, key, value)
 
+    def test_agent_action_requires_structured_known_type(self):
+        self.assertIsNone(server.normalize_agent_action("show ligand"))
+        self.assertIsNone(server.normalize_agent_action({"type": "unknown"}))
+        action = server.normalize_agent_action({
+            "type": "showWithin",
+            "radius": 5,
+            "source": {"category": "ligand"},
+            "target": {"category": "protein", "level": "residue"},
+        }, assign_id=True)
+        self.assertEqual(action["type"], "showWithin")
+        self.assertIn("id", action)
+        self.assertIn("expiresAt", action)
+
+    def test_append_agent_action_persists_small_action_log(self):
+        originals = {
+            "STATE_DIR": server.STATE_DIR,
+            "AGENT_ACTIONS_PATH": server.AGENT_ACTIONS_PATH,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.STATE_DIR = root
+            server.AGENT_ACTIONS_PATH = root / "agent_actions.json"
+            try:
+                result = server.append_agent_action({
+                    "type": "showWithin",
+                    "radius": 7,
+                    "source": {"selector": {"chain": "A"}},
+                    "target": {"selector": {"chain": "C"}},
+                    "level": "atom",
+                    "sides": "both",
+                })
+                self.assertIsNotNone(result)
+                action, log = result
+                self.assertEqual(action["type"], "showWithin")
+                self.assertEqual(len(log["actions"]), 1)
+                loaded = server.load_agent_actions()
+                self.assertEqual(loaded["actions"][0]["id"], action["id"])
+            finally:
+                for key, value in originals.items():
+                    setattr(server, key, value)
+
 
 if __name__ == "__main__":
     unittest.main()
