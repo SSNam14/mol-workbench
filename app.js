@@ -2928,7 +2928,7 @@ function boot(){
     });
     return out;
   }
-  async function deleteHierarchySelection(){
+  async function deleteSelectedAtoms(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
     const byEntry=selectedSourceSerialsByEntry(selected), updated=[];
@@ -2964,7 +2964,7 @@ function boot(){
       e.preventDefault();
       e.stopPropagation();
       closeHierarchyContextMenu();
-      deleteHierarchySelection().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
     };
     menu.appendChild(del);
     menu.onclick=function(e){ e.stopPropagation(); };
@@ -4767,6 +4767,12 @@ function installFrameSyncedMotion(targetViewer){
       return;
     }
     if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(e.key==='Delete'){
+      if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
+      e.preventDefault();
+      if(!e.repeat)deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      return;
+    }
     if(isPlainWorkspaceHotkey(e,'l')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
     if(isPlainWorkspaceHotkey(e,'c')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
     if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
