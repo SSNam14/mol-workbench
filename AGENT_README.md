@@ -576,12 +576,6 @@ Default `select-left` behavior:
 - middle drag: pan
 - wheel: zoom
 
-Workspace keyboard shortcuts:
-
-- `L`: cycle selection through ligands in the currently displayed workspace.
-- `C`: cycle selection through protein chains in the currently displayed workspace.
-- `Z`: refit the camera. With no selection, fit the currently displayed workspace. With a selection, fit the selected atoms. Fit uses the current screen/camera X/Y bounding box rather than raw coordinate averages, and selected targets use a minimum frame size so very small ligands or single residues do not cause extreme close-up.
-
 Hierarchy panel selection uses list-style modifiers: normal click replaces selection, Ctrl/Cmd-click toggles one row into or out of the current selection, and Shift-click selects the contiguous visible row range from the first selected anchor row to the clicked row. The left disclosure triangle on hierarchy headers is the only collapse/expand target.
 
 Right-clicking a selected Hierarchy row opens a `Delete` context menu. This removes the selected atoms from the loaded entry's persisted server-side session state (`deletedSourceSerials`), so they are absent from Hierarchy, rendering, search, and interaction indexing after rebuild/reload. It does not delete or edit the original source file on disk.
