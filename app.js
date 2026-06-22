@@ -515,6 +515,10 @@ function boot(){
     const displayTitle=normText(title||entry.title||entry.name)||entry.name;
     return Object.assign({},entry,{name:uniqueEntryName(entry.name||displayTitle),title:displayTitle});
   }
+  function normalizeStructureEntryList(value){
+    const raw=Array.isArray(value)?value:(value?[value]:[]);
+    return raw.map(normalizeStructureEntry).filter(Boolean);
+  }
   function normalizeViewerSession(payload){
     if(!payload||typeof payload!=='object'||!Array.isArray(payload.entries))return null;
     const out=[],seen=new Set();
@@ -3664,6 +3668,48 @@ function boot(){
     fmt=normText(fmt).toLowerCase();
     return isMaestroFormat(fmt)||fmt==='psazip';
   }
+  function appendEntryIndexToName(name,index,total){
+    const raw=normText(name||'structure')||'structure';
+    if(total<=1)return raw;
+    const dot=raw.lastIndexOf('.');
+    const suffix='_'+String(index).padStart(3,'0');
+    if(dot>0)return raw.slice(0,dot)+suffix+raw.slice(dot);
+    return raw+suffix;
+  }
+  function splitSdfRecords(data){
+    const records=[],lines=String(data||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+    let current=[];
+    lines.forEach(line=>{
+      if(line.trim()==='$$$$'){
+        const record=current.join('\n').trimEnd();
+        if(record.trim())records.push(record+'\n$$$$\n');
+        current=[];
+      }else current.push(line);
+    });
+    const tail=current.join('\n').trimEnd();
+    if(tail.trim())records.push(tail+'\n');
+    return records.length?records:[String(data||'')];
+  }
+  function sdfRecordTitle(record){
+    const first=String(record||'').split(/\r?\n/)[0]||'';
+    return normText(first);
+  }
+  function textStructureEntries(data,fmt,name,title,pdbId){
+    fmt=normText(fmt||inferFormat(name)).toLowerCase()||'pdb';
+    const baseTitle=normText(title||name)||name||'structure';
+    if(fmt!=='sdf'&&fmt!=='mol')return [{name:name,title:baseTitle,pdbId:pdbId||'',data:String(data||''),fmt}];
+    const records=splitSdfRecords(data),total=records.length;
+    return records.map((record,idx)=>{
+      const label=sdfRecordTitle(record);
+      return {
+        name:appendEntryIndexToName(name,idx+1,total),
+        title:total>1?(label?baseTitle+' ['+(idx+1)+'] '+label:baseTitle+' ['+(idx+1)+']'):baseTitle,
+        pdbId:pdbId||'',
+        data:record,
+        fmt
+      };
+    });
+  }
   function urlFileName(url){
     const raw=normText(url);
     try{
@@ -3675,6 +3721,10 @@ function boot(){
     }
   }
   async function convertStructureBuffer(buffer,fmt,name,title,pdbId){
+    const entries=await convertStructureBufferEntries(buffer,fmt,name,title,pdbId);
+    return entries[0]||null;
+  }
+  async function convertStructureBufferEntries(buffer,fmt,name,title,pdbId){
     const params=new URLSearchParams({
       fmt:fmt||'',
       name:name||'structure',
@@ -3687,9 +3737,9 @@ function boot(){
       body:buffer
     });
     if(!result.ok)throw new Error('Structure conversion failed: '+persistenceErrorText(result));
-    const entry=normalizeStructureEntry(result.data&&result.data.entry);
-    if(!entry)throw new Error('Structure conversion returned no coordinates.');
-    return entry;
+    const entries=normalizeStructureEntryList(result.data&&Array.isArray(result.data.entries)?result.data.entries:(result.data&&result.data.entry));
+    if(!entries.length)throw new Error('Structure conversion returned no coordinates.');
+    return entries;
   }
   async function loadUrl(url,fmt,name,title,pdbId){
     const entryName=name||urlFileName(url)||url;
@@ -3700,19 +3750,31 @@ function boot(){
     setStatus('Loading: '+(displayTitle||url));
     const res=await fetch(url); if(!res.ok)throw new Error(res.status+' '+res.statusText);
     if(isServerConvertedFormat(sourceFmt)){
-      const entry=await convertStructureBuffer(await res.arrayBuffer(),sourceFmt,entryName,displayTitle,pdbId||'');
-      return persistAndLoadEntry(entryWithFreshIdentity(entry,displayTitle));
+      const converted=await convertStructureBufferEntries(await res.arrayBuffer(),sourceFmt,entryName,displayTitle,pdbId||'');
+      const fresh=converted.map(entry=>entryWithFreshIdentity(entry,entry.title||displayTitle)).filter(Boolean);
+      const loaded=await persistAndLoadEntries(fresh);
+      return loaded.length===1?loaded[0]:loaded;
     }
     const data=await res.text();
-    const e=entryWithFreshIdentity({name:entryName,title:displayTitle,pdbId:pdbId||'',data,fmt:sourceFmt||'pdb'},displayTitle);
-    return persistAndLoadEntry(e);
+    const fresh=textStructureEntries(data,sourceFmt||'pdb',entryName,displayTitle,pdbId||'').map(entry=>entryWithFreshIdentity(entry,entry.title||displayTitle)).filter(Boolean);
+    const loaded=await persistAndLoadEntries(fresh);
+    return loaded.length===1?loaded[0]:loaded;
+  }
+  async function persistAndLoadEntries(list){
+    const loaded=[];
+    for(const raw of list||[]){
+      const e=normalizeStructureEntry(raw);
+      if(!e)continue;
+      const item=loadEntry(e,{persist:false});
+      if(!await saveViewerSessionEntryDeferred(item,{status:false}))setStatus('Loaded but not saved on server: '+item.title);
+      loaded.push(item);
+    }
+    if(!loaded.length)throw new Error('Invalid structure data');
+    return loaded;
   }
   async function persistAndLoadEntry(e){
-    e=normalizeStructureEntry(e);
-    if(!e)throw new Error('Invalid structure data');
-    const loaded=loadEntry(e,{persist:false});
-    if(!await saveViewerSessionEntryDeferred(loaded,{status:false}))setStatus('Loaded but not saved on server: '+loaded.title);
-    return loaded;
+    const loaded=await persistAndLoadEntries([e]);
+    return loaded[0];
   }
   function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
   function entryStructureKey(e){
@@ -4440,14 +4502,17 @@ function boot(){
   async function loadLocalStructureFiles(files){
     const list=Array.from(files||[]);
     const loaded=[],failed=[];
+    let loadedEntryCount=0;
     suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+60000);
     for(const f of list){
       try{
         const fmt=inferFormat(f.name);
-        let e2;
-        if(isServerConvertedFormat(fmt))e2=entryWithFreshIdentity(await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,''),f.name);
-        else e2=entryWithFreshIdentity({name:f.name,title:f.name,pdbId:'',data:await f.text(),fmt},f.name);
-        await persistAndLoadEntry(e2);
+        let sourceEntries;
+        if(isServerConvertedFormat(fmt))sourceEntries=await convertStructureBufferEntries(await f.arrayBuffer(),fmt,f.name,f.name,'');
+        else sourceEntries=textStructureEntries(await f.text(),fmt,f.name,f.name,'');
+        const fresh=sourceEntries.map(entry=>entryWithFreshIdentity(entry,entry.title||f.name)).filter(Boolean);
+        await persistAndLoadEntries(fresh);
+        loadedEntryCount+=fresh.length;
         loaded.push(f.name);
       }catch(err){
         failed.push({name:f.name,message:(err&&err.message)||String(err)});
@@ -4458,10 +4523,10 @@ function boot(){
     if(failed.length){
       const failedText=failed.map(item=>item.name+': '+item.message).join('; ');
       if(!loaded.length)throw new Error(failedText);
-      setStatus('Loaded '+countText+'. Failed: '+failedText);
+      setStatus('Loaded '+countText+' ('+loadedEntryCount+' entries). Failed: '+failedText);
       return {loaded,failed};
     }
-    setStatus('Loaded '+countText+'.');
+    setStatus('Loaded '+countText+' ('+loadedEntryCount+' entries).');
     return {loaded,failed};
   }
   function formatServerFileSize(size){
@@ -4690,15 +4755,16 @@ function boot(){
         const result=await fetchJsonResult(SERVER_FILE_LOAD_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
         if(!result.ok)throw new Error(persistenceErrorText(result));
         rememberSessionResponse(result.data);
-        const loadedEntry=normalizeStructureEntry(result.data&&result.data.entry);
-        if(!loadedEntry)throw new Error('Server returned no structure entry.');
-        loadEntry(loadedEntry,{persist:false});
-        return loadedEntry;
+        const rawEntries=result.data&&Array.isArray(result.data.loadedEntries)?result.data.loadedEntries:(result.data&&result.data.entry);
+        const loadedEntries=normalizeStructureEntryList(rawEntries);
+        if(!loadedEntries.length)throw new Error('Server returned no structure entry.');
+        loadedEntries.forEach(loadedEntry=>loadEntry(loadedEntry,{persist:false}));
+        return loadedEntries;
       });
       suppressSessionPollUntil=Math.max(suppressSessionPollUntil,Date.now()+5000);
-      setStatus('Loaded server file: '+entry.title);
+      setStatus(entry.length===1?'Loaded server file: '+entry[0].title:'Loaded server file: '+name+' ('+entry.length+' entries)');
       closeServerFileBrowser();
-      return entry;
+      return entry.length===1?entry[0]:entry;
     }catch(err){
       setServerFileStatus('Load failed: '+((err&&err.message)||err));
       setStatus('Server file load failed: '+((err&&err.message)||err));

@@ -655,11 +655,14 @@ The `name` argument is an identity base, not a guaranteed final id. Every UI or 
 Load a structure that already exists on the server filesystem:
 
 ```js
-const entry = await molAgent.loadServerFile("/home/user/project/structure.cif");
-molAgent.getState().entries.find(e => e.name === entry.name);
+const loaded = await molAgent.loadServerFile("/path/on/server/structure.cif");
+const loadedEntries = Array.isArray(loaded) ? loaded : [loaded];
+molAgent.getState().entries.find(e => e.name === loadedEntries[0].name);
 ```
 
-`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. The visible `Open server` dialog is a Linux-style explorer, but agents should use `molAgent.loadServerFile(...)` or the HTTP APIs for routine loading. Both paths are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
+`Open file`, `Open server`, `molAgent.loadUrl(...)`, and `molAgent.loadServerFile(...)` may load more than one viewer entry from one file. Multi-CT MAE/MAEGZ files and multi-record SDF files are split into individual entries. The JS APIs return a single entry object for single-entry files and an array for multi-entry files; normalize with `Array.isArray(...)` before targeting newly loaded entries.
+
+`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. The visible `Open server` dialog is a Linux-style explorer, but agents should use `molAgent.loadServerFile(...)` or the HTTP APIs for routine loading. Both paths are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds one or more new unique entries to the persisted session and does not edit the original source file.
 
 Remove an entry from the current viewer session:
 
