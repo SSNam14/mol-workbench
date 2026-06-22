@@ -35,6 +35,12 @@ class SessionStateTests(unittest.TestCase):
         session = server.normalize_session(payload)
         self.assertEqual(session["includedEntries"], ["one", "two"])
 
+    def test_normalize_session_preserves_locked_entries_as_included(self):
+        payload = {"entries": self.entries, "includedEntries": ["one"], "lockedEntries": ["two", "missing"]}
+        session = server.normalize_session(payload)
+        self.assertEqual(session["includedEntries"], ["one", "two"])
+        self.assertEqual(session["lockedEntries"], ["two"])
+
     def test_normalize_entry_preserves_deleted_source_serials(self):
         normalized = server.normalize_entry({
             **entry("one"),
@@ -46,6 +52,17 @@ class SessionStateTests(unittest.TestCase):
         fallback = {"includedEntries": ["one", "two"]}
         state = server.normalize_session_state({"includedEntries": []}, self.entries, fallback)
         self.assertEqual(state["includedEntries"], [])
+
+    def test_normalize_session_state_preserves_explicit_empty_locked_entries(self):
+        fallback = {"includedEntries": ["one"], "lockedEntries": ["two"]}
+        state = server.normalize_session_state({"lockedEntries": []}, self.entries, fallback)
+        self.assertEqual(state["includedEntries"], ["one"])
+        self.assertEqual(state["lockedEntries"], [])
+
+    def test_normalize_session_state_keeps_locked_entries_included(self):
+        state = server.normalize_session_state({"includedEntries": ["one"], "lockedEntries": ["two"]}, self.entries)
+        self.assertEqual(state["includedEntries"], ["one", "two"])
+        self.assertEqual(state["lockedEntries"], ["two"])
 
     def test_normalize_session_state_missing_included_entries_uses_fallback(self):
         fallback = {"includedEntries": ["two"]}
@@ -64,6 +81,16 @@ class SessionStateTests(unittest.TestCase):
         }
         state = server.normalize_stored_session_meta(meta)
         self.assertEqual(state["includedEntries"], [])
+
+    def test_normalize_stored_session_meta_preserves_locked_entries(self):
+        meta = {
+            "entries": [{"name": "one", "title": "one", "pdbId": "", "fmt": "pdb"}, {"name": "two", "title": "two", "pdbId": "", "fmt": "pdb"}],
+            "includedEntries": ["one"],
+            "lockedEntries": ["two"],
+        }
+        state = server.normalize_stored_session_meta(meta)
+        self.assertEqual(state["includedEntries"], ["one", "two"])
+        self.assertEqual(state["lockedEntries"], ["two"])
 
     def test_normalize_preferences_preserves_action_preferences(self):
         prefs = server.normalize_preferences({

@@ -15,6 +15,7 @@ function boot(){
   let wideLineStyleGeneration = 1;
   const entries = [];
   const entryChecked = Object.create(null);
+  const entryLocked = Object.create(null);
   let displayedCount = 0;
   let lastSessionRevision = null, sessionSyncTimer = null, sessionSyncInFlight = false, suppressSessionPollUntil = 0;
   let agentActionSyncTimer = null, agentActionSyncInFlight = false;
@@ -105,6 +106,8 @@ function boot(){
   let entriesSelectionAnchorIndex = -1;
   let entryRowSelectionAnchorIndex = -1;
   let selectedEntryNames = new Set();
+  let entryCycleCursorName = '';
+  let entryIncludeClickTimer = null;
   let hierarchyContextAction = null;
   const undoStack = [];
   const MAX_UNDO_STACK = 20;
@@ -537,7 +540,9 @@ function boot(){
     const names=new Set(out.map(e=>e.name));
     const hasIncluded=Array.isArray(payload.includedEntries);
     let included=hasIncluded?payload.includedEntries.map(String).filter(name=>names.has(name)):out.map(e=>e.name);
-    return {entries:out,includedEntries:included};
+    const locked=Array.isArray(payload.lockedEntries)?payload.lockedEntries.map(String).filter(name=>names.has(name)):[];
+    locked.forEach(name=>{ if(!included.includes(name))included.push(name); });
+    return {entries:out,includedEntries:included,lockedEntries:locked};
   }
   function rememberSessionMeta(meta){
     if(meta&&meta.revision!=null)lastSessionRevision=String(meta.revision);
@@ -556,8 +561,9 @@ function boot(){
   function viewerSessionPayload(){
     const clean=entries.map(normalizeStructureEntry).filter(Boolean);
     if(!clean.length)return null;
-    let included=clean.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    return {entries:clean,includedEntries:included};
+    let included=clean.filter(e=>entryIsIncluded(e)).map(e=>e.name);
+    let locked=clean.filter(e=>isEntryLocked(e)).map(e=>e.name);
+    return {entries:clean,includedEntries:included,lockedEntries:locked};
   }
   function saveViewerSession(opts){
     opts=opts||{};
@@ -602,8 +608,9 @@ function boot(){
     return saveViewerSessionEntry(entry,opts);
   }
   function viewerSessionStatePayload(){
-    const included=entries.filter(e=>entryChecked[e.name]!==false).map(e=>e.name);
-    return {includedEntries:included};
+    const included=entries.filter(e=>entryIsIncluded(e)).map(e=>e.name);
+    const locked=entries.filter(e=>isEntryLocked(e)).map(e=>e.name);
+    return {includedEntries:included,lockedEntries:locked};
   }
   async function saveViewerSessionState(opts){
     opts=opts||{};
@@ -616,7 +623,7 @@ function boot(){
       return true;
     }
     const full=viewerSessionPayload();
-    if(full&&sameStringArray(full.includedEntries,payload.includedEntries)){
+    if(full&&sameStringArray(full.includedEntries,payload.includedEntries)&&sameStringArray(full.lockedEntries,payload.lockedEntries)){
       console.warn('Session state endpoint failed; trying full-session fallback.',result);
       if(await saveViewerSession({status:false}))return true;
     }
@@ -635,7 +642,7 @@ function boot(){
       return res.json();
     }).then(payload=>{
       const entry=normalizeStructureEntry(payload&&payload.entry?payload.entry:payload);
-      return entry?{entries:[entry],includedEntries:[entry.name]}:null;
+      return entry?{entries:[entry],includedEntries:[entry.name],lockedEntries:[]}:null;
     }).catch(()=>null);
   }
   function restoreViewerSession(session,opts){
@@ -647,10 +654,13 @@ function boot(){
     entries.splice(0,entries.length);
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    Object.keys(entryLocked).forEach(k=>delete entryLocked[k]);
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    (session.lockedEntries||[]).forEach(name=>{ entryLocked[name]=true; entryChecked[name]=true; });
     selectedEntryNames.clear();
     entriesSelectionAnchorIndex=-1;
     entryRowSelectionAnchorIndex=-1;
+    entryCycleCursorName='';
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
@@ -660,9 +670,11 @@ function boot(){
     disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    Object.keys(entryLocked).forEach(k=>delete entryLocked[k]);
     selectedEntryNames.clear();
     entriesSelectionAnchorIndex=-1;
     entryRowSelectionAnchorIndex=-1;
+    entryCycleCursorName='';
     clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
@@ -3010,6 +3022,7 @@ function boot(){
     const el=$('entriesList'); el.innerHTML=''; el.tabIndex=0;
     pruneSelectedEntries();
     entries.forEach((e,i)=>{
+      const locked=isEntryLocked(e);
       const row=document.createElement('div');
       row.setAttribute('data-row','');
       row.setAttribute('data-entry-name',e.name);
@@ -3017,12 +3030,27 @@ function boot(){
       row.style.cssText='display:grid;grid-template-columns:34px 26px 1fr 20px;align-items:center;height:22px;padding:0 8px 0 5px;cursor:default;font-size:11.5px;border-left:3px solid transparent;background:transparent';
       const rn=document.createElement('span'); rn.textContent=String(i+1); rn.style.color='#8f8f8f';
       const chk=document.createElement('input'); chk.type='checkbox';
-      chk.checked=entryChecked[e.name]!==false;
+      chk.checked=entryIsIncluded(e);
       const CHK_ON='border:1px solid #4c9ff0;background:radial-gradient(circle at center,#f4fbff 0 34%,#3a7bd5 38% 100%)';
+      const CHK_LOCK='border:1px solid #f6c85f;background:radial-gradient(circle at center,#fff7cf 0 33%,#d69b24 37% 100%);box-shadow:0 0 0 1px rgba(246,200,95,.32)';
       const CHK_OFF='border:1px solid #6b6b6b;background:#1f1f1f';
-      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;justify-self:center;margin:0;cursor:pointer;'+(chk.checked?CHK_ON:CHK_OFF); }
+      chk.title=locked?'Locked visible. Double-click to unlock.':'Click to show. Ctrl/Shift click changes shown set. Double-click to lock visible.';
+      function paintChk(){ chk.style.cssText='appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;justify-self:center;margin:0;cursor:pointer;'+(locked?CHK_LOCK:(chk.checked?CHK_ON:CHK_OFF)); }
       paintChk();
-      chk.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); setEntriesIncludedFromClick(i,ev); };
+      chk.onclick=function(ev){
+        ev.preventDefault();
+        ev.stopPropagation();
+        if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
+        if(ev.detail>1)return;
+        const click={shiftKey:ev.shiftKey,ctrlKey:ev.ctrlKey,metaKey:ev.metaKey};
+        entryIncludeClickTimer=setTimeout(function(){ entryIncludeClickTimer=null; setEntriesIncludedFromClick(i,click); },180);
+      };
+      chk.ondblclick=function(ev){
+        ev.preventDefault();
+        ev.stopPropagation();
+        if(entryIncludeClickTimer){ clearTimeout(entryIncludeClickTimer); entryIncludeClickTimer=null; }
+        toggleEntryLock(i);
+      };
       const ttl=document.createElement('span'); ttl.textContent=e.title; ttl.style.cssText='color:#d4d4d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text'; ttl.title='Double-click to rename: '+e.title;
       ttl.onclick=function(ev){ ev.stopPropagation(); selectEntryRowsFromClick(i,ev); };
       ttl.ondblclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); beginEntryTitleEdit(e,ttl); };
@@ -3814,7 +3842,20 @@ function boot(){
     const loaded=await persistAndLoadEntries([e]);
     return loaded[0];
   }
-  function includedEntries(){ return entries.filter(e=>entryChecked[e.name]!==false); }
+  function isEntryLocked(entry){
+    const name=normText(entry&&entry.name||entry);
+    return !!(name&&entryLocked[name]===true);
+  }
+  function entryIsIncluded(entry){
+    const name=normText(entry&&entry.name||entry);
+    return !!(name&&(entryChecked[name]!==false||entryLocked[name]===true));
+  }
+  function lockedEntryNameSet(){
+    const names=new Set();
+    entries.forEach(entry=>{ if(isEntryLocked(entry))names.add(entry.name); });
+    return names;
+  }
+  function includedEntries(){ return entries.filter(entryIsIncluded); }
   function entryStructureKey(e){
     const record=e&&entryModelCache.get(e.name);
     return record&&record.cacheKey?record.cacheKey:structureCacheKey(e);
@@ -4435,7 +4476,7 @@ function boot(){
   }
   function setIncludedEntryNames(names,label){
     const next=names instanceof Set?names:new Set(names||[]);
-    entries.forEach(entry=>{ entryChecked[entry.name]=next.has(entry.name); });
+    entries.forEach(entry=>{ entryChecked[entry.name]=next.has(entry.name)||isEntryLocked(entry); });
     refreshDisplayedEntriesFast({preserveView:true,zoom:false});
     saveViewerSessionState();
     if(label)setStatus(label);
@@ -4445,6 +4486,7 @@ function boot(){
     const names=new Set(entries.map(entry=>entry.name));
     selectedEntryNames.forEach(name=>{ if(!names.has(name))selectedEntryNames.delete(name); });
     if(entryRowSelectionAnchorIndex>=entries.length)entryRowSelectionAnchorIndex=entries.length-1;
+    if(entryCycleCursorName&&!names.has(entryCycleCursorName))entryCycleCursorName='';
   }
   function selectedEntryRecords(){
     pruneSelectedEntries();
@@ -4461,6 +4503,7 @@ function boot(){
     const allowed=new Set(entries.map(entry=>entry.name));
     selectedEntryNames=new Set();
     (names||[]).forEach(name=>{ if(allowed.has(name))selectedEntryNames.add(name); });
+    if(!selectedEntryNames.has(entryCycleCursorName))entryCycleCursorName=selectedEntryNames.values().next().value||'';
     paintEntrySelectionRows();
     if(label)setStatus(label);
   }
@@ -4518,10 +4561,44 @@ function boot(){
       next=new Set([clicked.name]);
       entriesSelectionAnchorIndex=index;
     }
+    lockedEntryNameSet().forEach(name=>next.add(name));
+    if(next.has(clicked.name))entryCycleCursorName=clicked.name;
     const label=next.size?('Displayed entries: '+next.size.toLocaleString()+' / '+entries.length.toLocaleString()):'No entries displayed';
     const work=function(){ setIncludedEntryNames(next,label); };
     if(next.size>20||atoms.length>=HUGE_FIT_ATOM_LIMIT)return withBusy('Updating displayed entries...',work).catch(err=>setStatus('Entry update failed: '+(err&&err.message||err)));
     return work();
+  }
+  function toggleEntryLock(index){
+    if(index<0||index>=entries.length)return;
+    const entry=entries[index], next=!isEntryLocked(entry);
+    if(next){
+      entryLocked[entry.name]=true;
+      entryChecked[entry.name]=true;
+    }else{
+      delete entryLocked[entry.name];
+    }
+    const label=(next?'Locked visible: ':'Unlocked: ')+(entry.title||entry.name);
+    refreshDisplayedEntriesFast({preserveView:true,zoom:false});
+    saveViewerSessionState();
+    setStatus(label);
+  }
+  function cycleSelectedEntryDisplay(delta){
+    const candidates=selectedEntryRecords().filter(entry=>!isEntryLocked(entry));
+    if(candidates.length<2)return false;
+    const cursorIdx=candidates.findIndex(entry=>entry.name===entryCycleCursorName);
+    let idx=cursorIdx>=0&&entryIsIncluded(candidates[cursorIdx])?cursorIdx:-1;
+    if(idx<0)idx=candidates.findIndex(entry=>entryIsIncluded(entry));
+    if(idx<0&&cursorIdx>=0)idx=delta>0?cursorIdx-1:cursorIdx+1;
+    if(idx<0)idx=delta>0?-1:0;
+    const nextEntry=candidates[(idx+delta+candidates.length)%candidates.length];
+    entryCycleCursorName=nextEntry.name;
+    const next=lockedEntryNameSet();
+    next.add(nextEntry.name);
+    const label='Displayed selected entry '+(candidates.findIndex(entry=>entry.name===nextEntry.name)+1)+' / '+candidates.length+': '+(nextEntry.title||nextEntry.name);
+    const work=function(){ setIncludedEntryNames(next,label); };
+    if(atoms.length>=HUGE_FIT_ATOM_LIMIT||next.size>20)return withBusy('Cycling displayed entry...',work).catch(err=>setStatus('Entry cycle failed: '+(err&&err.message||err)));
+    work();
+    return true;
   }
   function removeEntriesFromSession(targetEntries,opts){
     opts=opts||{};
@@ -4542,7 +4619,9 @@ function boot(){
     }
     names.forEach(name=>{
       delete entryChecked[name];
+      delete entryLocked[name];
       selectedEntryNames.delete(name);
+      if(entryCycleCursorName===name)entryCycleCursorName='';
       disposeEntryRecord(name,entries);
     });
     if(entriesSelectionAnchorIndex>=entries.length)entriesSelectionAnchorIndex=entries.length-1;
@@ -5690,7 +5769,7 @@ function installFrameSyncedMotion(targetViewer){
     queryInteractions:function(command){ return queryInteractionsAction(Object.assign({},command||{},{type:'queryInteractions'})); },
     showInteractions:function(command){ return showInteractionsAction(Object.assign({},command||{},{type:'showInteractions'})); },
     clearInteractionFilter:function(command){ return clearInteractionFilterAction(Object.assign({},command||{})); },
-    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryChecked[e.name]!==false})),includedEntries:includedEntries().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
+    getState:function(){ return {entries:entries.map(e=>({name:e.name,title:e.title,included:entryIsIncluded(e),locked:isEntryLocked(e),selected:selectedEntryNames.has(e.name)})),includedEntries:includedEntries().map(e=>e.name),lockedEntries:entries.filter(isEntryLocked).map(e=>e.name),selectedEntries:selectedEntryRecords().map(e=>e.name),atoms:atoms.length,proteinBackbone:state.baseProtein,proteinAtoms:state.proteinAtoms,ligand:state.ligand,solvent:state.solvent,other:state.other,mousePreset:state.mousePreset,mouseActions:cloneMouseSettings(),selection:cloneSelector(state.selectionSel),selectionHighlight:{representation:state.selectionRepresentation,options:cloneSelector(state.selectionOptions)},styleRules:cloneSelector(state.styleRules),hiddenRules:cloneSelector(state.hiddenRules)}; },
     getInteractionIndex:function(){ updateInteractionAggregate(); return clonePlain({status:interactionIndex.status,source:interactionIndex.source,structureKey:interactionIndex.structureKey||currentStructureKey,counts:interactionIndex.counts,readyEntries:interactionIndex.readyEntries||0,totalEntries:interactionIndex.totalEntries||0,error:interactionIndex.error,entries:visibleInteractionSlots().map(slot=>({name:slot.entry.name,title:slot.entry.title,status:slot.record&&slot.record.status||'missing',counts:slot.record&&slot.record.counts||{}}))}); },
     rebuildInteractionIndex:function(){ startInteractionIndexBuild(); return clonePlain({status:interactionIndex.status,counts:interactionIndex.counts}); },
     getVisualConfig:function(){ return clonePlain(visualConfig); },
@@ -5796,6 +5875,14 @@ function installFrameSyncedMotion(targetViewer){
         deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
       }
       return;
+    }
+    if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+      if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
+      const delta=e.key==='ArrowRight'?1:-1;
+      if(cycleSelectedEntryDisplay(delta)){
+        e.preventDefault();
+        return;
+      }
     }
     if(isActionHotkey(e,'cycleLigand')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
     if(isActionHotkey(e,'cycleChain')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }

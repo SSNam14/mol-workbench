@@ -913,10 +913,16 @@ def normalize_session(value):
         included_entries = [str(name) for name in included if str(name) in names]
     else:
         included_entries = [entry["name"] for entry in entries]
+    locked = value.get("lockedEntries")
+    locked_entries = [str(name) for name in locked if str(name) in names] if isinstance(locked, list) else []
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
     return {
         "schema": SESSION_SCHEMA,
         "entries": entries,
         "includedEntries": included_entries,
+        "lockedEntries": locked_entries,
     }
 
 
@@ -1164,7 +1170,7 @@ def legacy_last_structure_session():
     entry = normalize_entry(payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload)
     if not entry:
         return None
-    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]]})
+    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]], "lockedEntries": []})
 
 
 def normalize_session_state(value, entries, fallback=None):
@@ -1177,7 +1183,15 @@ def normalize_session_state(value, entries, fallback=None):
         included_entries = [name for name in fallback.get("includedEntries", []) if name in names]
     if not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
-    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries}
+    locked = value.get("lockedEntries") if isinstance(value, dict) else None
+    if isinstance(locked, list):
+        locked_entries = [str(name) for name in locked if str(name) in names]
+    else:
+        locked_entries = [name for name in fallback.get("lockedEntries", []) if name in names]
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
+    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries, "lockedEntries": locked_entries}
 
 
 def apply_session_state(session):
@@ -1191,6 +1205,7 @@ def apply_session_state(session):
         raise
     normalized = normalize_session_state(state, session.get("entries", []), session)
     session["includedEntries"] = normalized["includedEntries"]
+    session["lockedEntries"] = normalized["lockedEntries"]
     return session
 
 
@@ -1241,6 +1256,7 @@ def session_meta(session=None):
             for entry in entries
         ],
         "includedEntries": session.get("includedEntries", []) if session else [],
+        "lockedEntries": session.get("lockedEntries", []) if session else [],
     }
 
 
@@ -1276,11 +1292,17 @@ def normalize_stored_session_meta(value):
     included_entries = [str(name) for name in included if str(name) in names] if isinstance(included, list) else []
     if entries and not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
+    locked = value.get("lockedEntries")
+    locked_entries = [str(name) for name in locked if str(name) in names] if isinstance(locked, list) else []
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
     return {
         "schema": SESSION_SCHEMA,
         "revision": session_revision(),
         "entries": entries,
         "includedEntries": included_entries,
+        "lockedEntries": locked_entries,
     }
 
 
@@ -1344,7 +1366,7 @@ def upsert_session_entry(entry, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": []}
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "lockedEntries": []}
         entries = session["entries"]
         stored_entry = dict(entry)
         existing_idx = next((idx for idx, existing in enumerate(entries) if existing.get("name") == stored_entry["name"]), None)
@@ -1356,7 +1378,7 @@ def upsert_session_entry(entry, replace=False):
         included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
         if stored_entry["name"] not in included:
             included.append(stored_entry["name"])
-        session = normalize_session({"entries": entries, "includedEntries": included})
+        session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": session.get("lockedEntries", [])})
         write_session(session)
         return session, stored_entry
 
@@ -1365,7 +1387,7 @@ def upsert_session_entries(new_entries, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": []}
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "lockedEntries": []}
         entries = session["entries"]
         stored_entries = []
         for entry in new_entries:
@@ -1381,7 +1403,7 @@ def upsert_session_entries(new_entries, replace=False):
         for stored_entry in stored_entries:
             if stored_entry["name"] not in included:
                 included.append(stored_entry["name"])
-        session = normalize_session({"entries": entries, "includedEntries": included})
+        session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": session.get("lockedEntries", [])})
         write_session(session)
         stored_names = {entry["name"] for entry in stored_entries}
         normalized_stored = [entry for entry in session["entries"] if entry["name"] in stored_names]
@@ -1402,7 +1424,8 @@ def remove_session_entry(name):
             return None
         names = {entry["name"] for entry in entries}
         included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
-        next_session = normalize_session({"entries": entries, "includedEntries": included})
+        locked = [entry_name for entry_name in session.get("lockedEntries", []) if entry_name in names]
+        next_session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": locked})
         write_session(next_session)
         return next_session
 
@@ -1435,7 +1458,7 @@ def update_session_state(value):
             return None
         entries = session.get("entries", [])
         state = normalize_session_state(value, entries, session)
-        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"]})
+        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"], "lockedEntries": state["lockedEntries"]})
         write_session_state(next_session)
         write_session_meta(next_session)
         return next_session
