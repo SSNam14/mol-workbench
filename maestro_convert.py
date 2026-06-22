@@ -42,6 +42,8 @@ def infer_structure_format(name, fmt=None):
     if value and value != "auto":
         return value
     lower = str(name or "").strip().lower()
+    if lower.endswith(".psazip"):
+        return "psazip"
     if lower.endswith(".maegz") or lower.endswith(".mae.gz"):
         return "maegz"
     if lower.endswith(".mae"):

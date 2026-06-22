@@ -2,11 +2,13 @@
 """Static file server with a tiny persisted viewer-state API."""
 
 import argparse
+import io
 import json
 import os
 import tempfile
 import threading
 import time
+import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -32,6 +34,7 @@ MAX_INTERACTION_INDEX_BYTES = 200 * 1024 * 1024
 MAX_AGENT_ACTION_BYTES = 128 * 1024
 MAX_AGENT_ACTIONS = 100
 MAX_SERVER_FILE_ITEMS = 1000
+MAX_SURFACE_CHUNK_VERTICES = 60000
 SESSION_SCHEMA = "viewer-session-v1"
 PREFERENCES_SCHEMA = "viewer-preferences-v1"
 INTERACTION_INDEX_SCHEMA = "interaction-index-v6"
@@ -62,7 +65,7 @@ BACKBONE_REPRESENTATIONS = {"cartoon", "tube", "off"}
 ATOM_REPRESENTATIONS = {"line", "stick", "sphere", "cpk"}
 ATOM_REPRESENTATIONS_WITH_OFF = ATOM_REPRESENTATIONS | {"off"}
 SERVER_FILE_ROOTS = [Path.home()]
-SERVER_STRUCTURE_SUFFIXES = (".pdb", ".ent", ".sdf", ".mol", ".mol2", ".xyz", ".cif", ".mmcif", ".mae", ".maegz", ".mae.gz")
+SERVER_STRUCTURE_SUFFIXES = (".pdb", ".ent", ".sdf", ".mol", ".mol2", ".xyz", ".cif", ".mmcif", ".mae", ".maegz", ".mae.gz", ".psazip")
 AGENT_ACTION_TYPES = {
     "querywithin",
     "showwithin",
@@ -228,6 +231,11 @@ def load_server_file_entry(value):
         return None, "read_failed"
     filename = path.name
     fmt = infer_structure_format(filename)
+    if fmt == "psazip":
+        try:
+            return convert_structure_bytes(payload, filename, fmt, filename, "")
+        except MaestroConversionError as exc:
+            return None, str(exc) or "conversion_failed"
     if is_maestro_format(fmt) or payload[:2] == b"\x1f\x8b":
         try:
             entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
@@ -278,10 +286,52 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    surfaces = normalize_entry_surfaces(value.get("surfaces"))
+    if surfaces:
+        entry["surfaces"] = surfaces
     deleted = normalize_deleted_source_serials(value.get("deletedSourceSerials"))
     if deleted:
         entry["deletedSourceSerials"] = deleted
     return entry
+
+
+def normalize_entry_surfaces(value):
+    if not isinstance(value, list):
+        return []
+    out = []
+    for raw in value[:8]:
+        if not isinstance(raw, dict):
+            continue
+        raw_chunks = raw.get("chunks")
+        chunks = []
+        if isinstance(raw_chunks, list):
+            for chunk in raw_chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                vertices = chunk.get("vertices")
+                faces = chunk.get("faces")
+                normals = chunk.get("normals")
+                if not isinstance(vertices, list) or not isinstance(faces, list):
+                    continue
+                clean = {"vertices": vertices, "faces": faces}
+                if isinstance(normals, list):
+                    clean["normals"] = normals
+                chunks.append(clean)
+        if not chunks:
+            continue
+        surface = {
+            "name": str(raw.get("name") or "Surface")[:120],
+            "kind": str(raw.get("kind") or "surface")[:80],
+            "color": str(raw.get("color") or "#8ecae6")[:32],
+            "opacity": raw.get("opacity", 0.85),
+            "vertexCount": raw.get("vertexCount"),
+            "faceCount": raw.get("faceCount"),
+            "chunks": chunks,
+        }
+        if raw.get("source"):
+            surface["source"] = str(raw.get("source"))[:160]
+        out.append(surface)
+    return out
 
 
 def truthy(value):
@@ -311,6 +361,8 @@ def normalize_entry_title(value):
 
 def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
     source_fmt = infer_structure_format(filename, fmt)
+    if source_fmt == "psazip":
+        return psazip_bytes_to_entry(payload, filename, title, pdb_id)
     if not is_maestro_format(source_fmt) and bytes(payload or b"")[:2] == b"\x1f\x8b":
         source_fmt = "maegz"
     if not is_maestro_format(source_fmt):
@@ -331,6 +383,183 @@ def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id="
     if not entry:
         raise MaestroConversionError("conversion_failed")
     return entry, {"sourceFormat": source_fmt, "convertedFormat": "pdb", **meta}
+
+
+def _psazip_read_panel_state(zipf, names):
+    panel_name = next((name for name in names if name.lower().endswith("_panel_state.json")), "")
+    if not panel_name:
+        return {}
+    try:
+        return json.loads(zipf.read(panel_name).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+
+
+def _psazip_structure_name(names):
+    for suffix in (".maegz", ".mae.gz", ".mae", ".cif", ".mmcif", ".pdb"):
+        found = [name for name in names if name.lower().endswith(suffix)]
+        if found:
+            return found[0]
+    return ""
+
+
+def _psazip_surface_vis_name(names):
+    found = [name for name in names if name.lower().endswith(".vis")]
+    return found[0] if found else ""
+
+
+def _round_float(value, digits):
+    return round(float(value), digits)
+
+
+def _flush_surface_chunk(chunks, vertices, normals, faces, include_normals):
+    if not vertices or not faces:
+        return
+    chunk = {
+        "vertices": [_round_float(coord, 3) for point in vertices for coord in point],
+        "faces": [int(idx) for face in faces for idx in face],
+    }
+    if include_normals:
+        chunk["normals"] = [_round_float(coord, 4) for point in normals for coord in point]
+    chunks.append(chunk)
+
+
+def chunk_surface_mesh(coords, normals, faces):
+    chunks = []
+    vertex_map = {}
+    out_vertices = []
+    out_normals = []
+    out_faces = []
+    include_normals = normals is not None and len(normals) == len(coords)
+
+    for face in faces:
+        needed = [int(idx) for idx in face if int(idx) not in vertex_map]
+        if out_faces and len(out_vertices) + len(needed) > MAX_SURFACE_CHUNK_VERTICES:
+            _flush_surface_chunk(chunks, out_vertices, out_normals, out_faces, include_normals)
+            vertex_map = {}
+            out_vertices = []
+            out_normals = []
+            out_faces = []
+        mapped = []
+        for raw_idx in face:
+            idx = int(raw_idx)
+            mapped_idx = vertex_map.get(idx)
+            if mapped_idx is None:
+                mapped_idx = len(out_vertices)
+                vertex_map[idx] = mapped_idx
+                out_vertices.append(coords[idx])
+                if include_normals:
+                    out_normals.append(normals[idx])
+            mapped.append(mapped_idx)
+        out_faces.append(mapped)
+    _flush_surface_chunk(chunks, out_vertices, out_normals, out_faces, include_normals)
+    return chunks
+
+
+def _decode_hdf_attr(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _surface_opacity(panel_state, attrs):
+    raw = panel_state.get("settings_trans_front", attrs.get("Transparency", 15))
+    try:
+        transparency = max(0.0, min(100.0, float(raw)))
+    except (TypeError, ValueError):
+        transparency = 15.0
+    return round(1.0 - transparency / 100.0, 3)
+
+
+def parse_maestro_vis_surfaces(vis_payload, panel_state=None, source=""):
+    try:
+        import h5py
+        import numpy as np
+    except ImportError as exc:
+        raise MaestroConversionError("surface_support_missing_h5py") from exc
+
+    panel_state = panel_state or {}
+    surfaces = []
+    with h5py.File(io.BytesIO(vis_payload), "r") as h5:
+        def visit(name, obj):
+            if not hasattr(obj, "keys"):
+                return
+            if "Coordinates of Vertices" not in obj or "Patches" not in obj:
+                return
+            coords = np.asarray(obj["Coordinates of Vertices"], dtype=float).reshape(-1, 3)
+            faces = np.asarray(obj["Patches"], dtype=np.int64).reshape(-1, 3)
+            normals = None
+            if "Normals of Vertices" in obj:
+                normals = np.asarray(obj["Normals of Vertices"], dtype=float).reshape(-1, 3)
+            if coords.size == 0 or faces.size == 0:
+                return
+            attrs = {key: _decode_hdf_attr(value) for key, value in obj.attrs.items()}
+            chunks = chunk_surface_mesh(coords, normals, faces)
+            if not chunks:
+                return
+            surfaces.append({
+                "name": str(attrs.get("Dataset Name") or name.rsplit("/", 1)[-1] or "Surface"),
+                "kind": "maestro-psazip-surface",
+                "source": source,
+                "color": "#8ecae6",
+                "opacity": _surface_opacity(panel_state, attrs),
+                "vertexCount": int(coords.shape[0]),
+                "faceCount": int(faces.shape[0]),
+                "chunks": chunks,
+            })
+        h5.visititems(visit)
+    return surfaces
+
+
+def psazip_bytes_to_entry(payload, filename="", title=None, pdb_id=""):
+    try:
+        zipf = zipfile.ZipFile(io.BytesIO(bytes(payload or b"")))
+    except zipfile.BadZipFile as exc:
+        raise MaestroConversionError("invalid_psazip") from exc
+    with zipf:
+        names = [name for name in zipf.namelist() if not name.endswith("/")]
+        structure_name = _psazip_structure_name(names)
+        vis_name = _psazip_surface_vis_name(names)
+        if not structure_name:
+            raise MaestroConversionError("psazip_no_structure")
+        if not vis_name:
+            raise MaestroConversionError("psazip_no_surface")
+        panel_state = _psazip_read_panel_state(zipf, names)
+        structure_payload = zipf.read(structure_name)
+        structure_fmt = infer_structure_format(structure_name)
+        if is_maestro_format(structure_fmt) or structure_payload[:2] == b"\x1f\x8b":
+            pdb_data, meta = maestro_bytes_to_pdb(structure_payload, structure_name, structure_fmt)
+            converted_fmt = "pdb"
+        else:
+            try:
+                pdb_data = structure_payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise MaestroConversionError("psazip_structure_decode_failed") from exc
+            meta = {"atomCount": None, "bondCount": None}
+            converted_fmt = structure_fmt or "pdb"
+        surfaces = parse_maestro_vis_surfaces(zipf.read(vis_name), panel_state, vis_name)
+
+    name = str(filename or "surface.psazip").strip() or "surface.psazip"
+    if name.lower().endswith(".psazip"):
+        name = name[:-7] + ".pdb"
+    entry = normalize_entry({
+        "name": name,
+        "title": title or filename or name,
+        "pdbId": pdb_id,
+        "data": pdb_data,
+        "fmt": converted_fmt,
+        "surfaces": surfaces,
+    })
+    if not entry:
+        raise MaestroConversionError("conversion_failed")
+    return entry, {
+        "sourceFormat": "psazip",
+        "convertedFormat": converted_fmt,
+        "surfaceCount": len(surfaces),
+        "surfaceVertexCount": sum(int(s.get("vertexCount") or 0) for s in surfaces),
+        "surfaceFaceCount": sum(int(s.get("faceCount") or 0) for s in surfaces),
+        **meta,
+    }
 
 
 def normalize_session(value):
@@ -1251,7 +1480,8 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             entry, meta = convert_structure_bytes(payload, name, fmt, title, pdb_id)
         except MaestroConversionError as exc:
             error = str(exc) or "conversion_failed"
-            status = 400 if error in {"unsupported_format", "invalid_maegz", "no_atoms"} else 500
+            client_errors = {"unsupported_format", "invalid_maegz", "invalid_psazip", "psazip_no_structure", "psazip_no_surface", "psazip_structure_decode_failed", "no_atoms"}
+            status = 400 if error in client_errors else 500
             self.send_json(status, {"error": error})
             return
         self.send_json(200, {"ok": True, "entry": entry, **meta})

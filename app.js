@@ -179,6 +179,15 @@ function boot(){
     const deleted=normalizeDeletedSourceSerials(e&&e.deletedSourceSerials).join(',');
     return fmt+'-'+data.length.toString(36)+'-'+fnv1aHex(data)+'-d'+deleted.length.toString(36)+'-'+fnv1aHex(deleted);
   }
+  function surfaceDataSignature(e){
+    const surfaces=Array.isArray(e&&e.surfaces)?e.surfaces:[];
+    if(!surfaces.length)return '';
+    return surfaces.map(s=>{
+      const chunks=Array.isArray(s&&s.chunks)?s.chunks:[];
+      const chunkSig=chunks.map(c=>[(c.vertices&&c.vertices.length)||0,(c.faces&&c.faces.length)||0,(c.normals&&c.normals.length)||0].join('/')).join(',');
+      return [s.name||'',s.kind||'',s.color||'',s.opacity==null?'':s.opacity,s.vertexCount||0,s.faceCount||0,chunkSig].join(':');
+    }).join('|');
+  }
   function clonePlain(v){ return JSON.parse(JSON.stringify(v)); }
   function mergePlain(base,extra){
     if(!extra||typeof extra!=='object'||Array.isArray(extra))return base;
@@ -434,8 +443,30 @@ function boot(){
     if(!e||typeof e.data!=='string'||!e.data.trim())return null;
     const name=normText(e.name||'structure');
     const out={name,title:normText(e.title||name),pdbId:normText(e.pdbId||''),data:e.data,fmt:normText(e.fmt||inferFormat(name)||'pdb').toLowerCase()};
+    const surfaces=normalizeEntrySurfaces(e.surfaces);
+    if(surfaces.length)out.surfaces=surfaces;
     const deleted=normalizeDeletedSourceSerials(e.deletedSourceSerials);
     if(deleted.length)out.deletedSourceSerials=deleted;
+    return out;
+  }
+  function normalizeEntrySurfaces(value){
+    if(!Array.isArray(value))return [];
+    const out=[];
+    value.forEach(raw=>{
+      if(!raw||typeof raw!=='object')return;
+      const chunks=Array.isArray(raw.chunks)?raw.chunks.filter(chunk=>chunk&&Array.isArray(chunk.vertices)&&Array.isArray(chunk.faces)):[];
+      if(!chunks.length)return;
+      out.push({
+        name:normText(raw.name||'Surface'),
+        kind:normText(raw.kind||'surface'),
+        source:normText(raw.source||''),
+        color:normText(raw.color||'#8ecae6')||'#8ecae6',
+        opacity:raw.opacity==null?0.85:Number(raw.opacity),
+        vertexCount:Number(raw.vertexCount)||0,
+        faceCount:Number(raw.faceCount)||0,
+        chunks
+      });
+    });
     return out;
   }
   function uniqueEntryName(base){
@@ -3532,6 +3563,10 @@ function boot(){
     fmt=normText(fmt).toLowerCase();
     return fmt==='mae'||fmt==='maegz'||fmt==='mae.gz';
   }
+  function isServerConvertedFormat(fmt){
+    fmt=normText(fmt).toLowerCase();
+    return isMaestroFormat(fmt)||fmt==='psazip';
+  }
   function urlFileName(url){
     const raw=normText(url);
     try{
@@ -3567,7 +3602,7 @@ function boot(){
     if(!explicitFmt&&sourceFmt==='pdb'&&entryName!==url)sourceFmt=inferFormat(url);
     setStatus('Loading: '+(displayTitle||url));
     const res=await fetch(url); if(!res.ok)throw new Error(res.status+' '+res.statusText);
-    if(isMaestroFormat(sourceFmt)){
+    if(isServerConvertedFormat(sourceFmt)){
       const entry=await convertStructureBuffer(await res.arrayBuffer(),sourceFmt,entryName,displayTitle,pdbId||'');
       return persistAndLoadEntry(entryWithFreshIdentity(entry,displayTitle));
     }
@@ -3743,8 +3778,51 @@ function boot(){
     });
     return serialStart;
   }
+  function surfaceOpacity(value){
+    const n=Number(value);
+    if(!Number.isFinite(n))return 0.85;
+    return Math.max(0,Math.min(1,n));
+  }
+  function flatVectorArray(values){
+    const out=[];
+    for(let i=0;i+2<values.length;i+=3){
+      out.push({x:Number(values[i])||0,y:Number(values[i+1])||0,z:Number(values[i+2])||0});
+    }
+    return out;
+  }
+  function flatIndexArray(values){
+    const out=[];
+    for(let i=0;i<values.length;i++)out.push(Number(values[i])|0);
+    return out;
+  }
+  function clearSurfaceShapesForRecord(record){
+    if(!viewer||!record||!record.surfaceShapes)return;
+    record.surfaceShapes.forEach(shape=>{ try{ viewer.removeShape(shape); }catch(e){} });
+    record.surfaceShapes=[];
+    record.surfaceBuilt=false;
+  }
+  function ensureSurfaceShapesForRecord(record){
+    if(!viewer||!record||record.surfaceBuilt)return;
+    const surfaces=Array.isArray(record.entry&&record.entry.surfaces)?record.entry.surfaces:[];
+    record.surfaceShapes=[];
+    surfaces.forEach(surface=>{
+      const chunks=Array.isArray(surface.chunks)?surface.chunks:[];
+      chunks.forEach(chunk=>{
+        if(!Array.isArray(chunk.vertices)||!Array.isArray(chunk.faces)||!chunk.vertices.length||!chunk.faces.length)return;
+        const shape=viewer.addShape({color:surface.color||'#8ecae6',opacity:surfaceOpacity(surface.opacity)});
+        shape.addCustom({
+          vertexArr:flatVectorArray(chunk.vertices),
+          normalArr:Array.isArray(chunk.normals)?flatVectorArray(chunk.normals):[],
+          faceArr:flatIndexArray(chunk.faces)
+        });
+        record.surfaceShapes.push(shape);
+      });
+    });
+    record.surfaceBuilt=true;
+  }
   function hideCachedEntry(record){
     if(!viewer||!record||!record.atoms)return;
+    clearSurfaceShapesForRecord(record);
     if(record.model&&typeof record.model.setStyle==='function')record.model.setStyle({},{});
     else{
       const serials=serialsForAtoms(record.atoms);
@@ -3795,8 +3873,12 @@ function boot(){
   }
   function ensureEntryModel(entry){
     const cacheKey=structureCacheKey(entry);
+    const surfaceKey=surfaceDataSignature(entry);
     const cached=entryModelCache.get(entry.name);
-    if(cached&&cached.cacheKey===cacheKey)return cached;
+    if(cached&&cached.cacheKey===cacheKey&&cached.surfaceKey===surfaceKey){
+      cached.entry=entry;
+      return cached;
+    }
     validateStructureCoordinates(entry);
     const m=viewer.addModel(entry.data,entry.fmt||'pdb',{keepH:true});
     const parsed=m.selectedAtoms({});
@@ -3810,19 +3892,21 @@ function boot(){
     const split=splitEntryDeletedAtoms(entry,parsed);
     const list=split.visible;
     normalizeParsedAtoms(list);
-    const record={entry,model:m,atoms:list,deletedSerials:split.hiddenSerials,cacheKey,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
+    const record={entry,model:m,atoms:list,deletedSerials:split.hiddenSerials,cacheKey,surfaceKey,surfaceShapes:[],surfaceBuilt:false,atomMaps:buildAtomMapBundle(list),extent:atomExtent(list),stats:entryStatsForAtoms(list),hierarchy:buildEntryHierarchyCache(entry,list),sceneBuilt:false,_molAgentShown:false};
     if(cached)disposeEntryRecord(cached);
     entryModelCache.set(entry.name,record);
     return record;
   }
   function showEntryRecord(record){
     if(!record||!record.model||!record.model.show)return;
-    if(record._molAgentShown===true)return;
+    if(record._molAgentShown===true){ ensureSurfaceShapesForRecord(record); return; }
     record.model.show();
+    ensureSurfaceShapesForRecord(record);
     record._molAgentShown=true;
   }
   function hideEntryRecord(record){
     if(!record||!record.model||!record.model.hide)return;
+    clearSurfaceShapesForRecord(record);
     if(record._molAgentShown===false)return;
     record.model.hide();
     record._molAgentShown=false;
@@ -4201,7 +4285,7 @@ function boot(){
     if(opts.persist!==false)saveViewerSessionEntryDeferred(e,{status:false}).then(ok=>{ if(!ok)setStatus('Loaded but not saved on server: '+e.title); });
     return e;
   }
-  function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.maegz')||n.endsWith('.mae.gz'))return 'maegz'; if(n.endsWith('.mae'))return 'mae'; if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
+  function inferFormat(n){ n=normText(n).toLowerCase(); if(n.endsWith('.psazip'))return 'psazip'; if(n.endsWith('.maegz')||n.endsWith('.mae.gz'))return 'maegz'; if(n.endsWith('.mae'))return 'mae'; if(n.endsWith('.sdf')||n.endsWith('.mol'))return 'sdf'; if(n.endsWith('.mol2'))return 'mol2'; if(n.endsWith('.xyz'))return 'xyz'; if(n.endsWith('.cif')||n.endsWith('.mmcif'))return 'cif'; return 'pdb'; }
   function hasLineMatch(text,pattern){ return pattern.test(String(text||'')); }
   function validateStructureCoordinates(entry){
     const fmt=normText(entry&&entry.fmt||'').toLowerCase();
@@ -4226,7 +4310,7 @@ function boot(){
       try{
         const fmt=inferFormat(f.name);
         let e2;
-        if(isMaestroFormat(fmt))e2=entryWithFreshIdentity(await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,''),f.name);
+        if(isServerConvertedFormat(fmt))e2=entryWithFreshIdentity(await convertStructureBuffer(await f.arrayBuffer(),fmt,f.name,f.name,''),f.name);
         else e2=entryWithFreshIdentity({name:f.name,title:f.name,pdbId:'',data:await f.text(),fmt},f.name);
         await persistAndLoadEntry(e2);
         loaded.push(f.name);
