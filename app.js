@@ -2375,6 +2375,7 @@ function boot(){
       viewer.slabNear=-allD/1.9;
       viewer.slabFar=allD/2;
     }
+    syncClipFromViewer({resetHome:true});
     if(opts.focusTarget)state.focusTarget=opts.focusTarget;
     if(opts.render!==false)presentViewer(null,false);
     return true;
@@ -2401,6 +2402,7 @@ function boot(){
       viewer.slabNear=-allD/1.9;
       viewer.slabFar=allD/2;
     }
+    syncClipFromViewer({resetHome:true});
     if(opts.focusTarget)state.focusTarget=opts.focusTarget;
     if(opts.render!==false)presentViewer(null,false);
     return true;
@@ -2417,6 +2419,7 @@ function boot(){
       return fastFitAtoms(target,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
     }
     viewer.zoomTo(visibleAtomSelector(),opts.duration==null?0:opts.duration);
+    syncClipFromViewer({resetHome:true});
     if(opts.render!==false)presentViewer(null,true);
     state.focusTarget={mode:'overview'};
     return true;
@@ -2435,6 +2438,7 @@ function boot(){
     let s=styleSelection(t,{});
     if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector();
     viewer.zoomTo(s,450);
+    syncClipFromViewer({resetHome:true});
     state.focusTarget={mode:'selection'};
     return true;
   }
@@ -5351,37 +5355,78 @@ function boot(){
     return null;
   }
 
-  const CLIP_MIN=-200, CLIP_MAX=200, CLIP_GAP=2;
-  const clip={near:-100, far:100};
-  function clipPct(v){ return (v-CLIP_MIN)/(CLIP_MAX-CLIP_MIN)*100; }
+  // UI values are normalized handle positions; actual slab offsets are derived from the latest fit baseline.
+  const CLIP_UI_MIN=-200, CLIP_UI_MAX=200, CLIP_DEFAULT_NEAR=-100, CLIP_DEFAULT_FAR=100, CLIP_UI_GAP=2, CLIP_DEFAULT_SCALE=100;
+  const clip={near:CLIP_DEFAULT_NEAR, far:CLIP_DEFAULT_FAR, baseNear:CLIP_DEFAULT_NEAR, baseFar:CLIP_DEFAULT_FAR};
+  function clipNumber(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
+  function sameClipValue(a,b){ return Math.abs(Number(a)-Number(b))<0.5; }
+  function clipPct(v){ return (v-CLIP_UI_MIN)/(CLIP_UI_MAX-CLIP_UI_MIN)*100; }
+  function readViewerSlab(){
+    if(!viewer)return null;
+    let near=null,far=null;
+    if(typeof viewer.getSlab==='function'){
+      try{
+        const slab=viewer.getSlab();
+        near=clipNumber(slab&&slab.near);
+        far=clipNumber(slab&&slab.far);
+      }catch(_){}
+    }
+    if(near==null)near=clipNumber(viewer.slabNear);
+    if(far==null)far=clipNumber(viewer.slabFar);
+    if(near==null||far==null)return null;
+    if(far<=near)far=near+1;
+    return {near,far};
+  }
+  function syncClipFromViewer(opts){
+    const slab=readViewerSlab();
+    if(!slab)return false;
+    if(opts&&opts.resetHome){
+      clip.baseNear=slab.near;
+      clip.baseFar=slab.far;
+      clip.near=CLIP_DEFAULT_NEAR;
+      clip.far=CLIP_DEFAULT_FAR;
+    }
+    renderClipUI();
+    return true;
+  }
+  function clipActualValue(uiValue){
+    const center=(clip.baseNear+clip.baseFar)/2;
+    const half=Math.max((clip.baseFar-clip.baseNear)/2,0.5);
+    return center+(Number(uiValue)||0)/CLIP_DEFAULT_SCALE*half;
+  }
+  function actualClipSlab(){
+    let near=clipActualValue(clip.near), far=clipActualValue(clip.far);
+    if(far<=near){ const mid=(near+far)/2; near=mid-0.5; far=mid+0.5; }
+    return {near,far};
+  }
   function renderClipUI(){
     const nh=$('clipNearH'),fh=$('clipFarH'),rg=$('clipRange'),val=$('clipVal'),cap=document.querySelector('#clipControl .clip-cap'),ctrl=$('clipControl');
     if(!nh||!fh)return;
     const np=clipPct(clip.near),fp=clipPct(clip.far);
-    const active=clip.near!==-100||clip.far!==100;
+    const active=!sameClipValue(clip.near,CLIP_DEFAULT_NEAR)||!sameClipValue(clip.far,CLIP_DEFAULT_FAR);
     nh.style.left=np+'%'; fh.style.left=fp+'%';
     if(rg){ rg.style.left=np+'%'; rg.style.width=Math.max(0,fp-np)+'%'; }
-    if(val)val.textContent=Math.round(clip.near)+' / '+Math.round(clip.far);
+    if(val){ val.textContent=''; val.hidden=true; }
     if(cap)cap.textContent='Clip';
     if(ctrl)ctrl.classList.toggle('is-active',active);
   }
   function applyClip(){
     renderClipUI();
     if(!viewer)return;
-    const near=clip.near,far=clip.far;
+    const slab=actualClipSlab(), near=slab.near, far=slab.far;
     try{ if(viewer.setSlab)viewer.setSlab(near,far); else { if(viewer.setSlabNear)viewer.setSlabNear(near); if(viewer.setSlabFar)viewer.setSlabFar(far); } viewer.render(); }catch(e){}
   }
   function setClipValue(which,v){
-    v=Math.max(CLIP_MIN,Math.min(CLIP_MAX,v));
-    if(which==='near')clip.near=Math.min(v,clip.far-CLIP_GAP);
-    else clip.far=Math.max(v,clip.near+CLIP_GAP);
+    v=Math.max(CLIP_UI_MIN,Math.min(CLIP_UI_MAX,v));
+    if(which==='near')clip.near=Math.min(v,clip.far-CLIP_UI_GAP);
+    else clip.far=Math.max(v,clip.near+CLIP_UI_GAP);
     applyClip();
   }
   function clipValueFromEvent(ev){
     const bar=$('clipBar'); if(!bar)return null;
     const r=bar.getBoundingClientRect(); if(!r.width)return null;
     const pct=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));
-    return CLIP_MIN+pct*(CLIP_MAX-CLIP_MIN);
+    return CLIP_UI_MIN+pct*(CLIP_UI_MAX-CLIP_UI_MIN);
   }
   function bindClipHandle(id,which){
     const h=$(id); if(!h)return;
@@ -5402,7 +5447,7 @@ function boot(){
       const which=Math.abs(v-clip.near)<=Math.abs(v-clip.far)?'near':'far';
       setClipValue(which,v);
     });
-    renderClipUI();
+    if(!syncClipFromViewer({resetHome:true}))renderClipUI();
   }
 
   // ---------- Mouse (ported) ----------
@@ -6125,7 +6170,7 @@ function installFrameSyncedMotion(targetViewer){
   $('repSolvent').onchange=function(){ const rep=$('repSolvent').value; runStyleChange('Applying solvent '+rep+'...',rep,function(){ return setSolventStyle(rep); },buildHierarchy); };
   $('repOther').onchange=function(){ const rep=$('repOther').value; runStyleChange('Applying other '+rep+'...',rep,function(){ return setOtherStyle(rep); },buildHierarchy); };
   bindClipControl();
-  $('clipReset').onclick=function(){ clip.near=-100; clip.far=100; applyClip(); };
+  $('clipReset').onclick=function(){ clip.near=CLIP_DEFAULT_NEAR; clip.far=CLIP_DEFAULT_FAR; applyClip(); };
   $('settingsBtn').onclick=function(){ if($('settingsOverlay').style.display==='flex')closeSettings(); else openSettings(); };
   $('settingsClose').onclick=closeSettings;
   $('settingsDone').onclick=closeSettings;
