@@ -330,6 +330,7 @@ class MolWideLineLayer{
 
   resolveRuntime(viewer){
     if(this.Geometry&&this.Mesh&&this.Material)return true;
+    if(this.bootstrapRuntime(viewer))return true;
     let sample=null;
     function walk(o){
       if(sample||!o)return;
@@ -342,6 +343,35 @@ class MolWideLineLayer{
     this.Mesh=sample.constructor;
     this.Material=sample.material.constructor;
     return true;
+  }
+
+  bootstrapRuntime(viewer){
+    const api=window.$3Dmol||window['3Dmol'];
+    if(!api||!api.GLShape||!viewer||!viewer.modelGroup)return false;
+    let shape=null,sample=null;
+    function walk(o){
+      if(sample||!o)return;
+      if(o.geometry&&o.material){ sample=o; return; }
+      (o.children||[]).forEach(walk);
+    }
+    try{
+      shape=new api.GLShape({color:'#000000',opacity:0});
+      shape.addSphere({center:{x:0,y:0,z:0},radius:0.001,color:'#000000',quality:1});
+      shape.globj(viewer.modelGroup);
+      walk(shape.renderedShapeObj||shape.shapeObj);
+      if(!sample)walk(viewer.modelGroup);
+      if(!sample||!sample.geometry||!sample.material)return false;
+      this.Geometry=sample.geometry.constructor;
+      this.Mesh=sample.constructor;
+      this.Material=sample.material.constructor;
+      return true;
+    }catch(e){
+      return false;
+    }finally{
+      if(shape&&shape.removegl){
+        try{ shape.removegl(viewer.modelGroup); }catch(_){}
+      }
+    }
   }
 
   markDirty(){
