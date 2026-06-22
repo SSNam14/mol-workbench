@@ -178,7 +178,7 @@ Useful `getState()` fields:
 
 ## Interaction Index Commands
 
-The viewer builds nonbonded interaction indexes in a Web Worker per displayed entry. Completed indexes are stored on the server by structure key and reused when switching back to the same loaded molecule or adding another displayed entry.
+The viewer builds nonbonded interaction indexes in a Web Worker per displayed entry. Completed per-entry indexes are stored on the server by structure key and reused when switching back to the same loaded molecule or adding another displayed entry. Same-`loadGroup` receptor/ligand pair indexes are runtime-only because they depend on the current visible entry pairing and browser-assigned atom serials.
 
 Inspect index status:
 
@@ -194,7 +194,7 @@ Expected fields:
 - `counts`: summed precomputed interaction counts for ready displayed entries
 - `readyEntries`: number of displayed entries with ready interaction indexes
 - `totalEntries`: number of displayed entries
-- `entries`: per-entry interaction index status and counts
+- `entries`: per-entry interaction index status and counts; same-`loadGroup` receptor/ligand pair indexes appear with `type: "pair"` and `entryNames`
 
 Force a rebuild:
 
@@ -204,7 +204,7 @@ molAgent.rebuildInteractionIndex();
 
 Rendering rules:
 
-- Interaction rendering covers every displayed entry whose index is ready. Cross-entry interactions are not computed or drawn.
+- Interaction rendering covers every displayed entry whose index is ready. For multi-entry loads, eligible same-`loadGroup` protein-entry to ligand-entry pair indexes are also rendered when ready; unrelated loaded entries are not compared.
 - If a newly displayed entry has no ready index yet, indexes that are already ready remain visible while the missing entry builds in the background.
 - All nonbonded interaction guide lines are dashed.
 - A pair interaction is drawn only when both endpoint atoms are currently displayed by atom-level representation (`line`, `stick`, `sphere`, or `cpk`).
@@ -360,6 +360,8 @@ molAgent.run({
 ## Interaction Query And Display Commands
 
 Use `queryInteractions` when the user asks for already-indexed nonbonded interactions rather than raw distance neighborhoods. The command is generic: `source` and `target` use the same selector/category spec shape as `queryWithin`, and `interaction` may be `hbond`, `halogen`, `salt`, `pipi`, `pication`, `good`, `bad`, `ugly`, or `contacts`.
+
+Interaction indexes are built for each visible entry. For multi-entry files such as Glide poseviewer MAEGZ where the receptor and ligand poses are loaded as separate entries in the same `loadGroup`, the viewer also builds visible protein-entry to ligand-entry pair indexes. This lets `queryInteractions` and `showInteractions` find receptor-ligand interactions across those sibling entries without comparing unrelated loaded structures.
 
 Show only hydrogen-bond interactions touching a named ligand residue, and display the involved residues:
 
@@ -655,11 +657,14 @@ The `name` argument is an identity base, not a guaranteed final id. Every UI or 
 Load a structure that already exists on the server filesystem:
 
 ```js
-const entry = await molAgent.loadServerFile("/home/user/project/structure.cif");
-molAgent.getState().entries.find(e => e.name === entry.name);
+const loaded = await molAgent.loadServerFile("/path/on/server/structure.cif");
+const loadedEntries = Array.isArray(loaded) ? loaded : [loaded];
+molAgent.getState().entries.find(e => e.name === loadedEntries[0].name);
 ```
 
-`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. The visible `Open server` dialog is a Linux-style explorer, but agents should use `molAgent.loadServerFile(...)` or the HTTP APIs for routine loading. Both paths are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds a new unique entry to the persisted session and does not edit the original source file.
+`Open file`, `Open server`, `molAgent.loadUrl(...)`, and `molAgent.loadServerFile(...)` may load more than one viewer entry from one file. Multi-CT MAE/MAEGZ files and multi-record SDF files are split into individual entries. The JS APIs return a single entry object for single-entry files and an array for multi-entry files; normalize with `Array.isArray(...)` before targeting newly loaded entries.
+
+`Open server` and `molAgent.loadServerFile(...)` use `/api/server-files` and `/api/server-file-load`. The visible `Open server` dialog is a Linux-style explorer, but agents should use `molAgent.loadServerFile(...)` or the HTTP APIs for routine loading. Both paths are limited to the server-side roots configured by `server.py --file-root <dir>`; when no root is supplied, the server user's home directory is used. Hidden path segments are not listed or loadable, and only supported molecular structure files are shown. Loading a server file adds one or more new unique entries to the persisted session and does not edit the original source file. Entries loaded from the server filesystem keep their absolute source path as `sourcePath`, visible through `molAgent.getState().entries` and `/api/session-meta`; browser-local uploads and URL loads may not have a server-side `sourcePath`.
 
 Remove an entry from the current viewer session:
 

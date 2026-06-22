@@ -14,7 +14,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from maestro_convert import MaestroConversionError, infer_structure_format, is_maestro_format, maestro_bytes_to_pdb
+from maestro_convert import (
+    MaestroConversionError,
+    infer_structure_format,
+    is_maestro_format,
+    maestro_bytes_to_pdb,
+    maestro_bytes_to_pdb_entries,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -210,7 +216,102 @@ def list_server_files(value):
     }, None
 
 
-def load_server_file_entry(value):
+def _split_sdf_records(text):
+    records = []
+    current = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line.strip() == "$$$$":
+            record = "\n".join(current).rstrip()
+            if record.strip():
+                records.append(record + "\n$$$$\n")
+            current = []
+        else:
+            current.append(line)
+    tail = "\n".join(current).rstrip()
+    if tail.strip():
+        records.append(tail + "\n")
+    return records or [text]
+
+
+def _record_title(record):
+    for line in str(record or "").splitlines():
+        title = line.strip()
+        if title:
+            return title
+        return ""
+    return ""
+
+
+def _structure_stem(filename, suffixes):
+    name = Path(str(filename or "structure")).name or "structure"
+    lower = name.lower()
+    for suffix in suffixes:
+        if lower.endswith(suffix):
+            return name[: -len(suffix)] or "structure"
+    return Path(name).stem or name or "structure"
+
+
+def _numbered_structure_name(filename, index, total, suffix):
+    stem = _structure_stem(filename, (".mae.gz", ".maegz", ".mae", ".sdf", ".mol", ".pdb"))
+    if total <= 1:
+        return f"{stem}{suffix}"
+    return f"{stem}_{index:03d}{suffix}"
+
+
+def _numbered_entry_title(base_title, entry_title, index, total):
+    base = str(base_title or "").strip()
+    detail = str(entry_title or "").strip()
+    if total <= 1:
+        return base or detail or None
+    if detail:
+        return f"{base or 'entry'} [{index}] {detail}"
+    return f"{base or 'entry'} [{index}]"
+
+
+def _normalize_entry_list(entries):
+    out = []
+    for entry in entries:
+        normalized = normalize_entry(entry)
+        if not normalized:
+            raise MaestroConversionError("conversion_failed")
+        out.append(normalized)
+    if not out:
+        raise MaestroConversionError("conversion_failed")
+    return out
+
+
+def with_source_path(entries, path):
+    source_path = str(path.resolve())
+    return [dict(entry, sourcePath=source_path) for entry in entries]
+
+
+def _sdf_bytes_to_entries(payload, filename="", fmt=None, title=None, pdb_id=""):
+    try:
+        text = bytes(payload or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        text = bytes(payload or b"").decode("latin-1", errors="replace")
+    source_fmt = str(fmt or infer_structure_format(filename)).strip().lower() or "sdf"
+    records = _split_sdf_records(text)
+    total = len(records)
+    base_title = title or Path(str(filename or "structure")).name
+    entries = []
+    for idx, record in enumerate(records, 1):
+        entry_title = _numbered_entry_title(base_title, _record_title(record), idx, total)
+        entries.append({
+            "name": _numbered_structure_name(filename, idx, total, ".sdf" if source_fmt == "sdf" else ".mol"),
+            "title": entry_title or base_title,
+            "pdbId": pdb_id,
+            "data": record,
+            "fmt": source_fmt,
+        })
+    return _normalize_entry_list(entries), {
+        "sourceFormat": source_fmt,
+        "convertedFormat": source_fmt,
+        "entryCount": total,
+    }
+
+
+def load_server_file_entries(value):
     path, _ = resolve_server_file_path(value)
     if path is None:
         return None, "forbidden"
@@ -234,23 +335,37 @@ def load_server_file_entry(value):
     fmt = infer_structure_format(filename)
     if fmt == "psazip":
         try:
-            return convert_structure_bytes(payload, filename, fmt, filename, "")
+            entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
+            return with_source_path([entry], path), meta
         except MaestroConversionError as exc:
             return None, str(exc) or "conversion_failed"
     if is_maestro_format(fmt) or payload[:2] == b"\x1f\x8b":
         try:
-            entry, meta = convert_structure_bytes(payload, filename, fmt, filename, "")
+            entries, meta = convert_structure_bytes_entries(payload, filename, fmt, filename, "")
         except MaestroConversionError as exc:
             return None, str(exc) or "conversion_failed"
-        return entry, meta
+        return with_source_path(entries, path), meta
+    if fmt in {"sdf", "mol"}:
+        try:
+            entries, meta = _sdf_bytes_to_entries(payload, filename, fmt, filename, "")
+            return with_source_path(entries, path), meta
+        except MaestroConversionError as exc:
+            return None, str(exc) or "conversion_failed"
     try:
         data = payload.decode("utf-8")
     except UnicodeDecodeError:
         return None, "decode_failed"
-    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt})
+    entry = normalize_entry({"name": filename, "title": filename, "pdbId": "", "data": data, "fmt": fmt, "sourcePath": str(path.resolve())})
     if not entry:
         return None, "invalid_structure"
-    return entry, {"sourceFormat": fmt, "convertedFormat": fmt}
+    return [entry], {"sourceFormat": fmt, "convertedFormat": fmt, "entryCount": 1}
+
+
+def load_server_file_entry(value):
+    entries, meta = load_server_file_entries(value)
+    if not entries:
+        return None, meta
+    return entries[0], meta
 
 
 def normalize_deleted_source_serials(value):
@@ -327,6 +442,12 @@ def normalize_entry(value):
     pdb_id = str(value.get("pdbId") or "").strip()
     fmt = str(value.get("fmt") or "pdb").strip().lower() or "pdb"
     entry = {"name": name, "title": title, "pdbId": pdb_id, "data": data, "fmt": fmt}
+    source_path = str(value.get("sourcePath") or "").strip()
+    if source_path:
+        entry["sourcePath"] = source_path
+    load_group = normalize_entry_load_group(value.get("loadGroup"))
+    if load_group:
+        entry["loadGroup"] = load_group
     bond_orders = normalize_bond_orders(value.get("bondOrders"))
     if bond_orders:
         entry["bondOrders"] = bond_orders
@@ -337,6 +458,38 @@ def normalize_entry(value):
     if deleted:
         entry["deletedSourceSerials"] = deleted
     return entry
+
+
+def normalize_entry_load_group(value):
+    if not isinstance(value, dict):
+        return None
+    group_id = str(value.get("id") or value.get("name") or "").strip()
+    if not group_id:
+        return None
+    title = str(value.get("title") or value.get("label") or group_id).strip() or group_id
+    try:
+        index = max(1, int(value.get("index") or 1))
+    except (TypeError, ValueError):
+        index = 1
+    try:
+        total = max(index, int(value.get("total") or index))
+    except (TypeError, ValueError):
+        total = index
+    return {"id": group_id[:160], "title": title[:160], "index": index, "total": total}
+
+
+def apply_entry_load_group(entries, title):
+    if not isinstance(entries, list) or len(entries) <= 1:
+        return entries
+    group_title = str(title or entries[0].get("title") or entries[0].get("name") or "Multi-entry load").strip() or "Multi-entry load"
+    group_id = f"load-{int(time.time_ns())}"
+    total = len(entries)
+    out = []
+    for idx, entry in enumerate(entries, 1):
+        item = dict(entry)
+        item["loadGroup"] = {"id": group_id, "title": group_title[:160], "index": idx, "total": total}
+        out.append(item)
+    return out
 
 
 def normalize_entry_surfaces(value):
@@ -410,31 +563,50 @@ def normalize_entry_title(value):
     return title or None
 
 
+def _maestro_entry_name(filename, index, total):
+    return _numbered_structure_name(filename, index, total, ".pdb")
+
+
 def convert_structure_bytes(payload, filename="", fmt=None, title=None, pdb_id=""):
+    entries, meta = convert_structure_bytes_entries(payload, filename, fmt, title, pdb_id)
+    return entries[0], meta
+
+
+def convert_structure_bytes_entries(payload, filename="", fmt=None, title=None, pdb_id=""):
     source_fmt = infer_structure_format(filename, fmt)
     if source_fmt == "psazip":
-        return psazip_bytes_to_entry(payload, filename, title, pdb_id)
+        entry, meta = psazip_bytes_to_entry(payload, filename, title, pdb_id)
+        return [entry], {**meta, "entryCount": 1}
     if not is_maestro_format(source_fmt) and bytes(payload or b"")[:2] == b"\x1f\x8b":
         source_fmt = "maegz"
+    if source_fmt in {"sdf", "mol"}:
+        return _sdf_bytes_to_entries(payload, filename, source_fmt, title, pdb_id)
     if not is_maestro_format(source_fmt):
         raise MaestroConversionError("unsupported_format")
-    pdb_data, meta = maestro_bytes_to_pdb(payload, filename, source_fmt)
-    name = str(filename or "structure.pdb").strip() or "structure.pdb"
-    if name.lower().endswith((".maegz", ".mae.gz", ".mae")):
-        name = name.rsplit(".", 1)[0] + ".pdb"
-        if name.lower().endswith(".mae.pdb"):
-            name = name[:-8] + ".pdb"
-    entry = normalize_entry({
-        "name": name,
-        "title": title or name,
-        "pdbId": pdb_id,
-        "data": pdb_data,
-        "fmt": "pdb",
-        "bondOrders": meta.get("bondOrders"),
-    })
-    if not entry:
-        raise MaestroConversionError("conversion_failed")
-    return entry, {"sourceFormat": source_fmt, "convertedFormat": "pdb", **meta}
+    converted = maestro_bytes_to_pdb_entries(payload, filename, source_fmt)
+    total = len(converted)
+    base_title = title or Path(str(filename or "structure")).name
+    entries = []
+    atom_count = 0
+    bond_count = 0
+    for idx, (pdb_data, meta) in enumerate(converted, 1):
+        atom_count += int(meta.get("atomCount") or 0)
+        bond_count += int(meta.get("bondCount") or 0)
+        entries.append({
+            "name": _maestro_entry_name(filename, idx, total),
+            "title": _numbered_entry_title(base_title, meta.get("title"), idx, total) or base_title,
+            "pdbId": pdb_id,
+            "data": pdb_data,
+            "fmt": "pdb",
+            "bondOrders": meta.get("bondOrders"),
+        })
+    return _normalize_entry_list(entries), {
+        "sourceFormat": source_fmt,
+        "convertedFormat": "pdb",
+        "entryCount": total,
+        "atomCount": atom_count,
+        "bondCount": bond_count,
+    }
 
 
 def _psazip_read_panel_state(zipf, names):
@@ -785,10 +957,16 @@ def normalize_session(value):
         included_entries = [str(name) for name in included if str(name) in names]
     else:
         included_entries = [entry["name"] for entry in entries]
+    locked = value.get("lockedEntries")
+    locked_entries = [str(name) for name in locked if str(name) in names] if isinstance(locked, list) else []
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
     return {
         "schema": SESSION_SCHEMA,
         "entries": entries,
         "includedEntries": included_entries,
+        "lockedEntries": locked_entries,
     }
 
 
@@ -1036,7 +1214,7 @@ def legacy_last_structure_session():
     entry = normalize_entry(payload.get("entry") if isinstance(payload, dict) and "entry" in payload else payload)
     if not entry:
         return None
-    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]]})
+    return normalize_session({"entries": [entry], "includedEntries": [entry["name"]], "lockedEntries": []})
 
 
 def normalize_session_state(value, entries, fallback=None):
@@ -1049,7 +1227,15 @@ def normalize_session_state(value, entries, fallback=None):
         included_entries = [name for name in fallback.get("includedEntries", []) if name in names]
     if not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
-    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries}
+    locked = value.get("lockedEntries") if isinstance(value, dict) else None
+    if isinstance(locked, list):
+        locked_entries = [str(name) for name in locked if str(name) in names]
+    else:
+        locked_entries = [name for name in fallback.get("lockedEntries", []) if name in names]
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
+    return {"schema": SESSION_SCHEMA, "includedEntries": included_entries, "lockedEntries": locked_entries}
 
 
 def apply_session_state(session):
@@ -1063,6 +1249,7 @@ def apply_session_state(session):
         raise
     normalized = normalize_session_state(state, session.get("entries", []), session)
     session["includedEntries"] = normalized["includedEntries"]
+    session["lockedEntries"] = normalized["lockedEntries"]
     return session
 
 
@@ -1109,10 +1296,12 @@ def session_meta(session=None):
                 "title": entry.get("title", entry.get("name", "")),
                 "pdbId": entry.get("pdbId", ""),
                 "fmt": entry.get("fmt", ""),
+                "sourcePath": entry.get("sourcePath", ""),
             }
             for entry in entries
         ],
         "includedEntries": session.get("includedEntries", []) if session else [],
+        "lockedEntries": session.get("lockedEntries", []) if session else [],
     }
 
 
@@ -1142,17 +1331,24 @@ def normalize_stored_session_meta(value):
             "title": str(raw.get("title") or name).strip() or name,
             "pdbId": str(raw.get("pdbId") or "").strip(),
             "fmt": str(raw.get("fmt") or "").strip().lower(),
+            "sourcePath": str(raw.get("sourcePath") or "").strip(),
         })
     names = {entry["name"] for entry in entries}
     included = value.get("includedEntries")
     included_entries = [str(name) for name in included if str(name) in names] if isinstance(included, list) else []
     if entries and not isinstance(included, list) and not included_entries:
         included_entries = [entry["name"] for entry in entries]
+    locked = value.get("lockedEntries")
+    locked_entries = [str(name) for name in locked if str(name) in names] if isinstance(locked, list) else []
+    for name in locked_entries:
+        if name not in included_entries:
+            included_entries.append(name)
     return {
         "schema": SESSION_SCHEMA,
         "revision": session_revision(),
         "entries": entries,
         "includedEntries": included_entries,
+        "lockedEntries": locked_entries,
     }
 
 
@@ -1216,7 +1412,7 @@ def upsert_session_entry(entry, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": []}
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "lockedEntries": []}
         entries = session["entries"]
         stored_entry = dict(entry)
         existing_idx = next((idx for idx, existing in enumerate(entries) if existing.get("name") == stored_entry["name"]), None)
@@ -1228,28 +1424,66 @@ def upsert_session_entry(entry, replace=False):
         included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
         if stored_entry["name"] not in included:
             included.append(stored_entry["name"])
-        session = normalize_session({"entries": entries, "includedEntries": included})
+        session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": session.get("lockedEntries", [])})
         write_session(session)
         return session, stored_entry
 
 
-def remove_session_entry(name):
+def upsert_session_entries(new_entries, replace=False):
     with STATE_LOCK:
         session = load_session_or_legacy()
         if not session:
-            return None
-        target = str(name or "").strip()
-        entries = [entry for entry in session.get("entries", []) if entry.get("name") != target]
-        if len(entries) == len(session.get("entries", [])):
-            return session
+            session = {"schema": SESSION_SCHEMA, "entries": [], "includedEntries": [], "lockedEntries": []}
+        entries = session["entries"]
+        stored_entries = []
+        for entry in new_entries:
+            stored_entry = dict(entry)
+            existing_idx = next((idx for idx, existing in enumerate(entries) if existing.get("name") == stored_entry["name"]), None)
+            if existing_idx is not None and replace:
+                entries[existing_idx] = stored_entry
+            else:
+                stored_entry["name"] = unique_entry_name(stored_entry["name"], entries)
+                entries.append(stored_entry)
+            stored_entries.append(stored_entry)
+        included = [name for name in session.get("includedEntries", []) if any(e["name"] == name for e in entries)]
+        for stored_entry in stored_entries:
+            if stored_entry["name"] not in included:
+                included.append(stored_entry["name"])
+        session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": session.get("lockedEntries", [])})
+        write_session(session)
+        stored_names = {entry["name"] for entry in stored_entries}
+        normalized_stored = [entry for entry in session["entries"] if entry["name"] in stored_names]
+        return session, normalized_stored
+
+
+def remove_session_entry(name):
+    session, _ = remove_session_entries([name])
+    return session
+
+
+def remove_session_entries(names):
+    with STATE_LOCK:
+        session = load_session_or_legacy()
+        if not session:
+            return None, []
+        targets = {str(name or "").strip() for name in (names or [])}
+        targets.discard("")
+        if not targets:
+            return session, []
+        original_entries = session.get("entries", [])
+        entries = [entry for entry in original_entries if entry.get("name") not in targets]
+        removed = [entry for entry in original_entries if entry.get("name") in targets]
+        if not removed:
+            return session, []
         if not entries:
             clear_session()
-            return None
+            return None, removed
         names = {entry["name"] for entry in entries}
         included = [entry_name for entry_name in session.get("includedEntries", []) if entry_name in names]
-        next_session = normalize_session({"entries": entries, "includedEntries": included})
+        locked = [entry_name for entry_name in session.get("lockedEntries", []) if entry_name in names]
+        next_session = normalize_session({"entries": entries, "includedEntries": included, "lockedEntries": locked})
         write_session(next_session)
-        return next_session
+        return next_session, removed
 
 
 def update_session_entry_title(name, title):
@@ -1280,7 +1514,7 @@ def update_session_state(value):
             return None
         entries = session.get("entries", [])
         state = normalize_session_state(value, entries, session)
-        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"]})
+        next_session = normalize_session({"entries": entries, "includedEntries": state["includedEntries"], "lockedEntries": state["lockedEntries"]})
         write_session_state(next_session)
         write_session_meta(next_session)
         return next_session
@@ -1391,6 +1625,9 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/session-entry-title":
             self.handle_put_session_entry_title()
+            return
+        if path == "/api/session-entries-delete":
+            self.handle_delete_session_entries()
             return
         if path == "/api/session-state":
             self.handle_put_session_state()
@@ -1652,18 +1889,27 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             self.send_json(400, {"error": "invalid_request"})
             return
-        entry, meta = load_server_file_entry(payload.get("path"))
-        if not entry:
+        requested_path = payload.get("path")
+        loaded_entries, meta = load_server_file_entries(requested_path)
+        if not loaded_entries:
             error = meta or "invalid_structure"
             status = 403 if error in {"forbidden", "permission_denied"} else 413 if error == "invalid_body_size" else 400
             self.send_json(status, {"error": error})
             return
+        loaded_entries = apply_entry_load_group(loaded_entries, Path(str(requested_path or "Multi-entry load")).name)
         try:
-            session, stored_entry = upsert_session_entry(entry)
+            session, stored_entries = upsert_session_entries(loaded_entries)
         except (OSError, json.JSONDecodeError):
             self.send_json(500, {"error": "state_write_failed"})
             return
-        self.send_json(200, {"ok": True, "entry": stored_entry, "entries": len(session["entries"]), "session": session_meta(session), **meta})
+        self.send_json(200, {
+            "ok": True,
+            "entry": stored_entries[0] if stored_entries else None,
+            "loadedEntries": stored_entries,
+            "entries": len(session["entries"]),
+            "session": session_meta(session),
+            **meta,
+        })
 
     def handle_convert_structure(self):
         payload = self.read_raw_body(MAX_STRUCTURE_BYTES)
@@ -1675,14 +1921,14 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         fmt = (query.get("fmt") or [""])[0]
         pdb_id = (query.get("pdbId") or [""])[0]
         try:
-            entry, meta = convert_structure_bytes(payload, name, fmt, title, pdb_id)
+            entries, meta = convert_structure_bytes_entries(payload, name, fmt, title, pdb_id)
         except MaestroConversionError as exc:
             error = str(exc) or "conversion_failed"
             client_errors = {"unsupported_format", "invalid_maegz", "invalid_psazip", "psazip_no_structure", "psazip_no_surface", "psazip_structure_decode_failed", "no_atoms"}
             status = 400 if error in client_errors else 500
             self.send_json(status, {"error": error})
             return
-        self.send_json(200, {"ok": True, "entry": entry, **meta})
+        self.send_json(200, {"ok": True, "entry": entries[0] if entries else None, "entries": entries, **meta})
 
     def handle_delete_session_entry(self, name):
         if not name:
@@ -1694,6 +1940,30 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": "state_write_failed"})
             return
         self.send_json(200, {"ok": True, "entries": len(session["entries"]) if session else 0, "session": session_meta(session)})
+
+    def handle_delete_session_entries(self):
+        payload = self.read_json_body(MAX_SESSION_STATE_BYTES)
+        if payload is None:
+            return
+        raw_names = payload.get("names") if isinstance(payload, dict) else payload
+        if not isinstance(raw_names, list):
+            self.send_json(400, {"error": "invalid_entry_names"})
+            return
+        names = [str(name or "").strip() for name in raw_names if str(name or "").strip()]
+        if not names:
+            self.send_json(400, {"error": "invalid_entry_names"})
+            return
+        try:
+            session, removed = remove_session_entries(names)
+        except (OSError, json.JSONDecodeError):
+            self.send_json(500, {"error": "state_write_failed"})
+            return
+        self.send_json(200, {
+            "ok": True,
+            "removedEntries": [{"name": entry.get("name", ""), "title": entry.get("title", entry.get("name", ""))} for entry in removed],
+            "entries": len(session["entries"]) if session else 0,
+            "session": session_meta(session),
+        })
 
     def handle_get_last_structure(self):
         try:

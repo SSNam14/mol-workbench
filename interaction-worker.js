@@ -88,6 +88,9 @@ function centroid(list){
 }
 function serialKey(a,b){ const x=Number(a.serial)||0,y=Number(b.serial)||0; return x<y?x+':'+y:y+':'+x; }
 function vdwOf(a){ return VDW[elemOf(a)]||1.7; }
+function pairAllowed(a,b,crossEntryOnly){
+  return !crossEntryOnly||normText(a&&a.entry)!==normText(b&&b.entry);
+}
 
 function buildMaps(atoms){
   const bySerial=new Map(),bondMap=new Map(),byIndex=new Map();
@@ -202,13 +205,14 @@ function acceptorAngleOk(donorPoint,acceptor,maps,minAngle,maxAngle){
     return ang>=minAngle&&ang<=maxAngle;
   });
 }
-function detectHBonds(atoms,maps,criteria){
+function detectHBonds(atoms,maps,criteria,crossEntryOnly){
   const c=criteria.hbond,hAtoms=atoms.filter(a=>hDonorHeavy(a,maps)),acceptors=atoms.filter(isHbondAcceptor),out=[];
   const hBySerial=new Map();
   hAtoms.forEach(h=>hBySerial.set(h.serial,hDonorHeavy(h,maps)));
   gridPairs(hAtoms,acceptors,c.indexMaxDistance||c.maxDistance,0,function(h,a){
     const donor=hBySerial.get(h.serial);
     if(!donor||donor.serial===a.serial)return false;
+    if(!pairAllowed(donor,a,crossEntryOnly))return false;
     if(covalentWithin(donor,a,maps,3))return false;
     if(angleDeg(donor,h,a)<c.minDonorAngle)return false;
     if(!acceptorAngleOk(h,a,maps,c.minAcceptorAngle,c.maxAcceptorAngle))return false;
@@ -219,13 +223,14 @@ function detectHBonds(atoms,maps,criteria){
   });
   return out;
 }
-function detectHalogen(atoms,maps,criteria){
+function detectHalogen(atoms,maps,criteria,crossEntryOnly){
   const c=criteria.halogen,halogens=atoms.filter(a=>['CL','BR','I'].includes(elemOf(a))),acceptors=atoms.filter(isHbondAcceptor),out=[];
   const alpha=new Map();
   halogens.forEach(x=>alpha.set(x.serial,bondedAtoms(x,maps).find(a=>elemOf(a)!=='H')||null));
   gridPairs(halogens,acceptors,c.maxDistance,0,function(x,a){
     const base=alpha.get(x.serial);
     if(!base||residueKey(x)===residueKey(a))return false;
+    if(!pairAllowed(x,a,crossEntryOnly))return false;
     if(covalentWithin(x,a,maps,3))return false;
     if(angleDeg(base,x,a)<c.minDonorAngle)return false;
     if(!acceptorAngleOk(x,a,maps,c.minAcceptorAngle,c.maxAcceptorAngle))return false;
@@ -233,9 +238,10 @@ function detectHalogen(atoms,maps,criteria){
   }).forEach(p=>out.push({a:p[0].serial,b:p[1].serial,distance:p[2],ca:category(p[0]),cb:category(p[1]),ra:residueKey(p[0]),rb:residueKey(p[1])}));
   return out;
 }
-function detectSalt(atoms,maps,criteria,firstResi){
+function detectSalt(atoms,maps,criteria,firstResi,crossEntryOnly){
   const c=criteria.salt,cats=atoms.filter(a=>isCation(a,firstResi)),anis=atoms.filter(isAnion),out=[];
   gridPairs(anis,cats,c.indexCutoff||c.cutoff,0,function(a,b){
+    if(!pairAllowed(a,b,crossEntryOnly))return false;
     const sameResidue=residueKey(a)===residueKey(b);
     const sameLigandSalt=sameResidue&&a.hetflag&&b.hetflag&&resName(a)==='LBN'&&resName(b)==='LBN';
     if(sameLigandSalt)return true;
@@ -272,11 +278,12 @@ function ringPlaneAngle(a,b){
   const cos=Math.max(-1,Math.min(1,Math.abs(dot(a.normal,b.normal))));
   return Math.acos(cos)*180/Math.PI;
 }
-function detectPiCation(rings,atoms,criteria,firstResi){
+function detectPiCation(rings,atoms,criteria,firstResi,crossEntryOnly){
   const c=criteria.pication,cats=atoms.filter(a=>isCation(a,firstResi)),out=[];
   rings.forEach(r=>{
     cats.forEach(cat=>{
       if(r.residue===residueKey(cat))return;
+      if(!pairAllowed(r.atom,cat,crossEntryOnly))return;
       const d=dist(r.center,cat);
       if(d>c.maxDistance)return;
       const ang=faceAngle(r,cat);
@@ -286,11 +293,12 @@ function detectPiCation(rings,atoms,criteria,firstResi){
   });
   return out;
 }
-function detectPiPi(rings,criteria){
+function detectPiPi(rings,criteria,crossEntryOnly){
   const c=criteria.pipi,out=[];
   for(let i=0;i<rings.length;i++)for(let j=i+1;j<rings.length;j++){
     const a=rings[i],b=rings[j];
     if(a.residue===b.residue)continue;
+    if(!pairAllowed(a.atom,b.atom,crossEntryOnly))continue;
     const d=dist(a.center,b.center),ang=ringPlaneAngle(a,b);
     const face=d<=c.faceMaxDistance&&ang<=c.faceMaxAngle;
     const edge=d<=c.edgeMaxDistance&&ang>=c.edgeMinAngle;
@@ -299,9 +307,10 @@ function detectPiPi(rings,criteria){
   }
   return out;
 }
-function detectContacts(atoms,maps,criteria){
+function detectContacts(atoms,maps,criteria,crossEntryOnly){
   const c=criteria.contact,heavy=atoms.filter(a=>elemOf(a)!=='H'&&!isWater(a)),out={good:[],bad:[],ugly:[]};
   gridPairs(heavy,heavy,c.maxDistance,c.minDistance,function(a,b){
+    if(!pairAllowed(a,b,crossEntryOnly))return false;
     return residueKey(a)!==residueKey(b)&&!covalentWithin(a,b,maps,3);
   },c.maxInteractions).forEach(p=>{
     const ratio=p[2]/(vdwOf(p[0])+vdwOf(p[1]));
@@ -317,13 +326,14 @@ function buildIndex(payload){
   const started=Date.now(),atoms=(payload.atoms||[]).filter(a=>Number.isFinite(a.x)&&Number.isFinite(a.y)&&Number.isFinite(a.z)&&a.serial!=null);
   buildProteinResidueLike(atoms);
   const criteria=criteriaWith(payload.criteria),maps=buildMaps(atoms),firstResi=firstResiduesByChain(atoms),rings=aromaticRings(atoms);
+  const crossEntryOnly=payload.crossEntryOnly===true;
   const interactions={
-    hbond:detectHBonds(atoms,maps,criteria),
-    halogen:detectHalogen(atoms,maps,criteria),
-    salt:detectSalt(atoms,maps,criteria,firstResi),
-    pipi:detectPiPi(rings,criteria),
-    pication:detectPiCation(rings,atoms,criteria,firstResi),
-    contacts:detectContacts(atoms,maps,criteria)
+    hbond:detectHBonds(atoms,maps,criteria,crossEntryOnly),
+    halogen:detectHalogen(atoms,maps,criteria,crossEntryOnly),
+    salt:detectSalt(atoms,maps,criteria,firstResi,crossEntryOnly),
+    pipi:detectPiPi(rings,criteria,crossEntryOnly),
+    pication:detectPiCation(rings,atoms,criteria,firstResi,crossEntryOnly),
+    contacts:detectContacts(atoms,maps,criteria,crossEntryOnly)
   };
   return {jobId:payload.jobId,criteria,elapsedMs:Date.now()-started,atoms:atoms.length,rings:rings.length,interactions};
 }

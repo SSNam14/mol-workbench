@@ -66,6 +66,15 @@ class MaestroConversionTests(unittest.TestCase):
         self.assertEqual(meta["atomCount"], 2)
         self.assertTrue(pdb.endswith("END\n"))
 
+    def test_maestro_multi_ct_returns_multiple_entries(self):
+        first = SIMPLE_MAE.replace(b'"simple"', b'"first"')
+        second = SIMPLE_MAE.replace(b'"simple"', b'"second"')
+        entries = maestro_convert.maestro_bytes_to_pdb_entries(first + second, "bundle.maegz", "mae")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0][1]["title"], "first")
+        self.assertEqual(entries[1][1]["title"], "second")
+        self.assertIn("ATOM      1  CA  ALA A   7", entries[1][0])
+
     def test_server_converter_returns_pdb_entry(self):
         entry, meta = server.convert_structure_bytes(SIMPLE_MAE, "simple.mae", "mae", "Simple", "")
         self.assertEqual(entry["fmt"], "pdb")
@@ -78,6 +87,37 @@ class MaestroConversionTests(unittest.TestCase):
         entry, meta = server.convert_structure_bytes(gzip.compress(SIMPLE_MAE), "uploaded", "", "Uploaded", "")
         self.assertEqual(entry["fmt"], "pdb")
         self.assertEqual(meta["sourceFormat"], "maegz")
+
+    def test_server_converter_returns_multi_maestro_entries(self):
+        first = SIMPLE_MAE.replace(b'"simple"', b'"first"')
+        second = SIMPLE_MAE.replace(b'"simple"', b'"second"')
+        entries, meta = server.convert_structure_bytes_entries(gzip.compress(first + second), "bundle.maegz", "maegz", "Bundle", "")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(meta["entryCount"], 2)
+        self.assertEqual(entries[0]["name"], "bundle_001.pdb")
+        self.assertEqual(entries[1]["name"], "bundle_002.pdb")
+        self.assertEqual(entries[0]["title"], "Bundle [1] first")
+        self.assertEqual(entries[1]["title"], "Bundle [2] second")
+
+    def test_server_converter_returns_multi_sdf_entries(self):
+        payload = b"""mol-one
+  viewer
+
+  0  0  0  0  0  0            999 V2000
+M  END
+$$$$
+mol-two
+  viewer
+
+  0  0  0  0  0  0            999 V2000
+M  END
+$$$$
+"""
+        entries, meta = server.convert_structure_bytes_entries(payload, "ligands.sdf", "sdf", "Ligands", "")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(meta["entryCount"], 2)
+        self.assertEqual(entries[0]["name"], "ligands_001.sdf")
+        self.assertEqual(entries[1]["title"], "Ligands [2] mol-two")
 
     def test_server_converter_loads_psazip_surface_mesh(self):
         try:

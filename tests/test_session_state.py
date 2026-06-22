@@ -35,6 +35,12 @@ class SessionStateTests(unittest.TestCase):
         session = server.normalize_session(payload)
         self.assertEqual(session["includedEntries"], ["one", "two"])
 
+    def test_normalize_session_preserves_locked_entries_as_included(self):
+        payload = {"entries": self.entries, "includedEntries": ["one"], "lockedEntries": ["two", "missing"]}
+        session = server.normalize_session(payload)
+        self.assertEqual(session["includedEntries"], ["one", "two"])
+        self.assertEqual(session["lockedEntries"], ["two"])
+
     def test_normalize_entry_preserves_deleted_source_serials(self):
         normalized = server.normalize_entry({
             **entry("one"),
@@ -42,10 +48,47 @@ class SessionStateTests(unittest.TestCase):
         })
         self.assertEqual(normalized["deletedSourceSerials"], ["2", "3"])
 
+    def test_normalize_entry_preserves_load_group(self):
+        normalized = server.normalize_entry({
+            **entry("one"),
+            "loadGroup": {"id": "load-1", "title": "multi.maegz", "index": 2, "total": 5},
+        })
+        self.assertEqual(normalized["loadGroup"], {"id": "load-1", "title": "multi.maegz", "index": 2, "total": 5})
+
+    def test_normalize_entry_preserves_source_path(self):
+        normalized = server.normalize_entry({
+            **entry("one"),
+            "sourcePath": "/tmp/one.pdb",
+        })
+        self.assertEqual(normalized["sourcePath"], "/tmp/one.pdb")
+
+    def test_apply_entry_load_group_marks_multi_entry_loads(self):
+        grouped = server.apply_entry_load_group([entry("one"), entry("two")], "multi.maegz")
+        self.assertEqual(grouped[0]["loadGroup"]["title"], "multi.maegz")
+        self.assertEqual(grouped[0]["loadGroup"]["total"], 2)
+        self.assertEqual(grouped[1]["loadGroup"]["index"], 2)
+        self.assertEqual(grouped[0]["loadGroup"]["id"], grouped[1]["loadGroup"]["id"])
+
+    def test_session_meta_includes_source_path(self):
+        item = {**entry("one"), "sourcePath": "/tmp/one.pdb"}
+        meta = server.session_meta({"entries": [item], "includedEntries": ["one"], "lockedEntries": []})
+        self.assertEqual(meta["entries"][0]["sourcePath"], "/tmp/one.pdb")
+
     def test_normalize_session_state_preserves_explicit_empty_included_entries(self):
         fallback = {"includedEntries": ["one", "two"]}
         state = server.normalize_session_state({"includedEntries": []}, self.entries, fallback)
         self.assertEqual(state["includedEntries"], [])
+
+    def test_normalize_session_state_preserves_explicit_empty_locked_entries(self):
+        fallback = {"includedEntries": ["one"], "lockedEntries": ["two"]}
+        state = server.normalize_session_state({"lockedEntries": []}, self.entries, fallback)
+        self.assertEqual(state["includedEntries"], ["one"])
+        self.assertEqual(state["lockedEntries"], [])
+
+    def test_normalize_session_state_keeps_locked_entries_included(self):
+        state = server.normalize_session_state({"includedEntries": ["one"], "lockedEntries": ["two"]}, self.entries)
+        self.assertEqual(state["includedEntries"], ["one", "two"])
+        self.assertEqual(state["lockedEntries"], ["two"])
 
     def test_normalize_session_state_missing_included_entries_uses_fallback(self):
         fallback = {"includedEntries": ["two"]}
@@ -64,6 +107,16 @@ class SessionStateTests(unittest.TestCase):
         }
         state = server.normalize_stored_session_meta(meta)
         self.assertEqual(state["includedEntries"], [])
+
+    def test_normalize_stored_session_meta_preserves_locked_entries(self):
+        meta = {
+            "entries": [{"name": "one", "title": "one", "pdbId": "", "fmt": "pdb"}, {"name": "two", "title": "two", "pdbId": "", "fmt": "pdb"}],
+            "includedEntries": ["one"],
+            "lockedEntries": ["two"],
+        }
+        state = server.normalize_stored_session_meta(meta)
+        self.assertEqual(state["includedEntries"], ["one", "two"])
+        self.assertEqual(state["lockedEntries"], ["two"])
 
     def test_normalize_preferences_preserves_action_preferences(self):
         prefs = server.normalize_preferences({
@@ -132,6 +185,7 @@ class SessionStateTests(unittest.TestCase):
                 entry, meta = server.load_server_file_entry(str(pdb))
                 self.assertEqual(entry["name"], "one.pdb")
                 self.assertEqual(entry["fmt"], "pdb")
+                self.assertEqual(entry["sourcePath"], str(pdb.resolve()))
                 self.assertEqual(meta["sourceFormat"], "pdb")
             finally:
                 server.SERVER_FILE_ROOTS = original_roots
@@ -204,6 +258,43 @@ class SessionStateTests(unittest.TestCase):
                 self.assertEqual(renamed["title"], "second copy")
                 self.assertEqual(session["entries"][0]["name"], "same")
                 self.assertEqual(session["entries"][0]["title"], "second copy")
+            finally:
+                for key, value in originals.items():
+                    setattr(server, key, value)
+
+    def test_remove_session_entries_persists_batch_delete(self):
+        originals = {
+            "STATE_DIR": server.STATE_DIR,
+            "LAST_STRUCTURE_PATH": server.LAST_STRUCTURE_PATH,
+            "SESSION_PATH": server.SESSION_PATH,
+            "SESSION_STATE_PATH": server.SESSION_STATE_PATH,
+            "SESSION_META_PATH": server.SESSION_META_PATH,
+            "PREFERENCES_PATH": server.PREFERENCES_PATH,
+            "INTERACTION_INDEX_DIR": server.INTERACTION_INDEX_DIR,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.STATE_DIR = root
+            server.LAST_STRUCTURE_PATH = root / "last_structure.json"
+            server.SESSION_PATH = root / "session.json"
+            server.SESSION_STATE_PATH = root / "session_state.json"
+            server.SESSION_META_PATH = root / "session_meta.json"
+            server.PREFERENCES_PATH = root / "preferences.json"
+            server.INTERACTION_INDEX_DIR = root / "interaction_indexes"
+            try:
+                session = server.normalize_session({
+                    "entries": [entry("one"), entry("two"), entry("three")],
+                    "includedEntries": ["one", "two", "three"],
+                    "lockedEntries": ["two"],
+                })
+                server.write_session(session)
+                next_session, removed = server.remove_session_entries(["two", "missing"])
+                self.assertEqual([item["name"] for item in removed], ["two"])
+                self.assertEqual([item["name"] for item in next_session["entries"]], ["one", "three"])
+                self.assertEqual(next_session["includedEntries"], ["one", "three"])
+                self.assertEqual(next_session["lockedEntries"], [])
+                reloaded = server.load_session_or_legacy()
+                self.assertEqual([item["name"] for item in reloaded["entries"]], ["one", "three"])
             finally:
                 for key, value in originals.items():
                     setattr(server, key, value)

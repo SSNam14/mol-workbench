@@ -6,6 +6,7 @@ import re
 
 MAESTRO_FORMATS = {"mae", "maegz", "mae.gz"}
 _TABLE_RE = re.compile(r"^([A-Za-z0-9_]+)\[(\d+)\]\s*\{\s*$")
+_CT_RE = re.compile(r"^f_m_ct\b.*\{\s*$")
 _EMPTY_VALUES = {"", "<>", "?"}
 _STANDARD_RESIDUES = {
     "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "HID", "HIE", "HIP",
@@ -102,6 +103,77 @@ def tokenize_maestro_line(line):
             i += 1
         tokens.append(text[start:i])
     return tokens
+
+
+def _brace_delta(line):
+    delta = 0
+    quoted = False
+    escaped = False
+    for ch in line:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quoted:
+            escaped = True
+            continue
+        if ch == '"':
+            quoted = not quoted
+            continue
+        if quoted:
+            continue
+        if ch == "{":
+            delta += 1
+        elif ch == "}":
+            delta -= 1
+    return delta
+
+
+def iter_maestro_ct_blocks(text):
+    lines = text.splitlines()
+    current = None
+    depth = 0
+    for line in lines:
+        stripped = line.strip()
+        if current is None:
+            if _CT_RE.match(stripped):
+                current = [line]
+                depth = _brace_delta(line)
+            continue
+        current.append(line)
+        depth += _brace_delta(line)
+        if depth <= 0:
+            yield "\n".join(current) + "\n"
+            current = None
+            depth = 0
+
+
+def maestro_ct_title(text):
+    columns = []
+    in_schema = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _TABLE_RE.match(stripped):
+            break
+        if stripped == ":::":
+            in_schema = True
+            continue
+        if not in_schema:
+            if stripped == "}" or _CT_RE.match(stripped):
+                continue
+            columns.append(stripped)
+            continue
+        row = tokenize_maestro_line(stripped)
+        if not row:
+            continue
+        if "s_m_title" in columns:
+            offset = 1 if len(row) >= len(columns) + 1 else 0
+            idx = columns.index("s_m_title") + offset
+            if idx < len(row):
+                return _clean(row[idx])
+        return ""
+    return ""
 
 
 def iter_maestro_tables(text):
@@ -360,5 +432,28 @@ def maestro_text_to_pdb(text):
     return "\n".join(lines) + "\n", {"atomCount": len(atoms), "bondCount": len(bonds), "bondOrders": bond_orders}
 
 
+def maestro_text_to_pdb_entries(text):
+    blocks = list(iter_maestro_ct_blocks(text)) or [text]
+    entries = []
+    for block in blocks:
+        try:
+            pdb, meta = maestro_text_to_pdb(block)
+        except MaestroConversionError as exc:
+            if str(exc) == "no_atoms":
+                continue
+            raise
+        title = maestro_ct_title(block)
+        if title:
+            meta = {**meta, "title": title}
+        entries.append((pdb, meta))
+    if not entries:
+        raise MaestroConversionError("no_atoms")
+    return entries
+
+
 def maestro_bytes_to_pdb(payload, filename="", fmt=None):
-    return maestro_text_to_pdb(decode_maestro_bytes(payload, filename, fmt))
+    return maestro_text_to_pdb_entries(decode_maestro_bytes(payload, filename, fmt))[0]
+
+
+def maestro_bytes_to_pdb_entries(payload, filename="", fmt=None):
+    return maestro_text_to_pdb_entries(decode_maestro_bytes(payload, filename, fmt))
