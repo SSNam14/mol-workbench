@@ -63,6 +63,11 @@ function boot(){
   const LARGE_SELECTION_EXACT_HIGHLIGHT_LIMIT = 1500;
   const LARGE_SELECTION_REPRESENTATIVE_ATOM_LIMIT = 600;
   const HUGE_FIT_ATOM_LIMIT = 100000;
+  const VISUAL_FIT_PADDING = 1.08;
+  const MIN_SELECTION_VISUAL_SPAN = 12;
+  const MIN_SELECTION_WORKSPACE_FRACTION = 0.08;
+  const MAX_SELECTION_MIN_VISUAL_SPAN = 40;
+  const NEARBY_SELECTION_RADIUS = 5;
   const SELECTION_DRAW_BUDGET_MS = 10;
   const LARGE_INTERACTION_INDEX_ATOM_LIMIT = 100000;
   const SELECTOR_SPECIAL_KEYS = new Set(['not','or','and']);
@@ -90,6 +95,8 @@ function boot(){
   let hierarchyRows = [];
   let hierarchySelectionAnchorKey = '';
   let hierarchyContextMenu = null;
+  const undoStack = [];
+  const MAX_UNDO_STACK = 20;
   let wideLineLayer = null;
   let interactionShapes = [];
   let interactionWideLines = [];
@@ -492,6 +499,7 @@ function boot(){
     session.entries.forEach(e=>entries.push(e));
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
     session.entries.forEach(e=>{ entryChecked[e.name]=session.includedEntries.includes(e.name); });
+    clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries(opts.realtime?{preserveView:true,zoom:false}:{zoom:true});
     return session;
@@ -500,6 +508,7 @@ function boot(){
     disposeAllEntryRecords();
     entries.splice(0,entries.length);
     Object.keys(entryChecked).forEach(k=>delete entryChecked[k]);
+    clearUndoStack();
     resetDisplayRulesForStructure();
     rebuildDisplayedEntries({preserveView:true,zoom:false});
   }
@@ -1873,6 +1882,12 @@ function boot(){
     catch(e){ try{ viewerEl.focus(); }catch(_){} }
   }
   function visibleAtomSelector(){ const serials=serialsForAtoms(atoms); return serials.length?{serial:serials}:{}; }
+  function workspaceFitAtoms(){
+    const rendered=atoms.filter(isAtomRenderedForFit);
+    if(rendered.length)return rendered;
+    const visible=atoms.filter(isAtomVisibleNow);
+    return visible.length?visible:atoms;
+  }
   function hiddenCachedAtomCount(){
     let n=0;
     entryModelCache.forEach((record,name)=>{ if(entryChecked[name]===false&&record&&record.atoms)n+=record.atoms.length; });
@@ -1956,6 +1971,117 @@ function boot(){
     if(typeof p.set==='function')p.set(x,y,z);
     else{ p.x=x; p.y=y; p.z=z; }
   }
+  function viewerRotationQuaternion(){
+    const q=viewer&&viewer.rotationGroup&&viewer.rotationGroup.quaternion;
+    return q||{x:0,y:0,z:0,w:1};
+  }
+  function rotateVectorByQuaternion(v,q){
+    q=q||viewerRotationQuaternion();
+    const x=Number(v&&v.x)||0,y=Number(v&&v.y)||0,z=Number(v&&v.z)||0;
+    const qx=Number(q.x)||0,qy=Number(q.y)||0,qz=Number(q.z)||0,qw=q.w==null?1:Number(q.w)||0;
+    const tx=2*(qy*z-qz*y),ty=2*(qz*x-qx*z),tz=2*(qx*y-qy*x);
+    return {
+      x:x+qw*tx+(qy*tz-qz*ty),
+      y:y+qw*ty+(qz*tx-qx*tz),
+      z:z+qw*tz+(qx*ty-qy*tx)
+    };
+  }
+  function inverseRotateVectorByQuaternion(v,q){
+    q=q||viewerRotationQuaternion();
+    return rotateVectorByQuaternion(v,{x:-(Number(q.x)||0),y:-(Number(q.y)||0),z:-(Number(q.z)||0),w:q.w==null?1:Number(q.w)||0});
+  }
+  function emptyVisualBounds(){
+    return {minX:Infinity,minY:Infinity,minZ:Infinity,maxX:-Infinity,maxY:-Infinity,maxZ:-Infinity,count:0};
+  }
+  function addVisualPoint(bounds,p){
+    const x=Number(p&&p.x),y=Number(p&&p.y),z=Number(p&&p.z);
+    if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z))return;
+    if(x<bounds.minX)bounds.minX=x; if(y<bounds.minY)bounds.minY=y; if(z<bounds.minZ)bounds.minZ=z;
+    if(x>bounds.maxX)bounds.maxX=x; if(y>bounds.maxY)bounds.maxY=y; if(z>bounds.maxZ)bounds.maxZ=z;
+    bounds.count++;
+  }
+  function finishVisualBounds(bounds){
+    if(!bounds||!bounds.count)return null;
+    bounds.center={x:(bounds.minX+bounds.maxX)/2,y:(bounds.minY+bounds.maxY)/2,z:(bounds.minZ+bounds.maxZ)/2};
+    bounds.spanX=Math.max(0,bounds.maxX-bounds.minX);
+    bounds.spanY=Math.max(0,bounds.maxY-bounds.minY);
+    bounds.spanZ=Math.max(0,bounds.maxZ-bounds.minZ);
+    return bounds;
+  }
+  function extentCorners(box){
+    if(!box)return [];
+    return [
+      {x:box.minX,y:box.minY,z:box.minZ},{x:box.minX,y:box.minY,z:box.maxZ},
+      {x:box.minX,y:box.maxY,z:box.minZ},{x:box.minX,y:box.maxY,z:box.maxZ},
+      {x:box.maxX,y:box.minY,z:box.minZ},{x:box.maxX,y:box.minY,z:box.maxZ},
+      {x:box.maxX,y:box.maxY,z:box.minZ},{x:box.maxX,y:box.maxY,z:box.maxZ}
+    ];
+  }
+  function visualExtentForAtoms(list){
+    const q=viewerRotationQuaternion(),bounds=emptyVisualBounds();
+    (list||[]).forEach(a=>addVisualPoint(bounds,rotateVectorByQuaternion(a,q)));
+    return finishVisualBounds(bounds);
+  }
+  function visualExtentForBoxes(boxes){
+    const q=viewerRotationQuaternion(),bounds=emptyVisualBounds();
+    (boxes||[]).forEach(box=>extentCorners(box).forEach(p=>addVisualPoint(bounds,rotateVectorByQuaternion(p,q))));
+    return finishVisualBounds(bounds);
+  }
+  function workspaceVisualExtent(targetAtoms){
+    if(targetAtoms&&targetAtoms.length&&targetAtoms.length<HUGE_FIT_ATOM_LIMIT)return visualExtentForAtoms(targetAtoms);
+    if(!displayStateHasFitVisibilityOverrides()){
+      const box=visualExtentForBoxes(visibleEntryRecords().map(record=>record.extent));
+      if(box)return box;
+    }
+    return visualExtentForAtoms(targetAtoms||workspaceFitAtoms());
+  }
+  function viewerAspectRatio(){
+    const w=Number(viewer&&viewer.WIDTH)||viewerEl.clientWidth||1;
+    const h=Number(viewer&&viewer.HEIGHT)||viewerEl.clientHeight||1;
+    return Math.max(0.1,w/Math.max(1,h));
+  }
+  function visualFitSpan(box){
+    if(!box)return 0;
+    return Math.max(Number(box.spanY)||0,(Number(box.spanX)||0)/viewerAspectRatio(),1);
+  }
+  function minimumSelectionVisualSpan(workspaceBox){
+    const workspaceSpan=visualFitSpan(workspaceBox);
+    const relative=workspaceSpan?workspaceSpan*MIN_SELECTION_WORKSPACE_FRACTION:0;
+    return Math.min(MAX_SELECTION_MIN_VISUAL_SPAN,Math.max(MIN_SELECTION_VISUAL_SPAN,relative));
+  }
+  function setViewerPositionFromVisualCenter(center){
+    const modelPos=inverseRotateVectorByQuaternion({x:-(center&&center.x||0),y:-(center&&center.y||0),z:-(center&&center.z||0)});
+    setViewerModelPosition(modelPos.x,modelPos.y,modelPos.z);
+  }
+  function fitVisualAtoms(targetAtoms,opts){
+    opts=opts||{};
+    if(!viewer||!targetAtoms||!targetAtoms.length)return false;
+    const targetBox=opts.visualBox||visualExtentForAtoms(targetAtoms);
+    if(!targetBox)return false;
+    const workspaceBox=opts.workspaceVisualBox||workspaceVisualExtent();
+    const fov=Number(viewer.camera&&viewer.camera.fov)||20;
+    const cameraZ=Number(viewer.CAMERA_Z)||0;
+    const minZoom=Number(viewer.config&&viewer.config.minimumZoomToDistance)||5;
+    let span=visualFitSpan(targetBox);
+    if(!opts.overview)span=Math.max(span,minimumSelectionVisualSpan(workspaceBox));
+    const fitSpan=Math.max(span*VISUAL_FIT_PADDING,minZoom);
+    let finalz=-(fitSpan*0.5/Math.tan(Math.PI/180*fov/2)-cameraZ);
+    if(typeof viewer.adjustZoomToLimits==='function')finalz=viewer.adjustZoomToLimits(finalz);
+    setViewerPositionFromVisualCenter(targetBox.center);
+    if(viewer.rotationGroup&&viewer.rotationGroup.position)viewer.rotationGroup.position.z=finalz;
+    const allBox=opts.allBox||visibleAtomExtent()||extentForAtoms(targetAtoms);
+    const allD=Math.max(allBox&&allBox.diag||targetBox.spanZ||span,5);
+    if(opts.overview){
+      viewer.slabNear=Math.min(-allD*2,-50);
+      viewer.slabFar=Math.max(allD*2,50);
+    }else{
+      viewer.slabNear=-allD/1.9;
+      viewer.slabFar=allD/2;
+    }
+    if(opts.focusTarget)state.focusTarget=opts.focusTarget;
+    if(opts.render!==false)presentViewer(null,false);
+    return true;
+  }
   function fastFitAtoms(targetAtoms,opts){
     opts=opts||{};
     if(!viewer||!targetAtoms||!targetAtoms.length)return false;
@@ -1986,9 +2112,12 @@ function boot(){
     opts=opts||{};
     if(!viewer||!model)return false;
     if(!atoms.length)return false;
-    if(shouldUseFastFit(atoms)){
+    const target=workspaceFitAtoms();
+    const visualBox=workspaceVisualExtent(target);
+    if(visualBox)return fitVisualAtoms(target,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},visualBox,workspaceVisualBox:visualBox,allBox:visibleAtomExtent()});
+    if(shouldUseFastFit(target)){
       const box=visibleAtomExtent();
-      return fastFitAtoms(atoms,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
+      return fastFitAtoms(target,{overview:true,render:opts.render!==false,focusTarget:{mode:'overview'},targetBox:box,allBox:box});
     }
     viewer.zoomTo(visibleAtomSelector(),opts.duration==null?0:opts.duration);
     if(opts.render!==false)presentViewer(null,true);
@@ -2001,15 +2130,89 @@ function boot(){
     const t=sel||state.selectionSel;
     if(!t){ focusOverview(); return false; }
     const target=filterAtoms(t).filter(isAtomSelectableNow);
-    if(shouldUseFastFit(target))return fastFitAtoms(target.length?target:atoms,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
+    if(!target.length){ focusOverview(); return false; }
+    const fitTarget=target.length?target:workspaceFitAtoms();
+    const visualBox=visualExtentForAtoms(fitTarget);
+    if(visualBox)return fitVisualAtoms(fitTarget,{overview:false,render:true,focusTarget:{mode:'selection'},visualBox,workspaceVisualBox:workspaceVisualExtent(),allBox:visibleAtomExtent()});
+    if(shouldUseFastFit(fitTarget))return fastFitAtoms(fitTarget,{overview:false,render:true,focusTarget:{mode:'selection'},allBox:visibleAtomExtent()});
     let s=styleSelection(t,{});
     if(s.serial&&Array.isArray(s.serial)&&s.serial.length>=atoms.length)s=visibleAtomSelector();
     viewer.zoomTo(s,450);
     state.focusTarget={mode:'selection'};
     return true;
   }
-  function toggleFocus(){ if(!state.selectionSel)return focusOverview(); if(state.focusTarget&&state.focusTarget.mode==='selection')return focusOverview(); return focus(state.selectionSel); }
-  function isFocusHotkey(e){ return !!(e&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  function toggleFocus(){ if(!state.selectionSel)return focusOverview(); return focus(state.selectionSel); }
+  function isFocusHotkey(e){ return !!(e&&!(e.ctrlKey||e.metaKey||e.altKey)&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  function isUndoHotkey(e){ return !!(e&&(e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&(e.key==='z'||e.key==='Z'||e.code==='KeyZ')); }
+  const workspaceCycleState={ligand:'',chain:''};
+  function workspaceCycleGroups(kind){
+    const out=[],shown=includedEntries();
+    shown.forEach(entry=>{
+      const record=entryModelCache.get(entry.name);
+      const entryAtoms=record&&record.atoms?record.atoms:atomsForEntry(entry);
+      const hierarchy=record&&record.hierarchy?record.hierarchy:buildEntryHierarchyCache(entry,entryAtoms);
+      const multi=shown.length>1;
+      if(kind==='ligand'){
+        (hierarchy.ligands||[]).forEach(g=>{
+          const selectable=(g.atoms||[]).filter(isAtomSelectableNow);
+          if(!selectable.length)return;
+          const label=moleculeLabel(g,multi);
+          out.push({key:'ligand\u0001'+groupVisibilityKeyFromGroup(g),label,atoms:selectable});
+        });
+      }else if(kind==='chain'){
+        (hierarchy.proteinChains||[]).forEach(g=>{
+          const selectable=(g.atoms||[]).filter(isAtomSelectableNow);
+          if(!selectable.length)return;
+          const label=hierarchyPrefix(g,multi)+'Chain '+g.chain;
+          out.push({key:'chain\u0001'+chainVisibilityKey(g.entry,g.chain),label,atoms:selectable});
+        });
+      }
+    });
+    return out;
+  }
+  function selectionExactlyAtoms(list){
+    const selected=serialsForAtoms(selectionAtoms),target=serialsForAtoms(list);
+    if(!selected.length||selected.length!==target.length)return false;
+    const seen=new Set(selected);
+    return target.every(s=>seen.has(s));
+  }
+  function cycleWorkspaceGroup(kind){
+    const groups=workspaceCycleGroups(kind);
+    if(!groups.length){ setStatus(kind==='ligand'?'No ligands in current workspace':'No protein chains in current workspace'); return false; }
+    let idx=groups.findIndex(g=>selectionExactlyAtoms(g.atoms));
+    if(idx<0)idx=groups.findIndex(g=>g.key===workspaceCycleState[kind]);
+    const next=groups[(idx+1+groups.length)%groups.length];
+    workspaceCycleState[kind]=next.key;
+    setSelection(serialSelectorForAtoms(next.atoms),{source:'workspace-cycle'});
+    setStatus((kind==='ligand'?'Ligand':'Chain')+' '+(groups.indexOf(next)+1)+'/'+groups.length+': '+next.label);
+    return true;
+  }
+  function selectionExpansionLevel(){
+    return state.selectionMode==='model'?'model':(state.selectionMode==='chain'?'chain':(state.selectionMode==='atom'?'atom':'residue'));
+  }
+  function addNearbySelection(){
+    const source=agentUniqueAtoms(selectionAtoms);
+    if(!source.length){ setStatus('Nearby: no selected atoms'); return false; }
+    const targetPool=atoms.filter(isAtomSelectableNow);
+    if(!targetPool.length){ setStatus('Nearby: no selectable atoms'); return false; }
+    const bySource=agentGroupByEntry(source), byTarget=agentGroupByEntry(targetPool), hits=[];
+    bySource.forEach((sourceList,entryName)=>{
+      const targetList=byTarget.get(entryName)||[];
+      if(!targetList.length)return;
+      hits.push.apply(hits,agentAtomsWithin(sourceList,targetList,NEARBY_SELECTION_RADIUS));
+    });
+    const expanded=agentUniqueAtoms(agentExpandHits(agentUniqueAtoms(hits),targetPool,selectionExpansionLevel()));
+    const selectedBefore=new Set(serialsForAtoms(selectionAtoms));
+    const added=expanded.filter(a=>a&&a.serial!=null&&!selectedBefore.has(a.serial));
+    const sel=serialSelectorForAtoms(expanded);
+    if(!sel||!added.length){ setStatus('Nearby '+NEARBY_SELECTION_RADIUS+'A: no additional '+selectionExpansionLevel()+' selection'); return false; }
+    setSelection(sel,{additive:true,source:'nearby-hotkey'});
+    setStatus('Nearby '+NEARBY_SELECTION_RADIUS+'A added: '+added.length.toLocaleString()+' atoms ('+selectionExpansionLevel()+')');
+    return true;
+  }
+  function isPlainWorkspaceHotkey(e,key){
+    return !!(e&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&normText(e.key).toLowerCase()===key);
+  }
 
   function isWaterAtom(a){ return waterNames.has(normUpper(a.resn)); }
   function residueKey(a){ return (a._entryName||'')+':'+(a.chain||'')+':'+a.resi+':'+normUpper(a.resn||''); }
@@ -2039,6 +2242,22 @@ function boot(){
     if(c==='other'&&state.other==='off')return false;
     if(hiddenByRules(a))return false;
     return true;
+  }
+  function isProteinBackboneFitAtom(a){
+    return backboneAtoms.has(atomName(a));
+  }
+  function isAtomRenderedForFit(a){
+    if(!isAtomSelectableNow(a)||hiddenByRules(a))return false;
+    const c=atomCategory(a);
+    if(c==='protein'){
+      if(ATOM_REPS.has(state.proteinAtoms))return true;
+      if(state.baseProtein!=='off'&&state.baseProtein!=='hide')return isProteinBackboneFitAtom(a);
+      return false;
+    }
+    if(c==='ligands')return ATOM_REPS.has(state.ligand);
+    if(c==='solvents')return ATOM_REPS.has(state.solvent);
+    if(c==='other')return ATOM_REPS.has(state.other);
+    return false;
   }
   // "Visualized atoms" = atoms currently shown at the ATOM level by the display
   // settings. This is independent of the (yellow) selection, so the Interactions button behaves the
@@ -2757,29 +2976,94 @@ function boot(){
     });
     return out;
   }
-  async function deleteHierarchySelection(){
+  function pushUndoAction(action){
+    if(!action||!action.type)return;
+    undoStack.push(action);
+    while(undoStack.length>MAX_UNDO_STACK)undoStack.shift();
+  }
+  function clearUndoStack(){ undoStack.splice(0,undoStack.length); }
+  function selectorForEntrySourceSerialItems(items){
+    const parts=[];
+    (items||[]).forEach(item=>{
+      const entryName=normText(item&&item.entryName), serials=normalizeDeletedSourceSerials(item&&item.serials);
+      if(entryName&&serials.length)parts.push({_entryName:entryName,_sourceSerial:serials});
+    });
+    if(!parts.length)return null;
+    return parts.length===1?parts[0]:{or:parts};
+  }
+  async function deleteSelectedAtoms(){
     const selected=currentSelectionToolbarAtoms();
     if(!selected.length)return;
-    const byEntry=selectedSourceSerialsByEntry(selected), updated=[];
+    const byEntry=selectedSourceSerialsByEntry(selected), updated=[], undoEntries=[];
     byEntry.forEach((serials,entryName)=>{
       const entry=entries.find(e=>e.name===entryName);
       if(!entry)return;
       const merged=new Set(normalizeDeletedSourceSerials(entry.deletedSourceSerials));
-      serials.forEach(serial=>merged.add(serial));
+      const added=[];
+      serials.forEach(serial=>{
+        if(merged.has(serial))return;
+        merged.add(serial);
+        added.push(serial);
+      });
+      if(!added.length)return;
       entry.deletedSourceSerials=normalizeDeletedSourceSerials(Array.from(merged));
       updated.push(entry);
+      undoEntries.push({entryName:entry.name,serials:normalizeDeletedSourceSerials(added)});
     });
     if(!updated.length){ setStatus('No deletable selected atoms'); return; }
+    pushUndoAction({type:'delete-atoms',entries:undoEntries});
+    const deletedCount=undoEntries.reduce((sum,item)=>sum+item.serials.length,0);
     resetSelectionState();
     updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
     rebuildDisplayedEntries({preserveView:true,zoom:false});
-    setStatus('Deleted from hierarchy: '+selected.length.toLocaleString()+' atoms');
+    setStatus('Deleted selected atoms: '+deletedCount.toLocaleString());
     let savedAll=true;
     for(const entry of updated){
       const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
       if(!saved)savedAll=false;
     }
     if(!savedAll)setStatus('Deleted locally but not saved on server.');
+  }
+  async function undoDeletedAtoms(action){
+    const updated=[], restoredItems=[];
+    (action&&action.entries||[]).forEach(item=>{
+      const entry=entries.find(e=>e.name===item.entryName);
+      if(!entry)return;
+      const restoreSet=new Set(normalizeDeletedSourceSerials(item.serials));
+      if(!restoreSet.size)return;
+      const prev=normalizeDeletedSourceSerials(entry.deletedSourceSerials), next=[], restored=[];
+      prev.forEach(serial=>{
+        if(restoreSet.has(serial))restored.push(serial);
+        else next.push(serial);
+      });
+      if(!restored.length)return;
+      entry.deletedSourceSerials=normalizeDeletedSourceSerials(next);
+      updated.push(entry);
+      restoredItems.push({entryName:entry.name,serials:normalizeDeletedSourceSerials(restored)});
+    });
+    if(!updated.length)return false;
+    resetSelectionState();
+    updated.forEach(entry=>disposeEntryRecord(entry.name,entries));
+    rebuildDisplayedEntries({preserveView:true,zoom:false});
+    const restoredSelector=selectorForEntrySourceSerialItems(restoredItems);
+    if(restoredSelector)setSelection(restoredSelector,{source:'undo-delete'});
+    const restoredCount=restoredItems.reduce((sum,item)=>sum+item.serials.length,0);
+    let savedAll=true;
+    for(const entry of updated){
+      const saved=await saveViewerSessionEntry(entry,{status:false,replace:true});
+      if(!saved)savedAll=false;
+    }
+    if(!savedAll)setStatus('Undo restored locally but not saved on server.');
+    else setStatus('Undo restored deleted atoms: '+restoredCount.toLocaleString());
+    return true;
+  }
+  async function undoLastAction(){
+    while(undoStack.length){
+      const action=undoStack.pop();
+      if(action&&action.type==='delete-atoms'&&await undoDeletedAtoms(action))return true;
+    }
+    setStatus('Nothing to undo');
+    return false;
   }
   function ensureHierarchyContextMenu(){
     if(hierarchyContextMenu)return hierarchyContextMenu;
@@ -2793,7 +3077,7 @@ function boot(){
       e.preventDefault();
       e.stopPropagation();
       closeHierarchyContextMenu();
-      deleteHierarchySelection().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
     };
     menu.appendChild(del);
     menu.onclick=function(e){ e.stopPropagation(); };
@@ -3237,6 +3521,17 @@ function boot(){
     state.hierarchyCollapsed={};
   }
   function hasObjectKeys(o){ return !!(o&&Object.keys(o).length); }
+  function displayStateHasFitVisibilityOverrides(){
+    return !!(
+      state.hiddenRules.length||
+      hasObjectKeys(state.chainVisible)||
+      hasObjectKeys(state.groupVisible)||
+      state.visibility.protein!==true||
+      state.visibility.ligands!==true||
+      state.visibility.solvents!==true||
+      state.visibility.other!==true
+    );
+  }
   function displayStateHasOverrides(){
     return !!(
       state.styleRules.length||
@@ -4195,11 +4490,21 @@ function installFrameSyncedMotion(targetViewer){
     const xy=viewer.mouseXY(p.x,p.y); viewer.mouseButton=1; viewer.handleClickSelection(xy.x,xy.y,e);
   }
   function bindCustomMouseActions(){
-    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0}; const tol=3;
-    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0; hideDragSelectBox(); }
+    const drag={mode:null,button:null,startX:0,startY:0,moved:false,startQuaternion:null,startModelPos:null,startZoom:0,rotateAxis:null}; const tol=3;
+    function resetDrag(){ drag.mode=null;drag.button=null;drag.moved=false;drag.startQuaternion=null;drag.startModelPos=null;drag.startZoom=0;drag.rotateAxis=null; hideDragSelectBox(); }
     resetMouseDrag=resetDrag;
-    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
-    function rotateFromDrag(p){ if(!viewer||!drag.startQuaternion||!viewer.rotationGroup||!viewer.dq)return; const d=dragRatios(p,drag),dist=Math.hypot(d.x,d.y); if(!dist)return; const f=Math.sin(dist*Math.PI)/dist; viewer.dq.x=Math.cos(dist*Math.PI);viewer.dq.y=0;viewer.dq.z=f*d.x;viewer.dq.w=-f*d.y; viewer.rotationGroup.quaternion.set(1,0,0,0); viewer.rotationGroup.quaternion.multiply(viewer.dq); viewer.rotationGroup.quaternion.multiply(drag.startQuaternion); showViewer(); }
+    function rotateAxisForEvent(e){ if(e.ctrlKey)return 'z'; if(e.shiftKey)return 'y'; return null; }
+    function beginDrag(e){ if(overUiPanel(e))return; const b=mouseButtonKey(e); if(!b)return; focusViewerKeyboardTarget(); if(!isCustomMousePreset())return; const action=settings.mouse.buttons[b]||'none'; stopMouseEvent(e); if(state.locked||!viewer)return; const p=eventPagePoint(e); if(!p)return; drag.mode=action;drag.button=b;drag.startX=p.x;drag.startY=p.y;drag.moved=false; drag.rotateAxis=action==='rotate'?rotateAxisForEvent(e):null; drag.startQuaternion=viewer.rotationGroup&&viewer.rotationGroup.quaternion?viewer.rotationGroup.quaternion.clone():null; drag.startModelPos=viewer.modelGroup&&viewer.modelGroup.position?viewer.modelGroup.position.clone():null; drag.startZoom=viewer.rotationGroup&&viewer.rotationGroup.position?viewer.rotationGroup.position.z:0; hideDragSelectBox(); }
+    function rotateAxisFromDrag(d){
+      if(!drag.rotateAxis||!viewer||!drag.startQuaternion||!viewer.rotationGroup)return false;
+      const angle=(drag.rotateAxis==='z'?-d.x:d.x)*Math.PI*2, s=Math.sin(angle/2), c=Math.cos(angle/2), q=viewer.rotationGroup.quaternion;
+      if(drag.rotateAxis==='z')q.set(0,0,s,c);
+      else q.set(0,s,0,c);
+      q.multiply(drag.startQuaternion);
+      showViewer();
+      return true;
+    }
+    function rotateFromDrag(p){ if(!viewer||!drag.startQuaternion||!viewer.rotationGroup||!viewer.dq)return; const d=dragRatios(p,drag); if(rotateAxisFromDrag(d))return; const dist=Math.hypot(d.x,d.y); if(!dist)return; const f=Math.sin(dist*Math.PI)/dist; viewer.dq.x=Math.cos(dist*Math.PI);viewer.dq.y=0;viewer.dq.z=f*d.x;viewer.dq.w=-f*d.y; viewer.rotationGroup.quaternion.set(1,0,0,0); viewer.rotationGroup.quaternion.multiply(viewer.dq); viewer.rotationGroup.quaternion.multiply(drag.startQuaternion); showViewer(); }
     function panFromDrag(p){ if(!viewer||!drag.startModelPos||!viewer.modelGroup||!viewer.screenOffsetToModel)return; const d=dragRatios(p,drag),off=viewer.screenOffsetToModel(d.xRatio*(p.x-drag.startX),d.yRatio*(p.y-drag.startY)); viewer.modelGroup.position.addVectors(drag.startModelPos,off); showViewer(); }
     function zoomFromDrag(p){ if(!viewer||!viewer.rotationGroup)return; const d=dragRatios(p,drag); let scale=0.85*(viewer.CAMERA_Z-viewer.rotationGroup.position.z); if(scale<80)scale=80; viewer.rotationGroup.position.z=drag.startZoom+d.y*scale; if(viewer.adjustZoomToLimits)viewer.rotationGroup.position.z=viewer.adjustZoomToLimits(viewer.rotationGroup.position.z); showViewer(); }
     function continueDrag(e){ if(!drag.mode)return; if(!isCustomMousePreset()){resetDrag();return;} stopMouseEvent(e); if(state.locked)return; const p=eventPagePoint(e); if(!p)return; const moved=Math.hypot(p.x-drag.startX,p.y-drag.startY)>tol; drag.moved=drag.moved||moved; if(drag.mode==='none')return; if(drag.mode==='select'&&drag.moved){ updateDragSelectBox({x:drag.startX,y:drag.startY},p); return; } if(drag.mode==='rotate')rotateFromDrag(p); else if(drag.mode==='pan')panFromDrag(p); else if(drag.mode==='zoom')zoomFromDrag(p); }
@@ -4568,14 +4873,31 @@ function installFrameSyncedMotion(targetViewer){
   window.addEventListener('keydown',function(e){
     const ae=document.activeElement;
     const tag=ae&&ae.tagName;
+    const isEditable=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||!!(ae&&ae.isContentEditable);
+    if(isUndoHotkey(e)){
+      if(isEditable)return;
+      if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
+      e.preventDefault();
+      if(!e.repeat)undoLastAction().catch(err=>setStatus('Undo failed: '+(err&&err.message||err)));
+      return;
+    }
     if(isFocusHotkey(e)){
       if(ae&&ae.closest&&ae.closest('#findGo,#findPrev,#findNext,#findClear,#findType'))return;
       if(ae&&ae.id==='findInput')e.preventDefault();
-      else if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+      else if(isEditable)return;
       if(!e.repeat)toggleFocus();
       return;
     }
-    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')return;
+    if(isEditable)return;
+    if(e.key==='Delete'){
+      if(ae&&ae.closest&&ae.closest('#settingsOverlay,#interPanel'))return;
+      e.preventDefault();
+      if(!e.repeat)deleteSelectedAtoms().catch(err=>setStatus('Delete failed: '+(err&&err.message||err)));
+      return;
+    }
+    if(isPlainWorkspaceHotkey(e,'l')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('ligand'); return; }
+    if(isPlainWorkspaceHotkey(e,'c')){ e.preventDefault(); if(!e.repeat)cycleWorkspaceGroup('chain'); return; }
+    if(isPlainWorkspaceHotkey(e,'n')){ e.preventDefault(); if(!e.repeat)addNearbySelection(); return; }
     if(e.key==='Escape'){ if(hierarchyContextMenu&&!hierarchyContextMenu.hidden){ closeHierarchyContextMenu(); } else if($('settingsOverlay').style.display==='flex'){ closeSettings(); } else if(!$('interPanel').hidden){ closeInterPanel(); } else clearSelection(); }
   });
   document.addEventListener('pointerdown',function(e){

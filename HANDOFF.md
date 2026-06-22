@@ -77,6 +77,7 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - right drag rotates
   - middle-button drag pans
   - wheel zooms
+- Modifier rotation applies to whichever mouse button is currently assigned to `rotate`: `Ctrl` + left/right drag rolls around the screen Z axis, and `Shift` + left/right drag rotates around the screen Y axis.
 - Custom mouse actions are configurable from the Preference panel and through `molAgent.setMouseActions(...)`.
 - The `default` mouse preset passes through to 3Dmol default controls.
 - Default chain/atom colors are Maestro-derived. The profile selects `ribboncscheme=chain` and `defaultcolorscheme="Element (Chain Name Carbons)"`; the RGB defaults are mirrored from the corresponding Maestro `chain.sch` and element scheme tables.
@@ -85,7 +86,12 @@ python3 server.py --port "$PORT" --bind 0.0.0.0
   - `residue`: whole touched residues
   - `chain`: whole touched chains
   - `model`: all atoms in touched entries
-- Pressing `z` toggles between focusing the current selection and overview.
+- Keyboard workspace actions: `L` cycles selection through ligands in the currently displayed workspace, `C` cycles through displayed protein chains, and `Z` refits the camera. `Z` fits the current workspace when nothing is selected and fits selected atoms when a selection exists.
+- `N` expands the current selection to nearby atoms within 5A of the selected atoms, scoped entry-locally. Expansion follows the current top-left selection level (`Atoms`, `Residues`, `Chains`, or `Molecules`) and adds to the existing selection.
+- `Delete` removes the currently selected atoms from the session, whether the selection came from direct viewer selection or the Hierarchy panel. The source structure file is not modified.
+- `Ctrl+Z`/`Cmd+Z` undoes the most recent selected-atom deletion in the current browser session. It restores the atoms to the session and reselects the restored atoms; it is not a general-purpose undo stack for every UI setting.
+- Camera refit should use the current screen/camera X/Y bounding box rather than raw coordinate-average centering, with a tight fit that does not leave excessive top/bottom margin. Very small selections must use a minimum visual frame size so ligand/single-residue focus does not become an extreme close-up.
+- Workspace `Z` fitting should use atoms that correspond to the currently rendered representations: protein cartoon/tube fits on backbone atoms unless protein atom-level display is enabled, and visible ligand/solvent/other atoms remain part of the fit when their representation is not `off`.
 - Selecting atoms alone must not silently change the rotation/focus pivot. Pivot changes should follow an explicit focus action such as `z` or `molAgent.focus(...)`.
 - Selection and focus operate on loaded atoms, not only currently atom-level-rendered atoms. Representation `off` or hide rules must not make atoms permanently unselectable; selection highlight and selection-toolbar show/style actions should be able to recover hidden/off atoms while entry/chain/group inclusion still controls whether atoms are in scope.
 - Selection highlight should remain visible without becoming overly thick; current default is a yellow `line` highlight.
